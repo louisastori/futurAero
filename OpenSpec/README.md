@@ -39,8 +39,10 @@ Le produit vise un usage proche d'un environnement CAD/CAE industriel, avec un f
 22. [22-Spec-Plugin-SDK.md](./22-Spec-Plugin-SDK.md)
 23. [23-Politique-De-Tests-Et-Couverture-100.md](./23-Politique-De-Tests-Et-Couverture-100.md)
 24. [24-Spec-Connectivite-Sans-Fil-Et-Telemetrie.md](./24-Spec-Connectivite-Sans-Fil-Et-Telemetrie.md)
-25. [tool-manifest.yaml](./tool-manifest.yaml)
-26. Dossier [tools](./tools)
+25. [25-Spec-UI-Workspace-Et-Menus.md](./25-Spec-UI-Workspace-Et-Menus.md)
+26. [26-Spec-GitHub-PR-Et-Releases.md](./26-Spec-GitHub-PR-Et-Releases.md)
+27. [tool-manifest.yaml](./tool-manifest.yaml)
+28. Dossier [tools](./tools)
 
 ## Ce que couvre cette premiere base
 
@@ -62,6 +64,8 @@ Le produit vise un usage proche d'un environnement CAD/CAE industriel, avec un f
 - Un moteur d'optimisation multi-objectifs.
 - Un SDK plugins extensible et isole.
 - Une politique de tests avec cible de couverture a 100%.
+- Un workspace desktop avec menus inspires de Visual Studio et commandes reliees au pipeline interne.
+- Un cadre GitHub explicite pour branch protections, PR, checks requis et releases.
 - Un premier decoupage des outils a programmer.
 - Un workflow GitHub avec remote canonique, PR, checks obligatoires et pipeline GitHub Actions.
 

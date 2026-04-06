@@ -37,10 +37,13 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - name: Enable pnpm
-        run: corepack enable
+      - name: Install frontend dependencies
+        run: npm ci
       - name: Workspace smoke check
         run: |
-          pnpm --version
+          npm --version
           node -e "const pkg=require('./package.json'); console.log(pkg.name)"
-
+      - name: Frontend lint
+        run: npm run lint
+      - name: Frontend tests
+        run: npm test

@@ -168,7 +168,8 @@ Ciblent:
 - rendu project tree,
 - inspecteur de proprietes,
 - affichage jobs,
-- affichage suggestion IA.
+- affichage suggestion IA,
+- structure de menus desktop.
 
 ## Fixtures officielles MVP
 
@@ -435,6 +436,20 @@ Attendu:
 - le diagnostic de degradation est rejouable,
 - aucune ecriture implicite n'est emise pendant une deconnexion.
 
+### CT-013 - Menus style Visual Studio
+
+Etapes:
+
+1. charger le menu model desktop,
+2. verifier l'ordre des menus top-level,
+3. verifier que chaque item actionnable expose une commande.
+
+Attendu:
+
+- ordre stable des menus,
+- aucune commande vide,
+- panneaux principaux accessibles depuis `View`.
+
 ## Seuils techniques MVP
 
 - ouverture projet vide: < 2 s sur machine dev cible
@@ -479,7 +494,8 @@ Une story est done si:
 - etat charge/vide/erreur gere,
 - navigation clavier minimale,
 - texte d'erreur comprehensible,
-- aucune hypothese sur succes silencieux backend.
+- aucune hypothese sur succes silencieux backend,
+- si une barre de menus existe, chaque item actionnable a un `command id` traceable.
 
 ## Definition Of Done pour IA locale
 

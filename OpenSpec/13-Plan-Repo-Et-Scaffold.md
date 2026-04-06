@@ -101,13 +101,15 @@ FutureAero/
 
 - shell desktop Tauri,
 - bridge UI <-> backend,
-- menus et cycle de vie application.
+- menus et cycle de vie application,
+- barre de menus native style Visual Studio.
 
 ### `packages/ui`
 
 - composants React generiques,
 - layout workspace,
-- panneaux, arbres, listes, badges de statut.
+- panneaux, arbres, listes, badges de statut,
+- menu model et mapping `menu item -> command id`.
 
 ### `packages/viewport`
 
@@ -335,6 +337,8 @@ Role GitHub attendu:
 - `22-Spec-Plugin-SDK`: `faero-plugin-host`
 - `23-Politique-De-Tests-Et-Couverture-100`: repo entier
 - `24-Spec-Connectivite-Sans-Fil-Et-Telemetrie`: `faero-integration`
+- `25-Spec-UI-Workspace-Et-Menus`: `faero-app`, `faero-ui`
+- `26-Spec-GitHub-PR-Et-Releases`: repo entier
 
 ## Livrable scaffold accepte
 

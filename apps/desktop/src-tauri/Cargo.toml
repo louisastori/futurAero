@@ -3,5 +3,10 @@ name = "futureaero-desktop-shell"
 version = "0.1.0"
 edition = "2024"
 
-[dependencies]
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
 
+[dependencies]
+faero-core = { path = "../../../crates/faero-core" }
+serde = { version = "1", features = ["derive"] }
+tauri = { version = "2", features = [] }

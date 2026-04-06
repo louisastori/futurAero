@@ -2,17 +2,17 @@
   "name": "futureaero",
   "private": true,
   "version": "0.1.0",
-  "packageManager": "pnpm@10.12.1",
+  "packageManager": "npm@10.9.4",
   "workspaces": [
     "apps/*",
     "packages/*"
   ],
   "scripts": {
-    "dev": "node -e \"console.log('Desktop scaffold only. Tauri/React wiring is the next increment.')\"",
-    "build": "node -e \"console.log('Build scaffold placeholder')\"",
-    "lint": "node -e \"console.log('Frontend lint scaffold placeholder')\"",
-    "test": "node -e \"console.log('Frontend test scaffold placeholder')\"",
-    "typecheck": "node -e \"console.log('Frontend typecheck scaffold placeholder')\""
+    "dev": "npm --workspace @futureaero/desktop run tauri dev",
+    "dev:web": "npm --workspace @futureaero/desktop run dev",
+    "build": "npm --workspace @futureaero/desktop run build",
+    "lint": "node --check packages/ui/src/index.mjs && node --check packages/ui/src/menu-model.mjs && node --check packages/ui/src/menu-model.test.mjs && node --check packages/viewport/src/index.mjs && npm --workspace @futureaero/desktop run build",
+    "test": "node --test packages/ui/src/menu-model.test.mjs",
+    "typecheck": "node -e \"console.log('TypeScript n est pas encore branche. Menu model verifie via lint + tests Node.')\""
   }
 }
-

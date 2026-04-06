@@ -620,6 +620,20 @@ Criteres:
 - affichage des changements de signaux,
 - saut a un instant critique.
 
+### ST-704 - Barre de menus style Visual Studio
+
+- Priorite: `P1`
+- Modules: `faero-ui`, `faero-app`
+- Dependances: `ST-701`, `ST-702`
+- Sortie: menus desktop proches de Visual Studio
+
+Criteres:
+
+- menus `File/Edit/View/Git/Project/Build/Debug/Test/Analyze/Tools/Window/Help`,
+- chaque item relie a une commande interne,
+- panneaux principaux accessibles depuis `View`,
+- aucune action mutante ne contourne le pipeline de commandes.
+
 ## Ordre de livraison recommande
 
 1. `E0`
