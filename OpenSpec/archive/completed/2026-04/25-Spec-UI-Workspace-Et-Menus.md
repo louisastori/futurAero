@@ -8,7 +8,10 @@ Implementation de reference:
 - `apps/desktop/src/styles.css`
 - `packages/ui/src/menu-model.mjs`
 - `packages/ui/src/i18n.mjs`
+- `packages/ui/src/i18n.test.mjs`
 - `packages/ui/src/menu-model.test.mjs`
+- `packages/viewport/src/aerospace-scenes.mjs`
+- `packages/viewport/src/aerospace-scenes.test.mjs`
 - `packages/ui/src/workspace-layout.mjs`
 - `packages/ui/src/workspace-layout.test.mjs`
 - `packages/ui/src/workspace-resize.mjs`
@@ -153,6 +156,23 @@ Ordre recommande:
 - la barre de menus native desktop reste la reference, meme si une toolbar secondaire existe,
 - les panneaux `Project Explorer`, `Properties`, `Output` et `Problems` sont consideres comme equivalents aux reperes Visual Studio dans FutureAero.
 
+## Viewport de references aeronautiques
+
+Le viewport du shell desktop embarque maintenant une couche de reproduction visuelle inspiree des references fournies par l utilisateur:
+
+- turbofan eclate,
+- cellule transparente,
+- wireframe maintenance,
+- carte de contraintes,
+- heatmap aerodynamique.
+
+Regles associees:
+
+- les vues restent des reproductions originales codees dans l application, pas des captures collees,
+- chaque scene expose un titre, un resume, une analyse et une legende localises,
+- le changement de scene doit rester instantane et purement local,
+- le workbench doit rester exploitable en francais par defaut puis en anglais et espagnol.
+
 ## Raccourcis recommandes
 
 - `Ctrl+Shift+N`: nouveau projet
@@ -176,5 +196,7 @@ Ordre recommande:
 - les panneaux principaux sont pilotables depuis `View`,
 - les panneaux principaux peuvent etre replies puis rouverts sans perdre le contexte courant,
 - les colonnes laterales peuvent etre redimensionnees a la souris sans casser le layout central,
+- le viewport propose des scenes de reference aeronautiques inspirant les futurs workbenches CATIA-like,
+- chaque scene de reference est localisee en FR/EN/ES et reproduite de facon originale dans le shell,
 - les commandes `Build`, `Debug`, `Test` et `Analyze` sont distinctes et non melangees,
 - l'application privilegie le francais par defaut et expose l'anglais et l'espagnol comme langues secondaires du shell.

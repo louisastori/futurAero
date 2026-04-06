@@ -14,6 +14,11 @@ import {
   WORKSPACE_RESIZER_WIDTH,
   translate
 } from "@futureaero/ui";
+import {
+  aerospaceReferenceScenes,
+  defaultAerospaceSceneId,
+  getAerospaceScene
+} from "@futureaero/viewport";
 
 const FALLBACK_FIXTURES = [
   { id: "pick-and-place-demo.faero", projectName: "Pick And Place Demo" },
@@ -98,6 +103,282 @@ function Panel({ title, children, accent, collapsed = false, onToggle, toggleLab
       </header>
       {collapsed ? null : <div className="panel-body">{children}</div>}
     </section>
+  );
+}
+
+function ViewportLegend({ items }) {
+  return (
+    <ul className="viewport-legend-list">
+      {items.map((item) => (
+        <li key={item.label} className="viewport-legend-item">
+          <span className="viewport-legend-swatch" style={{ background: item.color }} />
+          <span>{item.label}</span>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function TurbofanReferenceArtwork() {
+  const fanBlades = Array.from({ length: 16 }, (_, index) => {
+    const angle = index * 22.5;
+    return (
+      <g key={`fan-${angle}`} transform={`translate(138 186) rotate(${angle})`}>
+        <path d="M0 -12 C18 -36 36 -72 40 -120 C24 -102 12 -70 -4 -28 Z" fill="rgba(179,197,255,0.72)" stroke="rgba(240,246,255,0.38)" strokeWidth="1" />
+      </g>
+    );
+  });
+
+  const compressorStages = Array.from({ length: 8 }, (_, index) => (
+    <g key={`stage-${index}`} transform={`translate(${322 + index * 58} 140)`}>
+      <ellipse cx="0" cy="54" rx="34" ry="98" fill="none" stroke="rgba(210,160,255,0.62)" strokeWidth="1.5" />
+      <ellipse cx="0" cy="54" rx="20" ry="66" fill="none" stroke="rgba(135,255,205,0.45)" strokeWidth="1.25" />
+      <line x1="-34" y1="54" x2="34" y2="54" stroke="rgba(255,255,255,0.18)" />
+    </g>
+  ));
+
+  return (
+    <svg viewBox="0 0 960 420" className="viewport-svg" aria-hidden="true">
+      <defs>
+        <linearGradient id="turbofan-core" x1="0%" x2="100%">
+          <stop offset="0%" stopColor="#8ad1ff" stopOpacity="0.92" />
+          <stop offset="100%" stopColor="#5fa9ff" stopOpacity="0.25" />
+        </linearGradient>
+        <linearGradient id="turbofan-shell" x1="0%" x2="100%">
+          <stop offset="0%" stopColor="#dfe7ff" stopOpacity="0.55" />
+          <stop offset="100%" stopColor="#ffffff" stopOpacity="0.08" />
+        </linearGradient>
+      </defs>
+      <rect width="960" height="420" rx="24" fill="#0f1622" />
+      <g opacity="0.18">
+        <circle cx="126" cy="186" r="122" fill="none" stroke="#7bc6ff" strokeWidth="1.4" />
+        <circle cx="126" cy="186" r="82" fill="none" stroke="#7bc6ff" strokeWidth="1" />
+      </g>
+      <g>{fanBlades}</g>
+      <ellipse cx="140" cy="186" rx="54" ry="54" fill="#171d2d" stroke="rgba(255,255,255,0.18)" strokeWidth="4" />
+      <ellipse cx="140" cy="186" rx="20" ry="20" fill="#d7e3ff" fillOpacity="0.86" />
+      <path d="M160 130 L270 130 L308 186 L270 242 L160 242 Q128 214 128 186 Q128 158 160 130 Z" fill="url(#turbofan-shell)" stroke="rgba(255,255,255,0.22)" strokeWidth="2" />
+      <rect x="190" y="170" width="592" height="32" rx="16" fill="url(#turbofan-core)" />
+      <g>{compressorStages}</g>
+      <g opacity="0.6">
+        <path d="M248 130 L248 242" stroke="#7ae7c7" strokeDasharray="5 6" />
+        <path d="M296 110 L296 262" stroke="#7ae7c7" strokeDasharray="5 6" />
+        <path d="M784 146 L900 112" stroke="#ffe37a" strokeWidth="2.5" />
+        <path d="M784 226 L900 258" stroke="#ff92ca" strokeWidth="2.5" />
+      </g>
+    </svg>
+  );
+}
+
+function AirframeTransparentArtwork() {
+  const frames = Array.from({ length: 13 }, (_, index) => (
+    <ellipse
+      key={`frame-${index}`}
+      cx={150 + index * 42}
+      cy="188"
+      rx={index > 9 ? 22 : 28}
+      ry={index > 9 ? 64 : 92}
+      fill="none"
+      stroke="rgba(236,243,255,0.4)"
+      strokeWidth="1.2"
+    />
+  ));
+
+  const ribs = Array.from({ length: 9 }, (_, index) => (
+    <line
+      key={`rib-${index}`}
+      x1={250 + index * 46}
+      y1="240"
+      x2={168 + index * 50}
+      y2="328"
+      stroke="rgba(126,199,255,0.48)"
+      strokeWidth="1.4"
+    />
+  ));
+
+  return (
+    <svg viewBox="0 0 960 420" className="viewport-svg" aria-hidden="true">
+      <rect width="960" height="420" rx="24" fill="#10153a" />
+      <path d="M84 196 C144 136 232 108 394 114 L704 126 C776 130 834 160 884 184 C838 204 794 230 742 242 L504 258 C324 270 174 252 88 212 Z" fill="rgba(180,203,255,0.08)" stroke="rgba(220,230,255,0.42)" strokeWidth="2.4" />
+      <path d="M82 196 L44 202 L86 170 Z" fill="rgba(255,255,255,0.18)" />
+      <path d="M430 128 L586 54 L602 130" fill="rgba(124,199,255,0.08)" stroke="rgba(190,232,255,0.42)" strokeWidth="2" />
+      <path d="M458 248 L684 324 L602 250" fill="rgba(124,199,255,0.06)" stroke="rgba(190,232,255,0.42)" strokeWidth="2" />
+      <path d="M350 250 L168 340 L292 252" fill="rgba(255,140,200,0.05)" stroke="rgba(255,196,92,0.45)" strokeWidth="2" />
+      <g>{frames}</g>
+      <g>{ribs}</g>
+      <g opacity="0.88">
+        <rect x="300" y="178" width="88" height="14" rx="7" fill="#ff8ec7" />
+        <rect x="432" y="172" width="122" height="16" rx="8" fill="#7cd6ff" />
+        <rect x="586" y="166" width="92" height="18" rx="9" fill="#ffe783" />
+        <circle cx="618" cy="188" r="42" fill="none" stroke="rgba(255,255,255,0.48)" strokeWidth="2.2" />
+        <circle cx="676" cy="192" r="44" fill="none" stroke="rgba(255,255,255,0.48)" strokeWidth="2.2" />
+      </g>
+    </svg>
+  );
+}
+
+function WireframeMaintenanceArtwork() {
+  const grid = Array.from({ length: 15 }, (_, index) => (
+    <line
+      key={`diag-${index}`}
+      x1={90 + index * 48}
+      y1="330"
+      x2={160 + index * 38}
+      y2="122"
+      stroke="rgba(192,214,255,0.28)"
+      strokeWidth="1"
+    />
+  ));
+
+  return (
+    <svg viewBox="0 0 960 420" className="viewport-svg" aria-hidden="true">
+      <rect width="960" height="420" rx="24" fill="#111749" />
+      <path d="M108 220 C160 168 260 132 424 126 L712 136 L854 176 L724 214 L416 244 C270 258 164 254 108 220 Z" fill="none" stroke="rgba(228,240,255,0.58)" strokeWidth="2" />
+      <path d="M394 134 L550 70 L572 138" fill="none" stroke="rgba(160,200,255,0.52)" strokeWidth="1.8" />
+      <path d="M418 244 L668 340 L572 246" fill="none" stroke="rgba(160,200,255,0.52)" strokeWidth="1.8" />
+      <path d="M312 246 L146 338 L256 248" fill="none" stroke="rgba(160,200,255,0.52)" strokeWidth="1.8" />
+      <circle cx="690" cy="196" r="54" fill="none" stroke="rgba(244,255,141,0.5)" strokeWidth="1.6" />
+      <circle cx="754" cy="192" r="58" fill="none" stroke="rgba(244,255,141,0.5)" strokeWidth="1.6" />
+      <g>{grid}</g>
+      <g opacity="0.82">
+        <path d="M74 124 L116 124 L96 88 Z" fill="#f1ff85" />
+        <path d="M88 136 L88 248" stroke="#f1ff85" strokeWidth="2.5" />
+        <circle cx="126" cy="300" r="62" fill="none" stroke="rgba(212,166,255,0.65)" strokeWidth="2" strokeDasharray="6 6" />
+        <path d="M146 300 L280 242" stroke="#d4a6ff" strokeWidth="2.2" strokeDasharray="6 6" />
+      </g>
+    </svg>
+  );
+}
+
+function StressMapArtwork() {
+  return (
+    <svg viewBox="0 0 960 420" className="viewport-svg" aria-hidden="true">
+      <defs>
+        <linearGradient id="stressGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+          <stop offset="0%" stopColor="#1e7fff" />
+          <stop offset="35%" stopColor="#49d9ff" />
+          <stop offset="62%" stopColor="#ffe066" />
+          <stop offset="100%" stopColor="#ff506a" />
+        </linearGradient>
+      </defs>
+      <rect width="960" height="420" rx="24" fill="#18203a" />
+      <path d="M178 334 L252 126 C270 84 314 72 346 98 L412 154 L474 104 C510 74 562 88 578 130 L664 332" fill="none" stroke="rgba(255,255,255,0.14)" strokeWidth="42" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M178 334 L252 126 C270 84 314 72 346 98 L412 154 L474 104 C510 74 562 88 578 130 L664 332" fill="none" stroke="url(#stressGradient)" strokeWidth="28" strokeLinecap="round" strokeLinejoin="round" />
+      <circle cx="412" cy="154" r="22" fill="#ff5570" fillOpacity="0.9" />
+      <circle cx="474" cy="104" r="18" fill="#ffd766" fillOpacity="0.9" />
+      <circle cx="252" cy="126" r="16" fill="#63e4ff" fillOpacity="0.9" />
+      <rect x="764" y="72" width="22" height="216" rx="11" fill="url(#stressGradient)" />
+      <text x="804" y="84" fill="#d9e9ff" fontSize="16">High</text>
+      <text x="804" y="286" fill="#d9e9ff" fontSize="16">Low</text>
+    </svg>
+  );
+}
+
+function AeroHeatmapArtwork() {
+  const streamlines = Array.from({ length: 11 }, (_, index) => (
+    <path
+      key={`flow-${index}`}
+      d={`M${94 + index * 14} ${144 + index * 10} C${220 + index * 8} ${96 + index * 6}, ${412 + index * 10} ${118 + index * 5}, ${776 + index * 12} ${142 + index * 7}`}
+      fill="none"
+      stroke="rgba(160,255,152,0.34)"
+      strokeWidth="1.4"
+    />
+  ));
+
+  return (
+    <svg viewBox="0 0 960 420" className="viewport-svg" aria-hidden="true">
+      <defs>
+        <linearGradient id="aeroGradient" x1="0%" y1="0%" x2="100%" y2="0%">
+          <stop offset="0%" stopColor="#72ff9b" />
+          <stop offset="46%" stopColor="#ffe56b" />
+          <stop offset="100%" stopColor="#ff32c5" />
+        </linearGradient>
+      </defs>
+      <rect width="960" height="420" rx="24" fill="#272a3f" />
+      <path d="M136 240 C264 180 420 154 662 162 C716 164 774 186 820 210 C758 214 704 226 658 242 C438 316 284 324 126 286 Z" fill="rgba(255,255,255,0.05)" stroke="rgba(240,244,255,0.24)" strokeWidth="2" />
+      <path d="M156 246 C274 198 418 178 646 186 C694 188 738 198 782 214 C736 218 694 230 654 246 C436 302 298 306 156 276 Z" fill="url(#aeroGradient)" fillOpacity="0.82" stroke="rgba(255,255,255,0.1)" strokeWidth="2" />
+      <g>{streamlines}</g>
+      <g opacity="0.84">
+        <path d="M436 176 L494 126" stroke="#ffb6ef" strokeWidth="2.5" />
+        <circle cx="494" cy="126" r="7" fill="#ffb6ef" />
+        <path d="M700 238 L788 292" stroke="#ffe56b" strokeWidth="2.5" />
+        <circle cx="788" cy="292" r="7" fill="#ffe56b" />
+      </g>
+    </svg>
+  );
+}
+
+function AerospaceViewport({ locale, t, selectedSceneId, onSelectScene }) {
+  const scene = getAerospaceScene(selectedSceneId);
+  const legend = scene.legendKeys.map((key, index) => ({
+    label: t(key, key),
+    color: [scene.palette.accent, scene.palette.secondary, scene.palette.tertiary][index]
+  }));
+
+  let artwork = <TurbofanReferenceArtwork />;
+  if (scene.id === "airframe_transparent") {
+    artwork = <AirframeTransparentArtwork />;
+  } else if (scene.id === "wireframe_maintenance") {
+    artwork = <WireframeMaintenanceArtwork />;
+  } else if (scene.id === "stress_map") {
+    artwork = <StressMapArtwork />;
+  } else if (scene.id === "aero_heatmap") {
+    artwork = <AeroHeatmapArtwork />;
+  }
+
+  return (
+    <div className="viewport-reference-layout">
+      <div className="viewport-scene-tabs" role="tablist" aria-label={t("ui.viewport.reference_toolbar", "Scenes de reference")}>
+        {aerospaceReferenceScenes.map((entry) => (
+          <button
+            key={entry.id}
+            type="button"
+            role="tab"
+            aria-selected={entry.id === scene.id}
+            className={entry.id === scene.id ? "viewport-scene-tab active" : "viewport-scene-tab"}
+            onClick={() => onSelectScene(entry.id)}
+          >
+            {t(entry.titleKey, entry.id)}
+          </button>
+        ))}
+      </div>
+
+      <div className="viewport-showcase">
+        <div className="viewport-canvas-shell">
+          {artwork}
+          <div className="viewport-caption">
+            {t("ui.viewport.reference_inspiration", "Reproduction originale inspiree des references fournies")}
+          </div>
+        </div>
+
+        <div className="viewport-inspector">
+          <div className="viewport-inspector-block">
+            <div className="subsection-label">{t("ui.viewport.reference_caption", "Lecture de la scene")}</div>
+            <strong className="viewport-scene-title">{t(scene.titleKey, scene.id)}</strong>
+            <div className="muted">{t(scene.summaryKey, scene.summaryKey)}</div>
+          </div>
+
+          <div className="viewport-inspector-block">
+            <div className="subsection-label">{t("ui.viewport.reference_analysis", "Analyse extraite des images")}</div>
+            <ul className="viewport-analysis-list">
+              {scene.analysisKeys.map((key) => (
+                <li key={key}>{t(key, key)}</li>
+              ))}
+            </ul>
+          </div>
+
+          <div className="viewport-inspector-block">
+            <div className="subsection-label">{t("ui.viewport.reference_legend", "Legende")}</div>
+            <ViewportLegend items={legend} />
+          </div>
+
+          <div className="viewport-inspector-block">
+            <div className="subsection-label">{t("ui.locale.label", "Langue")}</div>
+            <div className="muted">{locale.toUpperCase()}</div>
+          </div>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -266,6 +547,7 @@ export default function App() {
   const [projectSnapshot, setProjectSnapshot] = useState(FALLBACK_SNAPSHOT);
   const [fixtureProjects, setFixtureProjects] = useState(FALLBACK_FIXTURES);
   const [selectedFixtureId, setSelectedFixtureId] = useState(FALLBACK_STATUS.fixtureId);
+  const [selectedViewportSceneId, setSelectedViewportSceneId] = useState(defaultAerospaceSceneId);
   const [activeMenuId, setActiveMenuId] = useState("file");
   const [fixtureLoading, setFixtureLoading] = useState(false);
   const [executingCommandId, setExecutingCommandId] = useState(null);
@@ -758,10 +1040,12 @@ export default function App() {
             onToggle={() => togglePanel("viewport")}
             toggleLabel={panelToggleLabel("viewport")}
           >
-            <div className="viewport-card">
-              <div className="viewport-wireframe" />
-              <div className="viewport-caption">{t("ui.viewport.caption", "Shell React/Tauri")}</div>
-            </div>
+            <AerospaceViewport
+              locale={locale}
+              t={t}
+              selectedSceneId={selectedViewportSceneId}
+              onSelectScene={setSelectedViewportSceneId}
+            />
           </Panel>
         </section>
 

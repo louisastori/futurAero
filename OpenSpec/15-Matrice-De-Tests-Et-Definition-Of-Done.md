@@ -173,6 +173,7 @@ Ciblent:
 - structure de menus desktop,
 - localisation FR par defaut avec EN/ES disponibles,
 - chargement des fixtures desktop via backend,
+- viewport de references aeronautiques avec presets moteur, cellule, wireframe, FEA et aero,
 - panneaux retractables et rouvrables sans reset de session,
 - colonnes laterales redimensionnables a la souris avec bornes stables,
 - panneau de discussion IA locale avec etats vide, charge, reponse et fallback.
@@ -537,6 +538,22 @@ Attendu:
 - des bornes minimales et maximales evitent de casser la zone centrale,
 - le viewport et la surface de commandes restent utilisables pendant le resize,
 - la largeur precedente est conservee quand on rouvre une colonne repliee.
+
+### CT-019 - Reproduction des references aeronautiques
+
+Etapes:
+
+1. ouvrir le shell desktop sur une fixture,
+2. basculer entre `Turbofan eclate`, `Cellule transparente`, `Wireframe maintenance`, `Carte de contraintes` et `Heatmap aerodynamique`,
+3. verifier le titre, le resume, l analyse et la legende en francais,
+4. changer la langue du shell en anglais puis en espagnol.
+
+Attendu:
+
+- chaque preset charge une reproduction originale dans le viewport sans image externe,
+- le changement de scene est instantane et ne recharge pas la session,
+- les textes du workbench sont presents en FR/EN/ES,
+- les scenes conservent une lecture coherente des references moteur, structure, FEA et aero.
 
 ## Seuils techniques MVP
 
