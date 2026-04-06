@@ -8,6 +8,14 @@ members = [
   "crates/faero-integration",
   "crates/faero-plugin-host",
   "crates/faero-testkit",
+  "crates/faero-geometry",
+  "crates/faero-assembly",
+  "crates/faero-sim",
+  "crates/faero-perception",
+  "crates/faero-robotics",
+  "crates/faero-safety",
+  "crates/faero-commissioning",
+  "crates/faero-optimization",
 ]
 exclude = ["apps/desktop/src-tauri"]
 

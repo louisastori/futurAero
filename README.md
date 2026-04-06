@@ -28,4 +28,4 @@ Scaffold monorepo initial pour FutureAero, aligne sur les `OpenSpec/`.
 
 ## Statut
 
-Le depot est bootstrappe pour le noyau Rust, les fixtures et un shell desktop `Tauri + React` branche a un backend Rust reel. Le viewport, les panneaux, les menus et un premier chat IA local via Ollama sont disponibles cote UI, mais les workflows metier lourds restent encore des integrations progressives.
+Le depot est bootstrappe pour le noyau Rust, les fixtures et un shell desktop `Tauri + React` branche a un backend Rust reel. Le viewport, les panneaux, les menus et un premier chat IA local via Ollama sont disponibles cote UI. Les crates `faero-geometry`, `faero-assembly`, `faero-sim`, `faero-perception`, `faero-robotics`, `faero-safety`, `faero-commissioning` et `faero-optimization` exposent maintenant un premier noyau deterministe et teste, mais les workflows metier lourds restent encore des integrations progressives par rapport aux OpenSpec completes.
