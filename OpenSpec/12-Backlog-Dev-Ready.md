@@ -533,6 +533,20 @@ Criteres:
 - trace des contradictions detectees,
 - sortie finale toujours structuree.
 
+### ST-606 - Discussion IA locale dans le shell desktop
+
+- Priorite: `P1`
+- Modules: `faero-ai`, `faero-app`, `faero-ui`
+- Dependances: `ST-601`, `ST-704`, `ST-705`
+- Sortie: panneau de discussion IA locale disponible dans le shell desktop
+
+Criteres:
+
+- le shell desktop expose un panneau `Assistant IA local`,
+- la discussion reste locale et ne depend d aucun service cloud,
+- le backend Tauri injecte le contexte du projet courant dans la demande,
+- le shell affiche explicitement le runtime, le modele actif ou le fallback local.
+
 ## Epic E8 - Plugin SDK
 
 ### ST-801 - Host plugins et manifests

@@ -11,6 +11,16 @@ Definir un assistant IA local exploitable dans un contexte industriel sans perte
 - proposer,
 - documenter.
 
+## Increment shell desktop deja livre
+
+Un premier increment executable du runtime IA locale est present dans le shell desktop:
+
+- panneau `Assistant IA local` dans l interface,
+- routage via commandes Tauri dediees,
+- contexte injecte depuis le projet charge dans le shell,
+- runtime Ollama local privilegie,
+- fallback local explicite si le runtime modele est indisponible.
+
 L'IA ne remplace pas:
 
 - le solveur geometrique,

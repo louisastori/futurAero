@@ -4,6 +4,10 @@ use std::{
     sync::Mutex,
 };
 
+use faero_ai::{
+    AiChatResponse, AiConversationMessage, AiRuntimeStatus, chat_with_project,
+    query_runtime_status as query_ai_runtime_status,
+};
 use faero_core::{CoreCommand, ProjectGraph};
 use faero_plugin_host::validate_manifest;
 use faero_types::{
@@ -716,6 +720,26 @@ fn workspace_execute_command(
     })
 }
 
+#[tauri::command]
+fn ai_runtime_status() -> AiRuntimeStatus {
+    query_ai_runtime_status()
+}
+
+#[tauri::command]
+fn ai_chat_send_message(
+    message: String,
+    locale: String,
+    history: Vec<AiConversationMessage>,
+    state: State<'_, SharedWorkspace>,
+) -> Result<AiChatResponse, String> {
+    let document = {
+        let session = lock_workspace(&state)?;
+        session.graph.document().clone()
+    };
+
+    chat_with_project(&document, &locale, &history, &message).map_err(|error| error.to_string())
+}
+
 fn main() {
     let workspace = WorkspaceSession::load_fixture(DEFAULT_FIXTURE_ID)
         .unwrap_or_else(|_| WorkspaceSession::empty("FutureAero Session"));
@@ -729,7 +753,9 @@ fn main() {
             load_project_snapshot,
             workspace_bootstrap,
             workspace_load_fixture,
-            workspace_execute_command
+            workspace_execute_command,
+            ai_runtime_status,
+            ai_chat_send_message
         ])
         .run(tauri::generate_context!())
         .expect("error while running FutureAero desktop shell");

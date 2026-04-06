@@ -64,6 +64,7 @@ Le produit vise un usage proche d'un environnement CAD/CAE industriel, avec un f
 - Une politique de tests avec cible de couverture a 100%.
 - Un workspace desktop avec menus inspires de Visual Studio et commandes reliees au pipeline interne.
 - Un shell desktop interactif avec session backend, snapshots de projet et execution de commandes depuis l espace de travail.
+- Un panneau de discussion IA locale dans le shell desktop, branche a Ollama local avec contexte projet et fallback local explicite.
 - Un cadre GitHub explicite pour branch protections, PR, checks requis et releases.
 - Un premier decoupage des outils a programmer.
 - Un workflow GitHub avec remote canonique, PR, checks obligatoires et pipeline GitHub Actions.

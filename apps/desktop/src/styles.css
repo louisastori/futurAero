@@ -369,6 +369,121 @@ button {
   gap: 12px;
 }
 
+.assistant-runtime {
+  display: grid;
+  gap: 6px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.assistant-runtime.ready {
+  background: rgba(15, 115, 255, 0.14);
+}
+
+.assistant-runtime.fallback {
+  background: rgba(255, 196, 92, 0.08);
+}
+
+.assistant-runtime-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.assistant-thread {
+  display: grid;
+  gap: 10px;
+  max-height: 440px;
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.assistant-message {
+  display: grid;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.assistant-message.assistant {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.assistant-message.user {
+  background: rgba(15, 115, 255, 0.12);
+}
+
+.assistant-message-header,
+.assistant-form-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.assistant-message-body {
+  white-space: pre-wrap;
+  line-height: 1.45;
+}
+
+.assistant-message-tags,
+.assistant-starters {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.assistant-tag,
+.assistant-starter {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.04);
+  color: #d8e6f7;
+  padding: 6px 10px;
+  font-size: 0.8rem;
+}
+
+.assistant-starter {
+  cursor: pointer;
+}
+
+.assistant-starter:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+
+.assistant-warning-list {
+  display: grid;
+  gap: 4px;
+}
+
+.assistant-empty {
+  display: grid;
+  gap: 12px;
+  padding: 10px 0;
+}
+
+.assistant-form {
+  display: grid;
+  gap: 10px;
+}
+
+.assistant-input {
+  width: 100%;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 12px;
+  background: rgba(7, 11, 17, 0.88);
+  color: #e6edf7;
+  padding: 12px;
+  resize: vertical;
+  min-height: 110px;
+}
+
 .result-card {
   display: grid;
   gap: 4px;

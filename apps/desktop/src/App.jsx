@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import {
   defaultLocale,
@@ -37,6 +37,17 @@ const FALLBACK_SNAPSHOT = {
   streams: [],
   plugins: [],
   recentActivity: []
+};
+
+const FALLBACK_AI_STATUS = {
+  available: false,
+  provider: "ollama",
+  endpoint: "http://127.0.0.1:11434",
+  mode: "web-preview",
+  localOnly: true,
+  activeModel: null,
+  availableModels: [],
+  warning: "Local AI runtime unavailable in web preview."
 };
 
 function MenuBar({ menus, activeMenuId, onSelect }) {
@@ -137,6 +148,49 @@ async function executeWorkspaceCommand(commandId, currentSnapshot) {
   };
 }
 
+async function fetchAiRuntimeStatus() {
+  return (await invokeBackend("ai_runtime_status")) ?? FALLBACK_AI_STATUS;
+}
+
+function buildFallbackAiReferences(snapshot) {
+  return [
+    `project:${snapshot.details.projectId}`,
+    ...snapshot.entities.slice(0, 3).map((entity) => `entity:${entity.id}`),
+    ...snapshot.endpoints.slice(0, 2).map((endpoint) => `endpoint:${endpoint.id}`),
+    ...snapshot.streams.slice(0, 2).map((stream) => `stream:${stream.id}`),
+    ...snapshot.plugins.slice(0, 1).map((plugin) => `plugin:${plugin.pluginId}`)
+  ].slice(0, 8);
+}
+
+function buildFallbackAiAnswer(locale, snapshot, message) {
+  const summary = `${snapshot.status.projectName} | ${snapshot.status.entityCount} entites | ${snapshot.status.endpointCount} endpoints | ${snapshot.status.streamCount} flux`;
+
+  if (locale === "en") {
+    return `The local AI panel is running in web preview fallback mode. Current project: ${summary}. Your question was: "${message}". Start the Tauri shell with Ollama available on http://127.0.0.1:11434 to get a true local model-backed discussion.`;
+  }
+
+  if (locale === "es") {
+    return `El panel de IA local esta en modo fallback de vista web. Proyecto actual: ${summary}. Tu pregunta fue: "${message}". Inicia el shell Tauri con Ollama disponible en http://127.0.0.1:11434 para obtener una conversacion local real con modelo.`;
+  }
+
+  return `Le panneau IA locale tourne en mode fallback d apercu web. Projet courant: ${summary}. Ta question etait: "${message}". Lance le shell Tauri avec Ollama disponible sur http://127.0.0.1:11434 pour obtenir une vraie discussion locale avec modele.`;
+}
+
+async function sendAiChatMessage(message, locale, history, snapshot) {
+  const response = await invokeBackend("ai_chat_send_message", { message, locale, history });
+  if (response) {
+    return response;
+  }
+
+  return {
+    answer: buildFallbackAiAnswer(locale, snapshot, message),
+    runtime: FALLBACK_AI_STATUS,
+    references: buildFallbackAiReferences(snapshot),
+    warnings: [FALLBACK_AI_STATUS.warning],
+    source: "web-preview"
+  };
+}
+
 function runtimeLabel(locale, runtime) {
   if (runtime === "web-preview") {
     return translate(locale, "ui.status.web_preview", runtime);
@@ -161,6 +215,30 @@ function activityChannelLabel(locale, channel) {
   return translate(locale, "ui.activity.system", channel);
 }
 
+function assistantRoleLabel(locale, role) {
+  if (role === "assistant") {
+    return translate(locale, "ui.ai.assistant_label", "Assistant IA");
+  }
+
+  return translate(locale, "ui.ai.user_label", "Utilisateur");
+}
+
+function assistantAccent(locale, runtime) {
+  if (runtime.available) {
+    return `${translate(locale, "ui.ai.runtime_ready", "Pret")} | ${runtime.activeModel ?? translate(locale, "ui.ai.no_model", "aucun modele")}`;
+  }
+
+  return translate(locale, "ui.ai.runtime_fallback", "Fallback local");
+}
+
+function assistantBadge(locale, runtime) {
+  if (runtime.available) {
+    return `${translate(locale, "ui.ai.badge", "IA locale")} | ${runtime.activeModel ?? translate(locale, "ui.ai.no_model", "aucun modele")}`;
+  }
+
+  return `${translate(locale, "ui.ai.badge", "IA locale")} | ${translate(locale, "ui.ai.runtime_fallback", "Fallback local")}`;
+}
+
 export default function App() {
   const [locale, setLocale] = useState(defaultLocale);
   const [projectSnapshot, setProjectSnapshot] = useState(FALLBACK_SNAPSHOT);
@@ -170,17 +248,30 @@ export default function App() {
   const [fixtureLoading, setFixtureLoading] = useState(false);
   const [executingCommandId, setExecutingCommandId] = useState(null);
   const [commandResult, setCommandResult] = useState(null);
+  const [aiRuntime, setAiRuntime] = useState(FALLBACK_AI_STATUS);
+  const [aiMessages, setAiMessages] = useState([]);
+  const [aiDraft, setAiDraft] = useState("");
+  const [aiBusy, setAiBusy] = useState(false);
+  const aiInputRef = useRef(null);
 
   const menus = localizeMenuModel(locale);
   const menu = menus.find((entry) => entry.id === activeMenuId) ?? menus[0];
   const currentStatus = projectSnapshot.status;
   const t = (key, fallback = key) => translate(locale, key, fallback);
+  const starterPrompts = [
+    t("ui.ai.prompt.summary", "Resume le projet courant"),
+    t("ui.ai.prompt.integration", "Quels endpoints et flux sont relies a ce projet ?"),
+    t("ui.ai.prompt.next_step", "Quel est le prochain jalon technique concret ?")
+  ];
 
   useEffect(() => {
     let mounted = true;
 
     async function bootstrapWorkspace() {
-      const bootstrap = await fetchWorkspaceBootstrap();
+      const [bootstrap, runtime] = await Promise.all([
+        fetchWorkspaceBootstrap(),
+        fetchAiRuntimeStatus()
+      ]);
       if (!mounted) {
         return;
       }
@@ -188,6 +279,7 @@ export default function App() {
       setFixtureProjects(bootstrap.fixtures.length > 0 ? bootstrap.fixtures : FALLBACK_FIXTURES);
       setProjectSnapshot(bootstrap.snapshot);
       setSelectedFixtureId(bootstrap.snapshot.status.fixtureId ?? FALLBACK_STATUS.fixtureId);
+      setAiRuntime(runtime);
     }
 
     bootstrapWorkspace();
@@ -203,15 +295,31 @@ export default function App() {
     setFixtureLoading(true);
 
     try {
-      const snapshot = await loadWorkspaceFixture(nextFixtureId);
+      const [snapshot, runtime] = await Promise.all([
+        loadWorkspaceFixture(nextFixtureId),
+        fetchAiRuntimeStatus()
+      ]);
       setProjectSnapshot(snapshot);
       setCommandResult(null);
+      setAiRuntime(runtime);
+      setAiMessages([]);
+      setAiDraft("");
     } finally {
       setFixtureLoading(false);
     }
   }
 
   async function handleCommandExecute(commandId) {
+    if (commandId === "view.ai_assistant") {
+      setCommandResult({
+        commandId,
+        status: "focused",
+        message: t("ui.ai.focused", "Panneau Assistant IA local actif.")
+      });
+      aiInputRef.current?.focus();
+      return;
+    }
+
     setExecutingCommandId(commandId);
 
     try {
@@ -219,9 +327,71 @@ export default function App() {
       setProjectSnapshot(response.snapshot);
       setSelectedFixtureId(response.snapshot.status.fixtureId);
       setCommandResult(response.result);
+
+      if (commandId === "project.create") {
+        setAiMessages([]);
+        setAiDraft("");
+      }
     } finally {
       setExecutingCommandId(null);
     }
+  }
+
+  async function submitAiMessage(message) {
+    const trimmedMessage = message.trim();
+    if (!trimmedMessage || aiBusy) {
+      return;
+    }
+
+    const history = aiMessages.map((entry) => ({
+      role: entry.role,
+      content: entry.content
+    }));
+    const userEntry = {
+      role: "user",
+      content: trimmedMessage,
+      references: [],
+      warnings: [],
+      source: "user"
+    };
+
+    setAiMessages((previous) => [...previous, userEntry]);
+    setAiDraft("");
+    setAiBusy(true);
+
+    try {
+      const response = await sendAiChatMessage(trimmedMessage, locale, history, projectSnapshot);
+      setAiRuntime(response.runtime);
+      setAiMessages((previous) => [
+        ...previous,
+        {
+          role: "assistant",
+          content: response.answer,
+          references: response.references ?? [],
+          warnings: response.warnings ?? [],
+          source: response.source
+        }
+      ]);
+    } catch {
+      setAiMessages((previous) => [
+        ...previous,
+        {
+          role: "assistant",
+          content: t("ui.ai.error", "Le runtime IA local a renvoye une erreur."),
+          references: [],
+          warnings: [],
+          source: "error"
+        }
+      ]);
+    } finally {
+      setAiBusy(false);
+      aiInputRef.current?.focus();
+    }
+  }
+
+  async function handleAiSubmit(event) {
+    event.preventDefault();
+    await submitAiMessage(aiDraft);
   }
 
   return (
@@ -276,6 +446,7 @@ export default function App() {
           <div className="status-pills">
             <span className="status-pill">{runtimeLabel(locale, currentStatus.runtime)}</span>
             <span className="status-pill">{currentStatus.projectName}</span>
+            <span className="status-pill">{assistantBadge(locale, aiRuntime)}</span>
             <span className="status-pill">
               {fixtureLoading
                 ? t("ui.fixture.loading", "Chargement...")
@@ -289,7 +460,9 @@ export default function App() {
 
       <div className="context-bar">
         <div className="context-title">{menu.label}</div>
-        <div className="context-meta">{menu.items.filter((item) => item.type !== "separator").length} commandes</div>
+        <div className="context-meta">
+          {menu.items.filter((item) => item.type !== "separator").length} commandes
+        </div>
       </div>
 
       <main className="workspace">
@@ -440,6 +613,110 @@ export default function App() {
         </section>
 
         <aside className="workspace-right">
+          <Panel title={t("ui.panel.ai_assistant", "Assistant IA local")} accent={assistantAccent(locale, aiRuntime)}>
+            <div className="stack-block">
+              <div className={aiRuntime.available ? "assistant-runtime ready" : "assistant-runtime fallback"}>
+                <div className="assistant-runtime-row">
+                  <strong>
+                    {aiRuntime.available
+                      ? t("ui.ai.runtime_ready", "Pret")
+                      : t("ui.ai.runtime_fallback", "Fallback local")}
+                  </strong>
+                  <span className="command-id">
+                    {aiRuntime.provider} | {aiRuntime.activeModel ?? t("ui.ai.no_model", "aucun modele")}
+                  </span>
+                </div>
+                <div className="muted">
+                  {t("ui.ai.endpoint", "Endpoint")} {aiRuntime.endpoint}
+                </div>
+                {aiRuntime.warning ? <div className="muted">{aiRuntime.warning}</div> : null}
+              </div>
+
+              <div className="assistant-thread">
+                {aiMessages.length > 0 ? (
+                  aiMessages.map((entry, index) => (
+                    <article
+                      key={`${entry.role}-${index}`}
+                      className={entry.role === "assistant" ? "assistant-message assistant" : "assistant-message user"}
+                    >
+                      <div className="assistant-message-header">
+                        <strong>{assistantRoleLabel(locale, entry.role)}</strong>
+                        <span className="command-id">{entry.source}</span>
+                      </div>
+                      <div className="assistant-message-body">{entry.content}</div>
+                      {entry.references?.length > 0 ? (
+                        <div className="assistant-message-tags">
+                          {entry.references.map((reference) => (
+                            <span key={reference} className="assistant-tag">
+                              {reference}
+                            </span>
+                          ))}
+                        </div>
+                      ) : null}
+                      {entry.warnings?.length > 0 ? (
+                        <div className="assistant-warning-list">
+                          {entry.warnings.map((warning) => (
+                            <div key={warning} className="muted">
+                              {warning}
+                            </div>
+                          ))}
+                        </div>
+                      ) : null}
+                    </article>
+                  ))
+                ) : (
+                  <div className="assistant-empty">
+                    <p className="muted">
+                      {t(
+                        "ui.ai.no_messages",
+                        "Aucune discussion pour l instant. Le chat s appuie sur le projet charge et reste local."
+                      )}
+                    </p>
+                    <div className="assistant-starters">
+                      {starterPrompts.map((prompt) => (
+                        <button
+                          key={prompt}
+                          className="assistant-starter"
+                          type="button"
+                          disabled={aiBusy}
+                          onClick={() => submitAiMessage(prompt)}
+                        >
+                          {prompt}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <form className="assistant-form" onSubmit={handleAiSubmit}>
+                <textarea
+                  ref={aiInputRef}
+                  className="assistant-input"
+                  value={aiDraft}
+                  onChange={(event) => setAiDraft(event.target.value)}
+                  placeholder={t(
+                    "ui.ai.placeholder",
+                    "Pose une question sur le projet courant, la simulation, l integration ou la safety..."
+                  )}
+                  rows={4}
+                />
+                <div className="assistant-form-footer">
+                  <span className="muted">{t("ui.ai.local_only", "Mode local uniquement")}</span>
+                  <button
+                    className="run-button"
+                    type="submit"
+                    disabled={aiBusy || aiDraft.trim().length === 0}
+                  >
+                    {aiBusy
+                      ? t("ui.ai.sending", "Generation...")
+                      : t("ui.ai.send", "Envoyer")}
+                  </button>
+                </div>
+              </form>
+            </div>
+          </Panel>
+
           <Panel title={t("ui.panel.output", "Sortie")} accent={t("ui.panel.live", "Actif")}>
             <div className="stack-block">
               <div className="subsection-label">{t("ui.command.last_result", "Dernier resultat")}</div>

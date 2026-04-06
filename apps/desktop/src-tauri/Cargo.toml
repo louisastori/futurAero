@@ -7,6 +7,7 @@ edition = "2024"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+faero-ai = { path = "../../../crates/faero-ai" }
 faero-core = { path = "../../../crates/faero-core" }
 faero-integration = { path = "../../../crates/faero-integration" }
 faero-plugin-host = { path = "../../../crates/faero-plugin-host" }

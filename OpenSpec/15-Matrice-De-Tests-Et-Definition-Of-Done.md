@@ -161,7 +161,8 @@ Ciblent:
 - rejet des sorties non conformes,
 - persistance session/suggestion,
 - profils runtime `max|furnace`,
-- critique interne multi-passes.
+- critique interne multi-passes,
+- discussion shell locale via runtime Ollama ou fallback local explicite.
 
 ### `faero-ui`
 
@@ -171,7 +172,8 @@ Ciblent:
 - affichage suggestion IA,
 - structure de menus desktop,
 - localisation FR par defaut avec EN/ES disponibles,
-- chargement des fixtures desktop via backend.
+- chargement des fixtures desktop via backend,
+- panneau de discussion IA locale avec etats vide, charge, reponse et fallback.
 
 ## Fixtures officielles MVP
 
@@ -485,6 +487,22 @@ Attendu:
 - les compteurs entites/endpoints/flux/plugins evoluent dans le shell,
 - le dernier resultat de commande est visible cote UI,
 - une activite `system` est ajoutee pour les commandes simulees ou non mutantes.
+
+### CT-016 - Discussion IA locale dans le shell desktop
+
+Etapes:
+
+1. ouvrir le shell desktop sur une fixture,
+2. verifier l etat du runtime IA local,
+3. envoyer une question sur le projet courant,
+4. verifier la reponse, les references et le comportement en fallback si Ollama est indisponible.
+
+Attendu:
+
+- la discussion reste locale,
+- le contexte du projet courant est visible dans la reponse ou ses references,
+- le modele actif ou le fallback local est explicite,
+- aucune mutation du projet n est appliquee silencieusement.
 
 ## Seuils techniques MVP
 

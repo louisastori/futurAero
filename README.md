@@ -28,4 +28,4 @@ Scaffold monorepo initial pour FutureAero, aligne sur les `OpenSpec/`.
 
 ## Statut
 
-Le depot est bootstrappe pour le noyau Rust, les fixtures et un premier shell desktop `Tauri + React`. Le viewport, les panneaux et les menus sont reels cote UI, mais les workflows metier restent encore des premieres integrations.
+Le depot est bootstrappe pour le noyau Rust, les fixtures et un shell desktop `Tauri + React` branche a un backend Rust reel. Le viewport, les panneaux, les menus et un premier chat IA local via Ollama sont disponibles cote UI, mais les workflows metier lourds restent encore des integrations progressives.
