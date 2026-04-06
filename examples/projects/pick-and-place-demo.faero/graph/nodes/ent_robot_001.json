@@ -1,0 +1,12 @@
+{
+  "id": "ent_robot_001",
+  "type": "RobotModel",
+  "name": "RobotArm-A",
+  "revision": "rev_0001",
+  "status": "active",
+  "data": {
+    "controllerBindingId": "ext_robot_001",
+    "payloadKg": 6.0
+  }
+}
+

@@ -1,0 +1,11 @@
+target/
+coverage/
+dist/
+node_modules/
+.pnpm-store/
+.turbo/
+*.log
+.DS_Store
+Thumbs.db
+examples/**/cache/
+

@@ -1,0 +1,32 @@
+{
+  "id": "ext_robot_001",
+  "name": "Robot Controller Mock",
+  "endpointType": "robot_controller",
+  "transportProfile": {
+    "transportKind": "robot_controller",
+    "adapterId": null,
+    "discoveryMode": "static",
+    "credentialPolicy": null,
+    "securityMode": "local"
+  },
+  "connectionProfile": {
+    "stub": true
+  },
+  "addressing": {
+    "host": "127.0.0.1",
+    "port": 4840,
+    "path": null,
+    "deviceId": null
+  },
+  "signalMapIds": [],
+  "mode": "replay",
+  "linkMetrics": {
+    "latencyMs": 5,
+    "jitterMs": 1,
+    "dropRate": 0.0,
+    "rssiDbm": null,
+    "bandwidthKbps": 1000
+  },
+  "status": "ready"
+}
+

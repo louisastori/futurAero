@@ -1,0 +1,12 @@
+{
+  "id": "ent_cell_2001",
+  "type": "RobotCell",
+  "name": "WirelessCell",
+  "revision": "rev_0001",
+  "status": "active",
+  "data": {
+    "robotIds": [],
+    "equipmentIds": ["ent_box_2001"]
+  }
+}
+

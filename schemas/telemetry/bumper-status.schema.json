@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://futureaero.local/schemas/telemetry/bumper-status.schema.json",
+  "title": "BumperStatus",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "bumperId",
+    "pressed",
+    "timestamp"
+  ],
+  "properties": {
+    "bumperId": { "type": "string", "minLength": 1 },
+    "pressed": { "type": "boolean" },
+    "timestamp": { "type": "string", "format": "date-time" },
+    "source": { "type": ["string", "null"] }
+  }
+}
+

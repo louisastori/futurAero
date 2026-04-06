@@ -1,0 +1,21 @@
+{
+  "id": "str_bumper_001",
+  "name": "BumperStatus",
+  "endpointId": "ext_wifi_001",
+  "streamType": "mqtt_topic",
+  "direction": "inbound",
+  "codecProfile": {
+    "encoding": "json"
+  },
+  "schemaRef": "schemas/telemetry/bumper-status.schema.json",
+  "timingProfile": {
+    "expectedRateHz": 20,
+    "maxLatencyMs": 80
+  },
+  "qosProfile": {
+    "delivery": "at_least_once",
+    "ordering": "best_effort"
+  },
+  "status": "ready"
+}
+

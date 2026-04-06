@@ -1,0 +1,11 @@
+{
+  "id": "ent_plugin_001",
+  "pluginId": "plg.integration.viewer",
+  "version": "0.1.0",
+  "capabilities": ["panel"],
+  "permissions": ["project.read", "integration.observe"],
+  "entrypoints": ["plugins/integration-viewer/index.js"],
+  "compatibility": ["faero-core@0.1"],
+  "status": "installed"
+}
+

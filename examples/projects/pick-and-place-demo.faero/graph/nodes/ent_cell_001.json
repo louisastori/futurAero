@@ -1,0 +1,13 @@
+{
+  "id": "ent_cell_001",
+  "type": "RobotCell",
+  "name": "PickAndPlaceCell",
+  "revision": "rev_0001",
+  "status": "active",
+  "data": {
+    "robotIds": ["ent_robot_001"],
+    "equipmentIds": ["ent_conv_001"],
+    "sequenceIds": ["ent_seq_001"]
+  }
+}
+

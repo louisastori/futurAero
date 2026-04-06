@@ -1,0 +1,14 @@
+projectId: prj_2001
+name: Wireless Integration Demo
+formatVersion: 0.1.0
+createdAt: "2026-04-06T00:00:00Z"
+updatedAt: "2026-04-06T00:00:00Z"
+appVersion: 0.1.0-alpha
+displayUnits:
+  length: mm
+  angle: deg
+  mass: kg
+defaultFrame: world
+rootSceneId: ent_cell_2001
+activeConfigurationId: cfg_default
+

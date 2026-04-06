@@ -1,0 +1,3 @@
+{"commandId":"cmd_0001","kind":"entity.create","projectId":"prj_1001","targetId":"ent_cell_001","actorId":"system.scaffold","timestamp":"2026-04-06T00:00:00Z","baseRevision":null,"payload":{"id":"ent_cell_001","type":"RobotCell","name":"PickAndPlaceCell","revision":"rev_0001","status":"active","data":{"robotIds":["ent_robot_001"],"equipmentIds":["ent_conv_001"],"sequenceIds":["ent_seq_001"]}}}
+{"commandId":"cmd_0002","kind":"plugin.install","projectId":"prj_1001","targetId":"plg.integration.viewer","actorId":"system.scaffold","timestamp":"2026-04-06T00:00:00Z","baseRevision":null,"payload":{"pluginId":"plg.integration.viewer","version":"0.1.0"}}
+

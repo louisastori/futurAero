@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://futureaero.local/schemas/job.schema.json",
+  "title": "JobEnvelope",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "jobId",
+    "kind",
+    "projectId",
+    "status",
+    "progress",
+    "phase",
+    "message",
+    "updatedAt"
+  ],
+  "properties": {
+    "jobId": { "type": "string", "minLength": 1 },
+    "kind": { "type": "string", "minLength": 1 },
+    "projectId": { "type": "string", "minLength": 1 },
+    "targetId": { "type": ["string", "null"] },
+    "status": {
+      "type": "string",
+      "enum": ["queued", "running", "completed", "failed", "cancelled"]
+    },
+    "progress": { "type": "number", "minimum": 0, "maximum": 1 },
+    "phase": { "type": "string", "minLength": 1 },
+    "message": { "type": "string" },
+    "estimatedRemainingMs": { "type": ["integer", "null"], "minimum": 0 },
+    "startedAt": { "type": ["string", "null"], "format": "date-time" },
+    "updatedAt": { "type": "string", "format": "date-time" },
+    "resultRef": { "type": ["string", "null"] },
+    "error": { "type": ["object", "null"] }
+  }
+}
+

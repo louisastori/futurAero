@@ -1,0 +1,21 @@
+{
+  "id": "str_robot_status_001",
+  "name": "RobotStatus",
+  "endpointId": "ext_robot_001",
+  "streamType": "json_frame",
+  "direction": "inbound",
+  "codecProfile": {
+    "encoding": "json"
+  },
+  "schemaRef": "schemas/telemetry/bumper-status.schema.json",
+  "timingProfile": {
+    "expectedRateHz": 10,
+    "maxLatencyMs": 50
+  },
+  "qosProfile": {
+    "delivery": "at_least_once",
+    "ordering": "best_effort"
+  },
+  "status": "ready"
+}
+

@@ -1,0 +1,18 @@
+{
+  "name": "futureaero",
+  "private": true,
+  "version": "0.1.0",
+  "packageManager": "pnpm@10.12.1",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "node -e \"console.log('Desktop scaffold only. Tauri/React wiring is the next increment.')\"",
+    "build": "node -e \"console.log('Build scaffold placeholder')\"",
+    "lint": "node -e \"console.log('Frontend lint scaffold placeholder')\"",
+    "test": "node -e \"console.log('Frontend test scaffold placeholder')\"",
+    "typecheck": "node -e \"console.log('Frontend typecheck scaffold placeholder')\""
+  }
+}
+

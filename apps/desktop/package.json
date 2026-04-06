@@ -1,0 +1,11 @@
+{
+  "name": "@futureaero/desktop",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "node src/main.mjs",
+    "build": "node -e \"console.log('Desktop build scaffold placeholder')\""
+  }
+}
+

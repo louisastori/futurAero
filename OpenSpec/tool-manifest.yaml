@@ -1,0 +1,121 @@
+project: FutureAero
+status: draft-initial
+version: 0.1.0
+
+tools:
+  - id: sketch_constraints
+    name: Esquisse et Contraintes
+    file: tools/01-Esquisse-Contraintes.md
+    phase: 1
+    depends_on: []
+
+  - id: parts_parametric
+    name: Pieces Parametriques
+    file: tools/02-Pieces-Parametriques.md
+    phase: 1
+    depends_on:
+      - sketch_constraints
+
+  - id: assemblies_kinematics
+    name: Assemblages et Cinematique
+    file: tools/03-Assemblages-Cinematique.md
+    phase: 2
+    depends_on:
+      - parts_parametric
+
+  - id: robotic_cells
+    name: Cellules Robotiques
+    file: tools/04-Cellules-Robotiques.md
+    phase: 2
+    depends_on:
+      - assemblies_kinematics
+
+  - id: io_control
+    name: Capteurs Actionneurs Controle
+    file: tools/05-Capteurs-Actionneurs-Controle.md
+    phase: 2
+    depends_on:
+      - robotic_cells
+
+  - id: simulation_digital_twin
+    name: Simulation et Jumeau Numerique
+    file: tools/06-Simulation-Et-Jumeau-Numerique.md
+    phase: 3
+    depends_on:
+      - assemblies_kinematics
+      - robotic_cells
+      - io_control
+
+  - id: local_ai_assistant
+    name: Assistant IA Locale
+    file: tools/07-Assistant-IA-Locale.md
+    phase: 3
+    depends_on:
+      - sketch_constraints
+      - parts_parametric
+      - assemblies_kinematics
+      - simulation_digital_twin
+
+  - id: advanced_perception
+    name: Perception LiDAR et Fusion Capteurs
+    file: tools/09-Perception-Lidar-Et-Fusion-Capteurs.md
+    phase: 3
+    depends_on:
+      - robotic_cells
+      - io_control
+      - simulation_digital_twin
+
+  - id: industrial_integration
+    name: Integration Industrielle et Connectivite Terrain
+    file: tools/10-Integration-Industrielle.md
+    phase: 4
+    depends_on:
+      - robotic_cells
+      - io_control
+
+  - id: safety_system
+    name: Safety Zones Interlocks LiDAR Securite
+    file: tools/11-Safety-Zones-Interlocks-Lidar-Securite.md
+    phase: 4
+    depends_on:
+      - robotic_cells
+      - io_control
+      - advanced_perception
+
+  - id: commissioning_asbuilt
+    name: As-Built et Commissioning
+    file: tools/12-As-Built-Et-Commissioning.md
+    phase: 5
+    depends_on:
+      - industrial_integration
+      - advanced_perception
+      - safety_system
+
+  - id: optimization_engine
+    name: Optimization Engine
+    file: tools/13-Optimization-Engine.md
+    phase: 5
+    depends_on:
+      - simulation_digital_twin
+      - advanced_perception
+      - safety_system
+
+  - id: plugin_sdk
+    name: Plugin SDK
+    file: tools/14-Plugin-SDK.md
+    phase: 5
+    depends_on:
+      - industrial_integration
+      - optimization_engine
+
+  - id: validation_industrialization
+    name: Validation et Industrialisation
+    file: tools/08-Validation-Et-Industrialisation.md
+    phase: 4
+    depends_on:
+      - simulation_digital_twin
+      - local_ai_assistant
+      - advanced_perception
+      - industrial_integration
+      - safety_system
+      - commissioning_asbuilt

@@ -1,0 +1,32 @@
+{
+  "id": "ext_wifi_001",
+  "name": "AMR-Lidar-WiFi-01",
+  "endpointType": "wifi_device",
+  "transportProfile": {
+    "transportKind": "wifi",
+    "adapterId": "wlan0",
+    "discoveryMode": "mdns",
+    "credentialPolicy": "runtime_prompt",
+    "securityMode": "wpa3"
+  },
+  "connectionProfile": {
+    "retryBackoffMs": 250
+  },
+  "addressing": {
+    "host": "amr-lidar-01.local",
+    "port": 9001,
+    "path": "/telemetry",
+    "deviceId": null
+  },
+  "signalMapIds": ["sig_bumper_001"],
+  "mode": "live",
+  "linkMetrics": {
+    "latencyMs": 18,
+    "jitterMs": 4,
+    "dropRate": 0.0,
+    "rssiDbm": -55,
+    "bandwidthKbps": 10000
+  },
+  "status": "connected"
+}
+

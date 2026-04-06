@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://futureaero.local/schemas/event.schema.json",
+  "title": "EventEnvelope",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "eventId",
+    "kind",
+    "projectId",
+    "causedByCommandId",
+    "timestamp",
+    "revision",
+    "payload"
+  ],
+  "properties": {
+    "eventId": { "type": "string", "minLength": 1 },
+    "kind": { "type": "string", "minLength": 1 },
+    "projectId": { "type": "string", "minLength": 1 },
+    "targetId": { "type": ["string", "null"] },
+    "causedByCommandId": { "type": "string", "minLength": 1 },
+    "timestamp": { "type": "string", "format": "date-time" },
+    "revision": { "type": "string", "minLength": 1 },
+    "payload": { "type": "object" }
+  }
+}
+

@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://futureaero.local/schemas/command.schema.json",
+  "title": "CommandEnvelope",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "commandId",
+    "kind",
+    "projectId",
+    "actorId",
+    "timestamp",
+    "payload"
+  ],
+  "properties": {
+    "commandId": { "type": "string", "minLength": 1 },
+    "kind": { "type": "string", "minLength": 1 },
+    "projectId": { "type": "string", "minLength": 1 },
+    "targetId": { "type": ["string", "null"] },
+    "actorId": { "type": "string", "minLength": 1 },
+    "timestamp": { "type": "string", "format": "date-time" },
+    "baseRevision": { "type": ["string", "null"] },
+    "payload": { "type": "object" }
+  }
+}
+
