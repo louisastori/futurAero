@@ -174,6 +174,7 @@ Ciblent:
 - localisation FR par defaut avec EN/ES disponibles,
 - chargement des fixtures desktop via backend,
 - viewport de references aeronautiques avec presets moteur, cellule, wireframe, FEA et aero,
+- couverture testee des boutons du shell desktop: menus, toggles, commandes, scenes viewport et discussion IA,
 - panneaux retractables et rouvrables sans reset de session,
 - colonnes laterales redimensionnables a la souris avec bornes stables,
 - panneau de discussion IA locale avec etats vide, charge, reponse et fallback.
@@ -554,6 +555,22 @@ Attendu:
 - le changement de scene est instantane et ne recharge pas la session,
 - les textes du workbench sont presents en FR/EN/ES,
 - les scenes conservent une lecture coherente des references moteur, structure, FEA et aero.
+
+### CT-020 - Couverture des boutons du shell desktop
+
+Etapes:
+
+1. charger le shell desktop avec un backend de test controle,
+2. cliquer tous les boutons top-level de menu,
+3. cliquer tous les boutons `Executer` exposes par la surface de commandes,
+4. cliquer les toggles de panneaux, les tabs du viewport et les boutons du chat IA.
+
+Attendu:
+
+- chaque bouton visible du shell declenche un effet testable,
+- les menus changent bien de contexte,
+- chaque commande met a jour un etat visible, un resultat ou un panneau,
+- aucun bouton du shell ne reste sans couverture de test UI.
 
 ## Seuils techniques MVP
 

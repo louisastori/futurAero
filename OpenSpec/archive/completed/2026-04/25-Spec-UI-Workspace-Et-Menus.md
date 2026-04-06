@@ -5,6 +5,7 @@ Statut: implemente-et-teste puis archive le 2026-04-06
 Implementation de reference:
 
 - `apps/desktop/src/App.jsx`
+- `apps/desktop/src/App.test.jsx`
 - `apps/desktop/src/styles.css`
 - `packages/ui/src/menu-model.mjs`
 - `packages/ui/src/i18n.mjs`

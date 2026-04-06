@@ -12,7 +12,7 @@
     "dev:web": "npm --workspace @futureaero/desktop run dev",
     "build": "npm --workspace @futureaero/desktop run build",
     "lint": "node --check packages/ui/src/index.mjs && node --check packages/ui/src/i18n.mjs && node --check packages/ui/src/i18n.test.mjs && node --check packages/ui/src/menu-model.mjs && node --check packages/ui/src/menu-model.test.mjs && node --check packages/ui/src/workspace-layout.mjs && node --check packages/ui/src/workspace-layout.test.mjs && node --check packages/ui/src/workspace-resize.mjs && node --check packages/ui/src/workspace-resize.test.mjs && node --check packages/viewport/src/index.mjs && node --check packages/viewport/src/aerospace-scenes.mjs && node --check packages/viewport/src/aerospace-scenes.test.mjs && npm --workspace @futureaero/desktop run build",
-    "test": "node --test packages/ui/src/i18n.test.mjs packages/ui/src/menu-model.test.mjs packages/ui/src/workspace-layout.test.mjs packages/ui/src/workspace-resize.test.mjs packages/viewport/src/aerospace-scenes.test.mjs",
+    "test": "node --test packages/ui/src/i18n.test.mjs packages/ui/src/menu-model.test.mjs packages/ui/src/workspace-layout.test.mjs packages/ui/src/workspace-resize.test.mjs packages/viewport/src/aerospace-scenes.test.mjs && npm --workspace @futureaero/desktop run test",
     "typecheck": "node -e \"console.log('TypeScript n est pas encore branche. Menu model verifie via lint + tests Node.')\""
   }
 }

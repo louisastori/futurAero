@@ -69,6 +69,7 @@ function MenuBar({ menus, activeMenuId, onSelect }) {
       {menus.map((menu) => (
         <button
           key={menu.id}
+          data-menu-id={menu.id}
           className={menu.id === activeMenuId ? "menu-button active" : "menu-button"}
           type="button"
           onClick={() => onSelect(menu.id)}
@@ -80,9 +81,12 @@ function MenuBar({ menus, activeMenuId, onSelect }) {
   );
 }
 
-function Panel({ title, children, accent, collapsed = false, onToggle, toggleLabel }) {
+function Panel({ panelId, title, children, accent, collapsed = false, onToggle, toggleLabel }) {
   return (
-    <section className={collapsed ? "panel panel-collapsed" : "panel"}>
+    <section
+      className={collapsed ? "panel panel-collapsed" : "panel"}
+      data-panel-id={panelId}
+    >
       <header className="panel-header">
         <div className="panel-header-main">
           <span className="panel-title">{title}</span>
@@ -92,6 +96,7 @@ function Panel({ title, children, accent, collapsed = false, onToggle, toggleLab
           <button
             className="panel-toggle"
             type="button"
+            data-panel-toggle={panelId}
             onClick={onToggle}
             aria-expanded={!collapsed}
             aria-label={toggleLabel}
@@ -333,6 +338,7 @@ function AerospaceViewport({ locale, t, selectedSceneId, onSelectScene }) {
           <button
             key={entry.id}
             type="button"
+            data-scene-id={entry.id}
             role="tab"
             aria-selected={entry.id === scene.id}
             className={entry.id === scene.id ? "viewport-scene-tab active" : "viewport-scene-tab"}
@@ -494,6 +500,14 @@ async function sendAiChatMessage(message, locale, history, snapshot) {
   };
 }
 
+const defaultDesktopBackend = {
+  fetchWorkspaceBootstrap,
+  loadWorkspaceFixture,
+  executeWorkspaceCommand,
+  fetchAiRuntimeStatus,
+  sendAiChatMessage
+};
+
 function runtimeLabel(locale, runtime) {
   if (runtime === "web-preview") {
     return translate(locale, "ui.status.web_preview", runtime);
@@ -542,7 +556,7 @@ function assistantBadge(locale, runtime) {
   return `${translate(locale, "ui.ai.badge", "IA locale")} | ${translate(locale, "ui.ai.runtime_fallback", "Fallback local")}`;
 }
 
-export default function App() {
+export default function App({ backend = defaultDesktopBackend }) {
   const [locale, setLocale] = useState(defaultLocale);
   const [projectSnapshot, setProjectSnapshot] = useState(FALLBACK_SNAPSHOT);
   const [fixtureProjects, setFixtureProjects] = useState(FALLBACK_FIXTURES);
@@ -663,8 +677,8 @@ export default function App() {
 
     async function bootstrapWorkspace() {
       const [bootstrap, runtime] = await Promise.all([
-        fetchWorkspaceBootstrap(),
-        fetchAiRuntimeStatus()
+        backend.fetchWorkspaceBootstrap(),
+        backend.fetchAiRuntimeStatus()
       ]);
       if (!mounted) {
         return;
@@ -690,8 +704,8 @@ export default function App() {
 
     try {
       const [snapshot, runtime] = await Promise.all([
-        loadWorkspaceFixture(nextFixtureId),
-        fetchAiRuntimeStatus()
+        backend.loadWorkspaceFixture(nextFixtureId),
+        backend.fetchAiRuntimeStatus()
       ]);
       setProjectSnapshot(snapshot);
       setCommandResult(null);
@@ -725,7 +739,7 @@ export default function App() {
     setExecutingCommandId(commandId);
 
     try {
-      const response = await executeWorkspaceCommand(commandId, projectSnapshot);
+      const response = await backend.executeWorkspaceCommand(commandId, projectSnapshot);
       setProjectSnapshot(response.snapshot);
       setSelectedFixtureId(response.snapshot.status.fixtureId);
       setCommandResult(response.result);
@@ -762,7 +776,12 @@ export default function App() {
     setAiBusy(true);
 
     try {
-      const response = await sendAiChatMessage(trimmedMessage, locale, history, projectSnapshot);
+      const response = await backend.sendAiChatMessage(
+        trimmedMessage,
+        locale,
+        history,
+        projectSnapshot
+      );
       setAiRuntime(response.runtime);
       setAiMessages((previous) => [
         ...previous,
@@ -870,6 +889,7 @@ export default function App() {
       <main className="workspace" style={workspaceStyle} ref={workspaceRef}>
         <aside className={leftExpanded ? "workspace-left" : "workspace-left workspace-column-collapsed"}>
           <Panel
+            panelId="projectExplorer"
             title={t("ui.panel.project_explorer", "Explorateur de projet")}
             accent={`${currentStatus.entityCount} ${t("ui.workspace.entities", "entites")}`}
             collapsed={!panelState.projectExplorer}
@@ -950,6 +970,7 @@ export default function App() {
           </Panel>
 
           <Panel
+            panelId="properties"
             title={t("ui.panel.properties", "Proprietes")}
             accent="F4"
             collapsed={!panelState.properties}
@@ -998,6 +1019,7 @@ export default function App() {
 
         <section className="workspace-center">
           <Panel
+            panelId="commandSurface"
             title={t("ui.panel.command_surface", "Surface de commandes")}
             accent={menu.label}
             collapsed={!panelState.commandSurface}
@@ -1019,6 +1041,7 @@ export default function App() {
                       <button
                         className="run-button"
                         type="button"
+                        data-command-id={item.command}
                         disabled={executingCommandId !== null}
                         onClick={() => handleCommandExecute(item.command)}
                       >
@@ -1034,6 +1057,7 @@ export default function App() {
           </Panel>
 
           <Panel
+            panelId="viewport"
             title={t("ui.panel.viewport", "Viewport 3D")}
             accent={projectSnapshot.details.rootSceneId ?? t("ui.panel.scene_host", "Hote de scene")}
             collapsed={!panelState.viewport}
@@ -1066,6 +1090,7 @@ export default function App() {
 
         <aside className={rightExpanded ? "workspace-right" : "workspace-right workspace-column-collapsed"}>
           <Panel
+            panelId="aiAssistant"
             title={t("ui.panel.ai_assistant", "Assistant IA local")}
             accent={assistantAccent(locale, aiRuntime)}
             collapsed={!panelState.aiAssistant}
@@ -1136,6 +1161,7 @@ export default function App() {
                           key={prompt}
                           className="assistant-starter"
                           type="button"
+                          data-ai-starter={prompt}
                           disabled={aiBusy}
                           onClick={() => submitAiMessage(prompt)}
                         >
@@ -1164,6 +1190,7 @@ export default function App() {
                   <button
                     className="run-button"
                     type="submit"
+                    data-ai-send="true"
                     disabled={aiBusy || aiDraft.trim().length === 0}
                   >
                     {aiBusy
@@ -1176,6 +1203,7 @@ export default function App() {
           </Panel>
 
           <Panel
+            panelId="output"
             title={t("ui.panel.output", "Sortie")}
             accent={t("ui.panel.live", "Actif")}
             collapsed={!panelState.output}
@@ -1186,8 +1214,12 @@ export default function App() {
               <div className="subsection-label">{t("ui.command.last_result", "Dernier resultat")}</div>
               {commandResult ? (
                 <div className="result-card">
-                  <strong>{commandResult.commandId}</strong>
-                  <div className="command-id">{commandResult.status}</div>
+                  <strong data-last-command-id={commandResult.commandId}>
+                    {commandResult.commandId}
+                  </strong>
+                  <div className="command-id" data-last-command-status={commandResult.status}>
+                    {commandResult.status}
+                  </div>
                   <div className="muted">{commandResult.message}</div>
                 </div>
               ) : (
@@ -1221,6 +1253,7 @@ export default function App() {
           </Panel>
 
           <Panel
+            panelId="problems"
             title={t("ui.panel.problems", "Problemes")}
             accent={t("ui.problems.none_blocking", "0 bloquant")}
             collapsed={!panelState.problems}
