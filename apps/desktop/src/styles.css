@@ -297,6 +297,26 @@ button {
   font-size: 0.82rem;
 }
 
+.command-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.run-button {
+  border: 1px solid rgba(88, 159, 255, 0.35);
+  border-radius: 999px;
+  background: rgba(20, 84, 192, 0.18);
+  color: #d8e7fb;
+  padding: 6px 12px;
+  cursor: pointer;
+}
+
+.run-button:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+
 .separator {
   height: 1px;
   margin: 8px 0;
@@ -338,6 +358,15 @@ button {
 .stack-block {
   display: grid;
   gap: 12px;
+}
+
+.result-card {
+  display: grid;
+  gap: 4px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.06);
 }
 
 @media (max-width: 1100px) {

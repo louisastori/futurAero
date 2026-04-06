@@ -648,6 +648,20 @@ Criteres:
 - le panneau proprietes expose les metadonnees utiles du projet charge,
 - le panneau sortie affiche une activite recente commande/evenement issue de la fixture.
 
+### ST-706 - Routage interactif des commandes desktop
+
+- Priorite: `P1`
+- Modules: `faero-ui`, `faero-app`, `faero-core`
+- Dependances: `ST-704`, `ST-705`
+- Sortie: commandes du shell executees depuis la surface centrale avec retour d etat
+
+Criteres:
+
+- une session workspace en memoire existe cote backend desktop,
+- le shell peut executer un sous-ensemble de commandes depuis les menus,
+- les mutations supportees passent par `faero-core`,
+- la sortie desktop affiche le dernier resultat et l activite systeme associee.
+
 ## Ordre de livraison recommande
 
 1. `E0`

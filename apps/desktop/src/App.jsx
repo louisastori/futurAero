@@ -88,16 +88,48 @@ function buildFallbackSnapshot(projectId = FALLBACK_STATUS.fixtureId) {
   };
 }
 
-async function fetchBackendStatus() {
-  return (await invokeBackend("backend_status")) ?? FALLBACK_STATUS;
+function appendFallbackActivity(snapshot, channel, kind, targetId) {
+  const entry = {
+    id: `web_${snapshot.recentActivity.length + 1}`,
+    channel,
+    kind,
+    timestamp: "2026-04-06T12:59:59Z",
+    targetId
+  };
+
+  return {
+    ...snapshot,
+    recentActivity: [entry, ...snapshot.recentActivity].slice(0, 12)
+  };
 }
 
-async function fetchFixtureProjects() {
-  return (await invokeBackend("available_fixture_projects")) ?? FALLBACK_FIXTURES;
+async function fetchWorkspaceBootstrap() {
+  return (
+    (await invokeBackend("workspace_bootstrap")) ?? {
+      fixtures: FALLBACK_FIXTURES,
+      snapshot: buildFallbackSnapshot()
+    }
+  );
 }
 
-async function fetchProjectSnapshot(projectId) {
-  return (await invokeBackend("load_project_snapshot", { projectId })) ?? buildFallbackSnapshot(projectId);
+async function loadWorkspaceFixture(projectId) {
+  return (await invokeBackend("workspace_load_fixture", { projectId })) ?? buildFallbackSnapshot(projectId);
+}
+
+async function executeWorkspaceCommand(commandId, currentSnapshot) {
+  const response = await invokeBackend("workspace_execute_command", { commandId });
+  if (response) {
+    return response;
+  }
+
+  return {
+    snapshot: appendFallbackActivity(currentSnapshot, "system", "command.simulated", commandId),
+    result: {
+      commandId,
+      status: "simulated",
+      message: "commande simulee dans l apercu web"
+    }
+  };
 }
 
 function runtimeLabel(locale, runtime) {
@@ -117,8 +149,11 @@ function activityChannelLabel(locale, channel) {
   if (channel === "command") {
     return translate(locale, "ui.activity.command", channel);
   }
+  if (channel === "event") {
+    return translate(locale, "ui.activity.event", channel);
+  }
 
-  return translate(locale, "ui.activity.event", channel);
+  return translate(locale, "ui.activity.system", channel);
 }
 
 export default function App() {
@@ -128,6 +163,8 @@ export default function App() {
   const [selectedFixtureId, setSelectedFixtureId] = useState(FALLBACK_STATUS.fixtureId);
   const [activeMenuId, setActiveMenuId] = useState("file");
   const [fixtureLoading, setFixtureLoading] = useState(false);
+  const [executingCommandId, setExecutingCommandId] = useState(null);
+  const [commandResult, setCommandResult] = useState(null);
 
   const menus = localizeMenuModel(locale);
   const menu = menus.find((entry) => entry.id === activeMenuId) ?? menus[0];
@@ -138,29 +175,14 @@ export default function App() {
     let mounted = true;
 
     async function bootstrapWorkspace() {
-      try {
-        const fixtures = await fetchFixtureProjects();
-        const nextFixtures = fixtures.length > 0 ? fixtures : FALLBACK_FIXTURES;
-        const status = await fetchBackendStatus();
-        const nextFixtureId = status.fixtureId ?? nextFixtures[0].id;
-        const snapshot = await fetchProjectSnapshot(nextFixtureId);
-
-        if (!mounted) {
-          return;
-        }
-
-        setFixtureProjects(nextFixtures);
-        setProjectSnapshot(snapshot);
-        setSelectedFixtureId(nextFixtureId);
-      } catch {
-        if (!mounted) {
-          return;
-        }
-
-        setFixtureProjects(FALLBACK_FIXTURES);
-        setProjectSnapshot(buildFallbackSnapshot());
-        setSelectedFixtureId(FALLBACK_STATUS.fixtureId);
+      const bootstrap = await fetchWorkspaceBootstrap();
+      if (!mounted) {
+        return;
       }
+
+      setFixtureProjects(bootstrap.fixtures.length > 0 ? bootstrap.fixtures : FALLBACK_FIXTURES);
+      setProjectSnapshot(bootstrap.snapshot);
+      setSelectedFixtureId(bootstrap.snapshot.status.fixtureId ?? FALLBACK_STATUS.fixtureId);
     }
 
     bootstrapWorkspace();
@@ -176,10 +198,24 @@ export default function App() {
     setFixtureLoading(true);
 
     try {
-      const snapshot = await fetchProjectSnapshot(nextFixtureId);
+      const snapshot = await loadWorkspaceFixture(nextFixtureId);
       setProjectSnapshot(snapshot);
+      setCommandResult(null);
     } finally {
       setFixtureLoading(false);
+    }
+  }
+
+  async function handleCommandExecute(commandId) {
+    setExecutingCommandId(commandId);
+
+    try {
+      const response = await executeWorkspaceCommand(commandId, projectSnapshot);
+      setProjectSnapshot(response.snapshot);
+      setSelectedFixtureId(response.snapshot.status.fixtureId);
+      setCommandResult(response.result);
+    } finally {
+      setExecutingCommandId(null);
     }
   }
 
@@ -217,7 +253,7 @@ export default function App() {
                 className="shell-select"
                 value={selectedFixtureId}
                 onChange={handleFixtureChange}
-                disabled={fixtureProjects.length === 0}
+                disabled={fixtureProjects.length === 0 || fixtureLoading}
               >
                 {fixtureProjects.length > 0 ? (
                   fixtureProjects.map((fixture) => (
@@ -376,7 +412,19 @@ export default function App() {
                       <strong>{item.label}</strong>
                       <div className="command-id">{item.command}</div>
                     </div>
-                    <span className="shortcut">{item.shortcut ?? ""}</span>
+                    <div className="command-actions">
+                      <span className="shortcut">{item.shortcut ?? ""}</span>
+                      <button
+                        className="run-button"
+                        type="button"
+                        disabled={executingCommandId !== null}
+                        onClick={() => handleCommandExecute(item.command)}
+                      >
+                        {executingCommandId === item.command
+                          ? t("ui.command.running", "Execution...")
+                          : t("ui.command.run", "Executer")}
+                      </button>
+                    </div>
                   </li>
                 )
               )}
@@ -397,6 +445,17 @@ export default function App() {
         <aside className="workspace-right">
           <Panel title={t("ui.panel.output", "Sortie")} accent={t("ui.panel.live", "Actif")}>
             <div className="stack-block">
+              <div className="subsection-label">{t("ui.command.last_result", "Dernier resultat")}</div>
+              {commandResult ? (
+                <div className="result-card">
+                  <strong>{commandResult.commandId}</strong>
+                  <div className="command-id">{commandResult.status}</div>
+                  <div className="muted">{commandResult.message}</div>
+                </div>
+              ) : (
+                <p className="muted">{t("ui.command.no_result", "Aucune commande executee pendant cette session.")}</p>
+              )}
+
               <div className="subsection-label">{t("ui.output.recent_activity", "Activite recente")}</div>
               {projectSnapshot.recentActivity.length > 0 ? (
                 <ul className="command-list">
@@ -405,7 +464,7 @@ export default function App() {
                       <div>
                         <strong>{entry.kind}</strong>
                         <div className="command-id">
-                          {activityChannelLabel(locale, entry.channel)} · {entry.targetId ?? currentStatus.projectName}
+                          {activityChannelLabel(locale, entry.channel)} | {entry.targetId ?? currentStatus.projectName}
                         </div>
                       </div>
                       <span className="shortcut">{entry.timestamp}</span>

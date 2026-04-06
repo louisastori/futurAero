@@ -724,6 +724,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "faero-integration"
+version = "0.1.0"
+dependencies = [
+ "faero-types",
+ "serde_json",
+]
+
+[[package]]
+name = "faero-plugin-host"
+version = "0.1.0"
+dependencies = [
+ "faero-types",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "faero-storage"
 version = "0.1.0"
 dependencies = [
@@ -852,6 +868,8 @@ name = "futureaero-desktop-shell"
 version = "0.1.0"
 dependencies = [
  "faero-core",
+ "faero-integration",
+ "faero-plugin-host",
  "faero-storage",
  "faero-types",
  "serde",

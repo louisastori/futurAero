@@ -470,6 +470,22 @@ Attendu:
 - les derniers `commands/events` de la fixture sont visibles dans la sortie,
 - le changement de fixture recharge un snapshot coherent.
 
+### CT-015 - Execution de commandes dans le shell desktop
+
+Etapes:
+
+1. ouvrir une session desktop sur une fixture ou un projet vide,
+2. executer `entity.create.part`, `entity.create.external_endpoint` et `plugin.manage`,
+3. verifier la mise a jour du snapshot et de la sortie desktop,
+4. executer une commande non mutante comme `simulation.run.start`.
+
+Attendu:
+
+- les commandes mutantes modifient le graphe via `faero-core`,
+- les compteurs entites/endpoints/flux/plugins evoluent dans le shell,
+- le dernier resultat de commande est visible cote UI,
+- une activite `system` est ajoutee pour les commandes simulees ou non mutantes.
+
 ## Seuils techniques MVP
 
 - ouverture projet vide: < 2 s sur machine dev cible

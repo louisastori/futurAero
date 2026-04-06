@@ -8,6 +8,8 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 faero-core = { path = "../../../crates/faero-core" }
+faero-integration = { path = "../../../crates/faero-integration" }
+faero-plugin-host = { path = "../../../crates/faero-plugin-host" }
 faero-storage = { path = "../../../crates/faero-storage" }
 faero-types = { path = "../../../crates/faero-types" }
 serde = { version = "1", features = ["derive"] }

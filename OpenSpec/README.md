@@ -63,6 +63,7 @@ Le produit vise un usage proche d'un environnement CAD/CAE industriel, avec un f
 - Un SDK plugins extensible et isole.
 - Une politique de tests avec cible de couverture a 100%.
 - Un workspace desktop avec menus inspires de Visual Studio et commandes reliees au pipeline interne.
+- Un shell desktop interactif avec session backend, snapshots de projet et execution de commandes depuis l espace de travail.
 - Un cadre GitHub explicite pour branch protections, PR, checks requis et releases.
 - Un premier decoupage des outils a programmer.
 - Un workflow GitHub avec remote canonique, PR, checks obligatoires et pipeline GitHub Actions.

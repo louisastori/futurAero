@@ -19,6 +19,8 @@ pub enum CoreError {
     UnknownEndpoint(String),
     #[error("plugin `{0}` already installed")]
     PluginAlreadyInstalled(String),
+    #[error("plugin `{0}` is not installed")]
+    PluginNotInstalled(String),
     #[error("serialization failure")]
     Serialization,
 }
@@ -29,6 +31,7 @@ pub enum CoreCommand {
     RegisterEndpoint(ExternalEndpoint),
     RegisterStream(TelemetryStream),
     InstallPlugin(PluginManifest),
+    SetPluginEnabled { plugin_id: String, enabled: bool },
 }
 
 #[derive(Debug, Clone)]
@@ -46,6 +49,31 @@ impl ProjectGraph {
             revision_counter: 1,
             command_counter: 1,
             event_counter: 1,
+        }
+    }
+
+    pub fn from_document(document: ProjectDocument) -> Self {
+        Self {
+            revision_counter: next_counter(
+                document
+                    .nodes
+                    .values()
+                    .map(|entity| entity.revision.as_str())
+                    .chain(document.events.iter().map(|event| event.revision.as_str())),
+                "rev_",
+            ),
+            command_counter: next_counter(
+                document
+                    .commands
+                    .iter()
+                    .map(|command| command.command_id.as_str()),
+                "cmd_",
+            ),
+            event_counter: next_counter(
+                document.events.iter().map(|event| event.event_id.as_str()),
+                "evt_",
+            ),
+            document,
         }
     }
 
@@ -67,6 +95,14 @@ impl ProjectGraph {
 
     pub fn endpoint_count(&self) -> usize {
         self.document.endpoints.len()
+    }
+
+    pub fn stream_count(&self) -> usize {
+        self.document.streams.len()
+    }
+
+    pub fn plugin_count(&self) -> usize {
+        self.document.plugin_manifests.len()
     }
 
     pub fn plugin_state(&self) -> &BTreeMap<String, bool> {
@@ -189,6 +225,38 @@ impl ProjectGraph {
                     payload,
                 )
             }
+            CoreCommand::SetPluginEnabled { plugin_id, enabled } => {
+                if !self.document.plugin_manifests.contains_key(&plugin_id) {
+                    return Err(CoreError::PluginNotInstalled(plugin_id));
+                }
+
+                let payload = serde_json::json!({
+                    "pluginId": plugin_id,
+                    "enabled": enabled
+                });
+                let command_id = self.record_command(
+                    "plugin.state.set",
+                    Some(plugin_id.clone()),
+                    None,
+                    payload.clone(),
+                );
+                self.document
+                    .plugin_states
+                    .insert(plugin_id.clone(), enabled);
+                let revision = self.next_revision();
+
+                self.record_event(
+                    if enabled {
+                        "plugin.enabled"
+                    } else {
+                        "plugin.disabled"
+                    },
+                    Some(plugin_id),
+                    command_id,
+                    revision,
+                    payload,
+                )
+            }
         }
     }
 
@@ -245,6 +313,16 @@ impl ProjectGraph {
         self.document.metadata.updated_at = "2026-04-06T00:00:01Z".to_string();
         revision
     }
+}
+
+fn next_counter<'a>(ids: impl Iterator<Item = &'a str>, prefix: &str) -> usize {
+    ids.filter_map(|id| {
+        id.strip_prefix(prefix)
+            .and_then(|raw| raw.parse::<usize>().ok())
+    })
+    .max()
+    .map(|value| value + 1)
+    .unwrap_or(1)
 }
 
 #[cfg(test)]
@@ -381,6 +459,36 @@ mod tests {
         assert_eq!(
             graph.plugin_state().get("plg.integration.viewer"),
             Some(&false)
+        );
+    }
+
+    #[test]
+    fn reconstructs_graph_from_document_and_keeps_counters_moving_forward() {
+        let mut seed = ProjectGraph::new("Demo");
+        seed.apply_command(CoreCommand::CreateEntity(sample_entity()))
+            .expect("entity should seed");
+        seed.apply_command(CoreCommand::InstallPlugin(sample_plugin()))
+            .expect("plugin should seed");
+
+        let mut graph = ProjectGraph::from_document(seed.into_document());
+        graph
+            .apply_command(CoreCommand::SetPluginEnabled {
+                plugin_id: "plg.integration.viewer".to_string(),
+                enabled: true,
+            })
+            .expect("plugin should enable");
+
+        assert_eq!(
+            graph.plugin_state().get("plg.integration.viewer"),
+            Some(&true)
+        );
+        assert_eq!(
+            graph
+                .document()
+                .commands
+                .last()
+                .map(|command| command.command_id.as_str()),
+            Some("cmd_0003")
         );
     }
 }
