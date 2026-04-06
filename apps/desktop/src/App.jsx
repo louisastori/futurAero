@@ -60,8 +60,30 @@ const FALLBACK_AI_STATUS = {
   localOnly: true,
   activeModel: null,
   availableModels: [],
+  gemma3Models: [],
   warning: "Local AI runtime unavailable in web preview."
 };
+
+function getGemma3Models(runtime) {
+  if (Array.isArray(runtime?.gemma3Models) && runtime.gemma3Models.length > 0) {
+    return [...new Set(runtime.gemma3Models)];
+  }
+
+  return [...new Set((runtime?.availableModels ?? []).filter((model) => model.startsWith("gemma3:")))];
+}
+
+function defaultGemma3Model(runtime) {
+  const gemma3Models = getGemma3Models(runtime);
+  if (gemma3Models.includes("gemma3:27b")) {
+    return "gemma3:27b";
+  }
+
+  if (runtime?.activeModel && gemma3Models.includes(runtime.activeModel)) {
+    return runtime.activeModel;
+  }
+
+  return gemma3Models[0] ?? "";
+}
 
 function MenuBar({ menus, activeMenuId, onSelect }) {
   return (
@@ -485,8 +507,13 @@ function buildFallbackAiAnswer(locale, snapshot, message) {
   return `Le panneau IA locale tourne en mode fallback d apercu web. Projet courant: ${summary}. Ta question etait: "${message}". Lance le shell Tauri avec Ollama disponible sur http://127.0.0.1:11434 pour obtenir une vraie discussion locale avec modele.`;
 }
 
-async function sendAiChatMessage(message, locale, history, snapshot) {
-  const response = await invokeBackend("ai_chat_send_message", { message, locale, history });
+async function sendAiChatMessage(message, locale, history, selectedModel, snapshot) {
+  const response = await invokeBackend("ai_chat_send_message", {
+    message,
+    locale,
+    history,
+    selectedModel
+  });
   if (response) {
     return response;
   }
@@ -570,6 +597,7 @@ export default function App({ backend = defaultDesktopBackend }) {
   const [aiMessages, setAiMessages] = useState([]);
   const [aiDraft, setAiDraft] = useState("");
   const [aiBusy, setAiBusy] = useState(false);
+  const [selectedAiModel, setSelectedAiModel] = useState("");
   const [panelState, setPanelState] = useState(defaultWorkspacePanels);
   const [dockWidths, setDockWidths] = useState(defaultWorkspaceDockWidths);
   const [dragSide, setDragSide] = useState(null);
@@ -582,6 +610,7 @@ export default function App({ backend = defaultDesktopBackend }) {
   const currentStatus = projectSnapshot.status;
   const t = (key, fallback = key) => translate(locale, key, fallback);
   const { leftExpanded, rightExpanded } = getWorkspaceColumnState(panelState);
+  const gemma3Models = getGemma3Models(aiRuntime);
   const workspaceStyle = {
     "--workspace-left-column": `${getVisibleSidebarWidth(dockWidths.left, leftExpanded)}px`,
     "--workspace-right-column": `${getVisibleSidebarWidth(dockWidths.right, rightExpanded)}px`,
@@ -671,6 +700,16 @@ export default function App({ backend = defaultDesktopBackend }) {
       document.body.classList.remove("is-resizing");
     };
   }, [dragSide, leftExpanded, rightExpanded]);
+
+  useEffect(() => {
+    setSelectedAiModel((previous) => {
+      if (previous && gemma3Models.includes(previous)) {
+        return previous;
+      }
+
+      return defaultGemma3Model(aiRuntime);
+    });
+  }, [aiRuntime.activeModel, gemma3Models.join("|")]);
 
   useEffect(() => {
     let mounted = true;
@@ -780,6 +819,7 @@ export default function App({ backend = defaultDesktopBackend }) {
         trimmedMessage,
         locale,
         history,
+        selectedAiModel || null,
         projectSnapshot
       );
       setAiRuntime(response.runtime);
@@ -1114,6 +1154,38 @@ export default function App({ backend = defaultDesktopBackend }) {
                 </div>
                 {aiRuntime.warning ? <div className="muted">{aiRuntime.warning}</div> : null}
               </div>
+
+              <label className="control-group assistant-model-group">
+                <span>{t("ui.ai.model_label", "Modele Gemma3")}</span>
+                <select
+                  className="shell-select"
+                  data-ai-model-select="true"
+                  aria-label={t("ui.ai.model_label", "Modele Gemma3")}
+                  value={selectedAiModel}
+                  onChange={(event) => setSelectedAiModel(event.target.value)}
+                  disabled={gemma3Models.length === 0 || aiBusy}
+                >
+                  {gemma3Models.length > 0 ? (
+                    gemma3Models.map((model) => (
+                      <option key={model} value={model}>
+                        {model}
+                      </option>
+                    ))
+                  ) : (
+                    <option value="">
+                      {t("ui.ai.model_unavailable", "Aucune variante gemma3 detectee localement.")}
+                    </option>
+                  )}
+                </select>
+                <div className="muted">
+                  {gemma3Models.length > 0
+                    ? t(
+                        "ui.ai.model_hint",
+                        "Le modele selectionne sera utilise au prochain message."
+                      )
+                    : t("ui.ai.model_unavailable", "Aucune variante gemma3 detectee localement.")}
+                </div>
+              </label>
 
               <div className="assistant-thread">
                 {aiMessages.length > 0 ? (

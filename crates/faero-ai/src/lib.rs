@@ -7,7 +7,8 @@ use thiserror::Error;
 
 const DEFAULT_OLLAMA_ENDPOINT: &str = "http://127.0.0.1:11434";
 const DEFAULT_TIMEOUT_SECS: u64 = 45;
-const DEFAULT_PREFERRED_MODELS: &[&str] = &["gemma3:4b", "phi3:mini"];
+const DEFAULT_PREFERRED_MODELS: &[&str] = &["gemma3:27b", "gemma3:12b", "gemma3:4b", "phi3:mini"];
+const GEMMA3_MODEL_PREFIX: &str = "gemma3:";
 const MAX_HISTORY_MESSAGES: usize = 8;
 const MAX_CONTEXT_REFERENCES: usize = 8;
 
@@ -21,6 +22,7 @@ pub struct AiRuntimeStatus {
     pub local_only: bool,
     pub active_model: Option<String>,
     pub available_models: Vec<String>,
+    pub gemma3_models: Vec<String>,
     pub warning: Option<String>,
 }
 
@@ -54,6 +56,12 @@ struct AiRuntimeConfig {
     endpoint: String,
     timeout_secs: u64,
     preferred_models: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ModelSelection {
+    active_model: Option<String>,
+    warning: Option<String>,
 }
 
 impl AiRuntimeConfig {
@@ -131,8 +139,8 @@ pub fn query_runtime_status() -> AiRuntimeStatus {
     let client = build_http_client(config.timeout_secs);
 
     match fetch_model_names(&client, &config) {
-        Ok(models) => runtime_status_from_models(&config, models),
-        Err(error) => unavailable_runtime_status(&config, error.to_string(), Vec::new()),
+        Ok(models) => runtime_status_from_models(&config, models, None),
+        Err(error) => unavailable_runtime_status(&config, error.to_string(), Vec::new(), None),
     }
 }
 
@@ -141,6 +149,7 @@ pub fn chat_with_project(
     locale: &str,
     history: &[AiConversationMessage],
     message: &str,
+    selected_model: Option<&str>,
 ) -> Result<AiChatResponse, AiError> {
     let trimmed_message = message.trim();
     if trimmed_message.is_empty() {
@@ -153,7 +162,7 @@ pub fn chat_with_project(
 
     let response = match fetch_model_names(&client, &config) {
         Ok(models) => {
-            let runtime = runtime_status_from_models(&config, models.clone());
+            let runtime = runtime_status_from_models(&config, models.clone(), selected_model);
             if let Some(model) = runtime.active_model.clone() {
                 match send_ollama_chat(
                     &client,
@@ -164,19 +173,27 @@ pub fn chat_with_project(
                     trimmed_message,
                     document,
                 ) {
-                    Ok(answer) => AiChatResponse {
-                        answer,
-                        runtime,
-                        references,
-                        warnings: Vec::new(),
-                        source: "ollama-local".to_string(),
-                    },
+                    Ok(answer) => {
+                        let warnings = runtime.warning.clone().into_iter().collect();
+                        AiChatResponse {
+                            answer,
+                            runtime,
+                            references,
+                            warnings,
+                            source: "ollama-local".to_string(),
+                        }
+                    }
                     Err(error) => fallback_response(
                         locale,
                         trimmed_message,
                         document,
                         references,
-                        unavailable_runtime_status(&config, error.to_string(), models),
+                        unavailable_runtime_status(
+                            &config,
+                            error.to_string(),
+                            models,
+                            selected_model,
+                        ),
                     ),
                 }
             } else {
@@ -189,6 +206,7 @@ pub fn chat_with_project(
                         &config,
                         "no preferred local model found".to_string(),
                         models,
+                        selected_model,
                     ),
                 )
             }
@@ -198,7 +216,7 @@ pub fn chat_with_project(
             trimmed_message,
             document,
             references,
-            unavailable_runtime_status(&config, error.to_string(), Vec::new()),
+            unavailable_runtime_status(&config, error.to_string(), Vec::new(), selected_model),
         ),
     };
 
@@ -226,17 +244,22 @@ fn fetch_model_names(client: &Client, config: &AiRuntimeConfig) -> Result<Vec<St
         .collect())
 }
 
-fn runtime_status_from_models(config: &AiRuntimeConfig, models: Vec<String>) -> AiRuntimeStatus {
-    let active_model = select_default_model(&models, &config.preferred_models);
+fn runtime_status_from_models(
+    config: &AiRuntimeConfig,
+    models: Vec<String>,
+    requested_model: Option<&str>,
+) -> AiRuntimeStatus {
+    let selection = resolve_model_selection(&models, &config.preferred_models, requested_model);
     AiRuntimeStatus {
         available: !models.is_empty(),
         provider: "ollama".to_string(),
         endpoint: config.endpoint.clone(),
         mode: "grounded-chat".to_string(),
         local_only: true,
-        active_model,
+        active_model: selection.active_model,
+        gemma3_models: collect_gemma3_models(&models),
         available_models: models,
-        warning: None,
+        warning: selection.warning,
     }
 }
 
@@ -244,16 +267,50 @@ fn unavailable_runtime_status(
     config: &AiRuntimeConfig,
     warning: String,
     available_models: Vec<String>,
+    requested_model: Option<&str>,
 ) -> AiRuntimeStatus {
+    let selection =
+        resolve_model_selection(&available_models, &config.preferred_models, requested_model);
     AiRuntimeStatus {
         available: false,
         provider: "ollama".to_string(),
         endpoint: config.endpoint.clone(),
         mode: "fallback-local".to_string(),
         local_only: true,
-        active_model: select_default_model(&available_models, &config.preferred_models),
+        active_model: selection.active_model,
+        gemma3_models: collect_gemma3_models(&available_models),
         available_models,
-        warning: Some(warning),
+        warning: combine_warnings(Some(warning), selection.warning),
+    }
+}
+
+fn resolve_model_selection(
+    models: &[String],
+    preferred_models: &[String],
+    requested_model: Option<&str>,
+) -> ModelSelection {
+    if let Some(requested_model) = requested_model
+        .map(str::trim)
+        .filter(|model| !model.is_empty())
+    {
+        if models.iter().any(|model| model == requested_model) {
+            return ModelSelection {
+                active_model: Some(requested_model.to_string()),
+                warning: None,
+            };
+        }
+
+        return ModelSelection {
+            active_model: select_default_model(models, preferred_models),
+            warning: Some(format!(
+                "requested local model `{requested_model}` not available"
+            )),
+        };
+    }
+
+    ModelSelection {
+        active_model: select_default_model(models, preferred_models),
+        warning: None,
     }
 }
 
@@ -263,6 +320,23 @@ fn select_default_model(models: &[String], preferred_models: &[String]) -> Optio
         .find(|preferred| models.iter().any(|model| model == *preferred))
         .cloned()
         .or_else(|| models.first().cloned())
+}
+
+fn collect_gemma3_models(models: &[String]) -> Vec<String> {
+    models
+        .iter()
+        .filter(|model| model.starts_with(GEMMA3_MODEL_PREFIX))
+        .cloned()
+        .collect()
+}
+
+fn combine_warnings(primary: Option<String>, secondary: Option<String>) -> Option<String> {
+    match (primary, secondary) {
+        (Some(primary), Some(secondary)) => Some(format!("{primary}; {secondary}")),
+        (Some(primary), None) => Some(primary),
+        (None, Some(secondary)) => Some(secondary),
+        (None, None) => None,
+    }
 }
 
 fn send_ollama_chat(
@@ -551,6 +625,7 @@ fn normalize_answer(answer: String, locale: &str, document: &ProjectDocument) ->
                 local_only: true,
                 active_model: None,
                 available_models: Vec::new(),
+                gemma3_models: Vec::new(),
                 warning: Some("empty assistant answer".to_string()),
             },
         )
@@ -839,26 +914,73 @@ mod tests {
         let models = vec![
             "phi3:mini".to_string(),
             "gemma3:4b".to_string(),
+            "gemma3:27b".to_string(),
             "mistral:7b".to_string(),
         ];
-        let preferred = vec!["gemma3:4b".to_string(), "phi3:mini".to_string()];
+        let preferred = vec![
+            "gemma3:27b".to_string(),
+            "gemma3:12b".to_string(),
+            "gemma3:4b".to_string(),
+            "phi3:mini".to_string(),
+        ];
 
         assert_eq!(
             select_default_model(&models, &preferred),
-            Some("gemma3:4b".to_string())
+            Some("gemma3:27b".to_string())
         );
     }
 
     #[test]
     fn select_default_model_falls_back_to_first_or_none() {
         let models = vec!["mistral:7b".to_string()];
-        let preferred = vec!["gemma3:4b".to_string()];
+        let preferred = vec!["gemma3:27b".to_string()];
 
         assert_eq!(
             select_default_model(&models, &preferred),
             Some("mistral:7b".to_string())
         );
         assert_eq!(select_default_model(&[], &preferred), None);
+    }
+
+    #[test]
+    fn resolve_model_selection_prefers_requested_model_and_warns_when_missing() {
+        let models = vec![
+            "gemma3:27b".to_string(),
+            "gemma3:12b".to_string(),
+            "phi3:mini".to_string(),
+        ];
+        let preferred = vec![
+            "gemma3:27b".to_string(),
+            "gemma3:12b".to_string(),
+            "gemma3:4b".to_string(),
+            "phi3:mini".to_string(),
+        ];
+
+        let requested = resolve_model_selection(&models, &preferred, Some("gemma3:12b"));
+        assert_eq!(requested.active_model, Some("gemma3:12b".to_string()));
+        assert_eq!(requested.warning, None);
+
+        let missing = resolve_model_selection(&models, &preferred, Some("gemma3:4b"));
+        assert_eq!(missing.active_model, Some("gemma3:27b".to_string()));
+        assert_eq!(
+            missing.warning,
+            Some("requested local model `gemma3:4b` not available".to_string())
+        );
+    }
+
+    #[test]
+    fn collect_gemma3_models_keeps_only_gemma3_variants() {
+        let models = vec![
+            "phi3:mini".to_string(),
+            "gemma3:12b".to_string(),
+            "gemma3:27b".to_string(),
+            "mistral:7b".to_string(),
+        ];
+
+        assert_eq!(
+            collect_gemma3_models(&models),
+            vec!["gemma3:12b".to_string(), "gemma3:27b".to_string()]
+        );
     }
 
     #[test]
@@ -905,7 +1027,8 @@ mod tests {
         let runtime = unavailable_runtime_status(
             &AiRuntimeConfig::from_env(),
             "offline".to_string(),
-            vec!["gemma3:4b".to_string()],
+            vec!["gemma3:27b".to_string()],
+            None,
         );
 
         let answer = build_fallback_answer("fr", "Resume le projet", &document, &runtime);
@@ -927,7 +1050,12 @@ mod tests {
                 assert_eq!(config.timeout_secs, DEFAULT_TIMEOUT_SECS);
                 assert_eq!(
                     config.preferred_models,
-                    vec!["gemma3:4b".to_string(), "phi3:mini".to_string()]
+                    vec![
+                        "gemma3:27b".to_string(),
+                        "gemma3:12b".to_string(),
+                        "gemma3:4b".to_string(),
+                        "phi3:mini".to_string()
+                    ]
                 );
             },
         );
@@ -944,7 +1072,12 @@ mod tests {
                 assert_eq!(config.timeout_secs, 9);
                 assert_eq!(
                     config.preferred_models,
-                    vec!["phi3:mini".to_string(), "gemma3:4b".to_string()]
+                    vec![
+                        "phi3:mini".to_string(),
+                        "gemma3:27b".to_string(),
+                        "gemma3:12b".to_string(),
+                        "gemma3:4b".to_string()
+                    ]
                 );
             },
         );
@@ -961,7 +1094,12 @@ mod tests {
                 assert_eq!(config.timeout_secs, DEFAULT_TIMEOUT_SECS);
                 assert_eq!(
                     config.preferred_models,
-                    vec!["gemma3:4b".to_string(), "phi3:mini".to_string()]
+                    vec![
+                        "gemma3:27b".to_string(),
+                        "gemma3:12b".to_string(),
+                        "gemma3:4b".to_string(),
+                        "phi3:mini".to_string()
+                    ]
                 );
             },
         );
@@ -973,23 +1111,31 @@ mod tests {
             "/api/tags",
             MockHttpResponse {
                 status: 200,
-                body: r#"{"models":[{"name":"phi3:mini"},{"name":"gemma3:4b"}]}"#.to_string(),
+                body: r#"{"models":[{"name":"phi3:mini"},{"name":"gemma3:4b"},{"name":"gemma3:27b"}]}"#.to_string(),
             },
         )]);
 
         with_env(
             &[
                 ("FUTUREAERO_OLLAMA_ENDPOINT", Some(endpoint.as_str())),
-                ("FUTUREAERO_OLLAMA_MODEL", Some("phi3:mini")),
+                ("FUTUREAERO_OLLAMA_MODEL", None),
             ],
             || {
                 let status = query_runtime_status();
                 assert!(status.available);
                 assert_eq!(status.provider, "ollama");
-                assert_eq!(status.active_model, Some("phi3:mini".to_string()));
+                assert_eq!(status.active_model, Some("gemma3:27b".to_string()));
+                assert_eq!(
+                    status.gemma3_models,
+                    vec!["gemma3:4b".to_string(), "gemma3:27b".to_string()]
+                );
                 assert_eq!(
                     status.available_models,
-                    vec!["phi3:mini".to_string(), "gemma3:4b".to_string()]
+                    vec![
+                        "phi3:mini".to_string(),
+                        "gemma3:4b".to_string(),
+                        "gemma3:27b".to_string()
+                    ]
                 );
             },
         );
@@ -1009,7 +1155,7 @@ mod tests {
 
     #[test]
     fn chat_with_project_rejects_empty_message() {
-        let error = chat_with_project(&sample_document(), "fr", &[], "   ")
+        let error = chat_with_project(&sample_document(), "fr", &[], "   ", None)
             .expect_err("empty message should fail");
         assert!(matches!(error, AiError::EmptyMessage));
     }
@@ -1032,7 +1178,7 @@ mod tests {
                 "/api/tags",
                 MockHttpResponse {
                     status: 200,
-                    body: r#"{"models":[{"name":"gemma3:4b"}]}"#.to_string(),
+                    body: r#"{"models":[{"name":"gemma3:4b"},{"name":"gemma3:27b"}]}"#.to_string(),
                 },
             ),
             (
@@ -1048,9 +1194,17 @@ mod tests {
         let response = with_env(
             &[
                 ("FUTUREAERO_OLLAMA_ENDPOINT", Some(endpoint.as_str())),
-                ("FUTUREAERO_OLLAMA_MODEL", Some("gemma3:4b")),
+                ("FUTUREAERO_OLLAMA_MODEL", None),
             ],
-            || chat_with_project(&document, "fr", &history, "Resume le projet"),
+            || {
+                chat_with_project(
+                    &document,
+                    "fr",
+                    &history,
+                    "Resume le projet",
+                    Some("gemma3:27b"),
+                )
+            },
         )
         .expect("chat should succeed");
         handle.join().expect("server thread should finish");
@@ -1058,6 +1212,10 @@ mod tests {
         assert_eq!(response.source, "ollama-local");
         assert_eq!(response.answer, "Reponse locale validee.");
         assert!(response.runtime.available);
+        assert_eq!(
+            response.runtime.active_model,
+            Some("gemma3:27b".to_string())
+        );
         assert!(response.warnings.is_empty());
         assert!(
             response
@@ -1085,7 +1243,7 @@ mod tests {
         )]);
         let empty_response = with_env(
             &[("FUTUREAERO_OLLAMA_ENDPOINT", Some(empty_endpoint.as_str()))],
-            || chat_with_project(&document, "en", &[], "Explain the project"),
+            || chat_with_project(&document, "en", &[], "Explain the project", None),
         )
         .expect("fallback response should still succeed");
         empty_handle.join().expect("server thread should finish");
@@ -1106,7 +1264,7 @@ mod tests {
                 "/api/tags",
                 MockHttpResponse {
                     status: 200,
-                    body: r#"{"models":[{"name":"phi3:mini"}]}"#.to_string(),
+                    body: r#"{"models":[{"name":"phi3:mini"},{"name":"gemma3:27b"}]}"#.to_string(),
                 },
             ),
             (
@@ -1123,9 +1281,17 @@ mod tests {
                     "FUTUREAERO_OLLAMA_ENDPOINT",
                     Some(failing_endpoint.as_str()),
                 ),
-                ("FUTUREAERO_OLLAMA_MODEL", Some("phi3:mini")),
+                ("FUTUREAERO_OLLAMA_MODEL", None),
             ],
-            || chat_with_project(&document, "es", &[], "Resume el proyecto"),
+            || {
+                chat_with_project(
+                    &document,
+                    "es",
+                    &[],
+                    "Resume el proyecto",
+                    Some("gemma3:27b"),
+                )
+            },
         )
         .expect("chat failure should fallback");
         failing_handle.join().expect("server thread should finish");
@@ -1153,7 +1319,7 @@ mod tests {
 
         let response = with_env(
             &[("FUTUREAERO_OLLAMA_ENDPOINT", Some(endpoint.as_str()))],
-            || chat_with_project(&document, "fr", &[], "Resume le projet"),
+            || chat_with_project(&document, "fr", &[], "Resume le projet", None),
         )
         .expect("tag failure should fallback");
         handle.join().expect("server thread should finish");
@@ -1238,6 +1404,7 @@ mod tests {
                     local_only: true,
                     active_model: None,
                     available_models: Vec::new(),
+                    gemma3_models: Vec::new(),
                     warning: Some("empty assistant answer".to_string()),
                 },
             )

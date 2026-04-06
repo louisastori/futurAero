@@ -91,8 +91,9 @@ function createMockBackend() {
     endpoint: "http://127.0.0.1:11434",
     mode: "test",
     localOnly: true,
-    activeModel: "phi3:mini",
-    availableModels: ["phi3:mini"],
+    activeModel: "gemma3:27b",
+    availableModels: ["gemma3:27b", "gemma3:12b", "gemma3:4b", "phi3:mini"],
+    gemma3Models: ["gemma3:27b", "gemma3:12b", "gemma3:4b"],
     warning: null
   };
   const fixtures = [
@@ -101,6 +102,7 @@ function createMockBackend() {
   ];
   let snapshot = createSnapshot();
   let activityCounter = 2;
+  let lastSelectedModel = null;
 
   function clone(value) {
     return structuredClone(value);
@@ -221,14 +223,21 @@ function createMockBackend() {
     async fetchAiRuntimeStatus() {
       return clone(runtime);
     },
-    async sendAiChatMessage(message, locale, history, currentSnapshot) {
+    async sendAiChatMessage(message, locale, history, selectedModel, currentSnapshot) {
+      lastSelectedModel = selectedModel;
       return {
-        answer: `[${locale}] ${message} :: ${currentSnapshot.status.projectName} :: ${history.length}`,
-        runtime: clone(runtime),
+        answer: `[${locale}] ${message} :: ${selectedModel ?? runtime.activeModel} :: ${currentSnapshot.status.projectName} :: ${history.length}`,
+        runtime: {
+          ...clone(runtime),
+          activeModel: selectedModel ?? runtime.activeModel
+        },
         references: [`project:${currentSnapshot.details.projectId}`],
         warnings: [],
         source: "mock-backend"
       };
+    },
+    getLastSelectedModel() {
+      return lastSelectedModel;
     }
   };
 }
@@ -381,6 +390,27 @@ describe("App shell buttons", () => {
     await waitFor(() => {
       assert.ok(screen.getByText("Montre moi le projet courant"));
       assert.ok(screen.getByText(/\[fr\] Montre moi le projet courant/));
+    });
+  });
+
+  test("gemma3 selector defaults to 27b and sends the chosen variant to the backend", async () => {
+    const { user, backend } = await renderApp();
+
+    const selector = screen.getByLabelText("Modele Gemma3");
+    assert.equal(selector.value, "gemma3:27b");
+
+    await user.selectOptions(selector, "gemma3:12b");
+    assert.equal(selector.value, "gemma3:12b");
+
+    const textarea = screen.getByPlaceholderText(
+      "Pose une question sur le projet courant, la simulation, l integration ou la safety..."
+    );
+    await user.type(textarea, "Compare les variantes gemma3");
+    await user.click(document.querySelector('[data-ai-send="true"]'));
+
+    await waitFor(() => {
+      assert.equal(backend.getLastSelectedModel(), "gemma3:12b");
+      assert.ok(screen.getByText(/\[fr\] Compare les variantes gemma3 :: gemma3:12b/));
     });
   });
 });

@@ -730,6 +730,7 @@ fn ai_chat_send_message(
     message: String,
     locale: String,
     history: Vec<AiConversationMessage>,
+    selected_model: Option<String>,
     state: State<'_, SharedWorkspace>,
 ) -> Result<AiChatResponse, String> {
     let document = {
@@ -737,7 +738,14 @@ fn ai_chat_send_message(
         session.graph.document().clone()
     };
 
-    chat_with_project(&document, &locale, &history, &message).map_err(|error| error.to_string())
+    chat_with_project(
+        &document,
+        &locale,
+        &history,
+        &message,
+        selected_model.as_deref(),
+    )
+    .map_err(|error| error.to_string())
 }
 
 fn main() {

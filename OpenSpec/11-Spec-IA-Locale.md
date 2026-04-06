@@ -19,6 +19,8 @@ Un premier increment executable du runtime IA locale est present dans le shell d
 - routage via commandes Tauri dediees,
 - contexte injecte depuis le projet charge dans le shell,
 - runtime Ollama local privilegie,
+- preference locale par defaut sur `gemma3:27b`,
+- selecteur utilisateur des variantes `gemma3` detectees localement dans le panneau IA,
 - fallback local explicite si le runtime modele est indisponible.
 
 L'IA ne remplace pas:
@@ -82,6 +84,14 @@ Types de modeles supportes:
 - modele critic local.
 
 Le systeme ne depend pas d'un fournisseur unique. Le contrat de sortie prime sur le nom du modele.
+
+## Politique de selection des modeles chat locaux
+
+- la famille `gemma3` est la famille privilegiee dans le shell desktop,
+- le choix par defaut cible `gemma3:27b` si cette variante est disponible localement,
+- l utilisateur peut forcer une autre variante `gemma3` detectee localement depuis l interface,
+- si le modele demande n est pas installe localement, le runtime retombe sur la meilleure variante disponible selon l ordre de preference produit et journalise un warning explicite,
+- si aucune variante `gemma3` n est disponible, le runtime peut retomber sur un autre modele local autorise pour conserver le service, sans masquer cette degradation.
 
 ## Profils runtime
 
