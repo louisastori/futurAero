@@ -419,6 +419,29 @@ async function invokeBackend(command, payload) {
   }
 }
 
+async function requestWindowClose() {
+  try {
+    const tauriWindow = await import("@tauri-apps/api/window");
+    await tauriWindow.getCurrentWindow().close();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function getNextFixtureId(fixtures, currentFixtureId) {
+  if (fixtures.length === 0) {
+    return "";
+  }
+
+  const currentIndex = fixtures.findIndex((fixture) => fixture.id === currentFixtureId);
+  if (currentIndex === -1) {
+    return fixtures[0].id;
+  }
+
+  return fixtures[(currentIndex + 1) % fixtures.length].id;
+}
+
 function buildFallbackSnapshot(projectId = FALLBACK_STATUS.fixtureId) {
   const fixture = FALLBACK_FIXTURES.find((entry) => entry.id === projectId) ?? FALLBACK_FIXTURES[0];
   return {
@@ -608,6 +631,10 @@ export default function App({ backend = defaultDesktopBackend }) {
   const menus = localizeMenuModel(locale);
   const menu = menus.find((entry) => entry.id === activeMenuId) ?? menus[0];
   const currentStatus = projectSnapshot.status;
+  const fixtureOptions =
+    selectedFixtureId && !fixtureProjects.some((fixture) => fixture.id === selectedFixtureId)
+      ? [{ id: selectedFixtureId, projectName: currentStatus.projectName }, ...fixtureProjects]
+      : fixtureProjects;
   const t = (key, fallback = key) => translate(locale, key, fallback);
   const { leftExpanded, rightExpanded } = getWorkspaceColumnState(panelState);
   const gemma3Models = getGemma3Models(aiRuntime);
@@ -736,8 +763,11 @@ export default function App({ backend = defaultDesktopBackend }) {
     };
   }, []);
 
-  async function handleFixtureChange(event) {
-    const nextFixtureId = event.target.value;
+  async function loadFixtureById(nextFixtureId) {
+    if (!nextFixtureId) {
+      return null;
+    }
+
     setSelectedFixtureId(nextFixtureId);
     setFixtureLoading(true);
 
@@ -751,9 +781,14 @@ export default function App({ backend = defaultDesktopBackend }) {
       setAiRuntime(runtime);
       setAiMessages([]);
       setAiDraft("");
+      return snapshot;
     } finally {
       setFixtureLoading(false);
     }
+  }
+
+  async function handleFixtureChange(event) {
+    await loadFixtureById(event.target.value);
   }
 
   async function handleCommandExecute(commandId) {
@@ -772,6 +807,69 @@ export default function App({ backend = defaultDesktopBackend }) {
       if (panelId === "aiAssistant" && willBeVisible) {
         window.setTimeout(() => aiInputRef.current?.focus(), 0);
       }
+      return;
+    }
+
+    if (commandId === "project.open") {
+      const snapshot = await loadFixtureById(selectedFixtureId);
+      if (snapshot) {
+        setCommandResult({
+          commandId,
+          status: "applied",
+          message: t(
+            "ui.command.project_opened",
+            "Projet charge depuis la fixture selectionnee."
+          )
+        });
+      }
+      return;
+    }
+
+    if (commandId === "project.open_recent") {
+      const nextFixtureId = getNextFixtureId(fixtureProjects, selectedFixtureId);
+      const snapshot = await loadFixtureById(nextFixtureId);
+      if (snapshot) {
+        setCommandResult({
+          commandId,
+          status: "applied",
+          message: t(
+            "ui.command.recent_opened",
+            "Fixture suivante ouverte depuis la liste recente."
+          )
+        });
+      }
+      return;
+    }
+
+    if (["project.properties", "app.settings", "app.options"].includes(commandId)) {
+      setPanelState((previous) => ({
+        ...previous,
+        properties: true
+      }));
+      setActiveMenuId("view");
+      setCommandResult({
+        commandId,
+        status: "layout",
+        message: t(
+          "ui.command.properties_opened",
+          "Panneau Proprietes ouvert."
+        )
+      });
+      return;
+    }
+
+    if (commandId === "app.exit") {
+      const closed = await requestWindowClose();
+      setCommandResult({
+        commandId,
+        status: closed ? "applied" : "notice",
+        message: closed
+          ? t("ui.command.exit_requested", "Fermeture de l application demandee.")
+          : t(
+              "ui.command.exit_unavailable",
+              "Fermeture indisponible dans cet apercu. Lance le shell Tauri pour fermer la fenetre."
+            )
+      });
       return;
     }
 
@@ -889,10 +987,10 @@ export default function App({ backend = defaultDesktopBackend }) {
                 className="shell-select"
                 value={selectedFixtureId}
                 onChange={handleFixtureChange}
-                disabled={fixtureProjects.length === 0 || fixtureLoading}
+                disabled={fixtureOptions.length === 0 || fixtureLoading}
               >
-                {fixtureProjects.length > 0 ? (
-                  fixtureProjects.map((fixture) => (
+                {fixtureOptions.length > 0 ? (
+                  fixtureOptions.map((fixture) => (
                     <option key={fixture.id} value={fixture.id}>
                       {fixture.projectName}
                     </option>
@@ -911,7 +1009,7 @@ export default function App({ backend = defaultDesktopBackend }) {
             <span className="status-pill">
               {fixtureLoading
                 ? t("ui.fixture.loading", "Chargement...")
-                : fixtureLabel(fixtureProjects, selectedFixtureId)}
+                : fixtureLabel(fixtureOptions, selectedFixtureId)}
             </span>
           </div>
         </div>
@@ -1037,7 +1135,7 @@ export default function App({ backend = defaultDesktopBackend }) {
               <dt>{t("ui.property.language", "Langue")}</dt>
               <dd>{supportedLocales.find((entry) => entry.id === locale)?.label ?? locale}</dd>
               <dt>{t("ui.property.fixture", "Fixture")}</dt>
-              <dd>{fixtureLabel(fixtureProjects, selectedFixtureId)}</dd>
+              <dd>{fixtureLabel(fixtureOptions, selectedFixtureId)}</dd>
             </dl>
           </Panel>
         </aside>
@@ -1066,12 +1164,31 @@ export default function App({ backend = defaultDesktopBackend }) {
             onToggle={() => togglePanel("commandSurface")}
             toggleLabel={panelToggleLabel("commandSurface")}
           >
+            {commandResult ? (
+              <div
+                className="command-feedback"
+                data-command-feedback={commandResult.commandId}
+                data-command-feedback-status={commandResult.status}
+              >
+                <strong>{commandResult.commandId}</strong>
+                <div className="command-id">{commandResult.status}</div>
+                <div className="muted">{commandResult.message}</div>
+              </div>
+            ) : null}
+
             <ul className="command-list">
               {menu.items.map((item, index) =>
                 item.type === "separator" ? (
                   <li key={`${menu.id}-sep-${index}`} className="separator" />
                 ) : (
-                  <li key={item.id} className="command-row">
+                  <li
+                    key={item.id}
+                    className={
+                      commandResult?.commandId === item.command
+                        ? "command-row is-last-command"
+                        : "command-row"
+                    }
+                  >
                     <div>
                       <strong>{item.label}</strong>
                       <div className="command-id">{item.command}</div>

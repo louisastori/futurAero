@@ -2,6 +2,7 @@ use std::{
     fs,
     path::{Path, PathBuf},
     sync::Mutex,
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 use faero_ai::{
@@ -203,6 +204,59 @@ impl WorkspaceSession {
                     message: "nouveau projet de session cree".to_string(),
                 })
             }
+            "project.save" => {
+                let output_path =
+                    save_document_copy("saves", &self.fixture_id, self.graph.document())?;
+                self.push_system_activity("project.saved", Some(output_path.display().to_string()));
+                Ok(CommandResult {
+                    command_id: command_id.to_string(),
+                    status: "applied".to_string(),
+                    message: format!("session enregistree dans {}", output_path.display()),
+                })
+            }
+            "project.save_all" => {
+                let output_path =
+                    save_document_copy("saves", &self.fixture_id, self.graph.document())?;
+                self.push_system_activity(
+                    "project.saved_all",
+                    Some(output_path.display().to_string()),
+                );
+                Ok(CommandResult {
+                    command_id: command_id.to_string(),
+                    status: "applied".to_string(),
+                    message: format!(
+                        "toutes les donnees session enregistrees dans {}",
+                        output_path.display()
+                    ),
+                })
+            }
+            "project.import" => {
+                let imported = import_document_copy(self.graph.document());
+                let imported_id = imported.metadata.project_id.clone();
+                self.fixture_id = format!("session:{imported_id}");
+                self.graph = ProjectGraph::from_document(imported);
+                self.system_activity.clear();
+                self.system_counter = 1;
+                self.push_system_activity("project.imported", Some(self.fixture_id.clone()));
+                Ok(CommandResult {
+                    command_id: command_id.to_string(),
+                    status: "applied".to_string(),
+                    message: "copie importee dans une nouvelle session editable".to_string(),
+                })
+            }
+            "project.export" => {
+                let output_path =
+                    save_document_copy("exports", &self.fixture_id, self.graph.document())?;
+                self.push_system_activity(
+                    "project.exported",
+                    Some(output_path.display().to_string()),
+                );
+                Ok(CommandResult {
+                    command_id: command_id.to_string(),
+                    status: "applied".to_string(),
+                    message: format!("export du projet cree dans {}", output_path.display()),
+                })
+            }
             "entity.create.part" => {
                 let index = self.graph.entity_count() + 1;
                 let entity = sample_entity(
@@ -386,8 +440,67 @@ fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..")
 }
 
+fn artifacts_root() -> PathBuf {
+    repo_root().join("artifacts")
+}
+
 fn fixtures_root() -> PathBuf {
     repo_root().join("examples/projects")
+}
+
+fn command_timestamp_token() -> String {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|value| value.as_secs().to_string())
+        .unwrap_or_else(|_| "0".to_string())
+}
+
+fn sanitize_path_segment(value: &str) -> String {
+    let sanitized = value
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || matches!(character, '-' | '_') {
+                character
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>();
+
+    let trimmed = sanitized.trim_matches('_');
+    if trimmed.is_empty() {
+        "workspace".to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+fn save_document_copy(
+    category: &str,
+    fixture_id: &str,
+    document: &ProjectDocument,
+) -> Result<PathBuf, String> {
+    let file_name = format!(
+        "{}-{}.faero",
+        sanitize_path_segment(fixture_id),
+        command_timestamp_token()
+    );
+    let output_path = artifacts_root().join(category).join(file_name);
+    faero_storage::save_project(&output_path, document).map_err(|error| {
+        format!(
+            "failed to save project copy `{}`: {error}",
+            output_path.display()
+        )
+    })?;
+    Ok(output_path)
+}
+
+fn import_document_copy(document: &ProjectDocument) -> ProjectDocument {
+    let token = command_timestamp_token();
+    let mut imported = document.clone();
+    imported.metadata.project_id = format!("prj_import_{token}");
+    imported.metadata.name = format!("{} Imported", document.metadata.name);
+    imported
 }
 
 fn serialized_variant<T: Serialize>(value: &T) -> String {
@@ -772,6 +885,7 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
 
     #[test]
     fn lists_fixture_projects_from_examples_directory() {
@@ -854,6 +968,48 @@ mod tests {
                 .recent_activity
                 .iter()
                 .any(|entry| entry.channel == "system")
+        );
+    }
+
+    #[test]
+    fn save_document_copy_writes_a_loadable_project_under_artifacts() {
+        let document = load_project_document(DEFAULT_FIXTURE_ID).expect("fixture should load");
+        let output_path =
+            save_document_copy("test-saves", "fixture:test", &document).expect("save should work");
+
+        let reloaded =
+            faero_storage::load_project(&output_path).expect("saved project should reload");
+        assert_eq!(reloaded.metadata.name, document.metadata.name);
+        assert!(output_path.exists());
+
+        fs::remove_dir_all(output_path).expect("saved test artifact should be removable");
+    }
+
+    #[test]
+    fn import_command_creates_a_new_editable_session() {
+        let mut session = WorkspaceSession::load_fixture(DEFAULT_FIXTURE_ID)
+            .expect("fixture-backed session should load");
+
+        let result = session
+            .execute_command("project.import")
+            .expect("import command should succeed");
+
+        assert_eq!(result.status, "applied");
+        assert!(session.fixture_id.starts_with("session:prj_import_"));
+        assert!(
+            session
+                .graph
+                .document()
+                .metadata
+                .name
+                .ends_with(" Imported")
+        );
+        assert!(
+            session
+                .snapshot()
+                .recent_activity
+                .iter()
+                .any(|entry| entry.kind == "project.imported")
         );
     }
 }

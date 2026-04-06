@@ -318,14 +318,13 @@ describe("App shell buttons", () => {
       ["view.viewport_3d", "viewport"]
     ]);
 
-      for (const menu of menus) {
+    for (const menu of menus) {
+      for (const item of menu.items.filter((entry) => entry.type !== "separator")) {
         await user.click(screen.getByRole("button", { name: menu.label }));
+        const runButton = document.querySelector(`[data-command-id="${item.command}"]`);
+        assert.ok(runButton, `missing run button for ${item.command}`);
 
-        for (const item of menu.items.filter((entry) => entry.type !== "separator")) {
-          const runButton = document.querySelector(`[data-command-id="${item.command}"]`);
-          assert.ok(runButton, `missing run button for ${item.command}`);
-
-          if (panelCommands.has(item.command)) {
+        if (panelCommands.has(item.command)) {
             const panelId = panelCommands.get(item.command);
             const toggle = document.querySelector(`[data-panel-toggle="${panelId}"]`);
             const before = toggle.getAttribute("aria-expanded");
@@ -390,6 +389,34 @@ describe("App shell buttons", () => {
     await waitFor(() => {
       assert.ok(screen.getByText("Montre moi le projet courant"));
       assert.ok(screen.getByText(/\[fr\] Montre moi le projet courant/));
+    });
+  });
+
+  test("file execute buttons expose an immediate visible effect in the command surface", async () => {
+    const { user } = await renderApp();
+
+    const fixtureSelector = screen.getByLabelText("Projet de demonstration");
+    await user.selectOptions(fixtureSelector, "empty-project.faero");
+
+    await user.click(document.querySelector('[data-command-id="project.open"]'));
+    await waitFor(() => {
+      assert.equal(document.querySelector("[data-command-feedback]")?.getAttribute("data-command-feedback"), "project.open");
+      assert.ok(screen.getAllByText("Empty Project").length >= 1);
+    });
+
+    const propertiesToggle = document.querySelector('[data-panel-toggle="properties"]');
+    await user.click(propertiesToggle);
+    await waitFor(() => {
+      assert.equal(propertiesToggle.getAttribute("aria-expanded"), "false");
+    });
+
+    await user.click(document.querySelector('[data-command-id="app.settings"]'));
+    await waitFor(() => {
+      assert.equal(propertiesToggle.getAttribute("aria-expanded"), "true");
+      assert.equal(
+        document.querySelector("[data-command-feedback]")?.getAttribute("data-command-feedback"),
+        "app.settings"
+      );
     });
   });
 

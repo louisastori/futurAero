@@ -570,6 +570,7 @@ Attendu:
 - chaque bouton visible du shell declenche un effet testable,
 - les menus changent bien de contexte,
 - chaque commande met a jour un etat visible, un resultat ou un panneau,
+- les commandes du menu `Fichier` exposent un retour visible immediat dans la surface de commandes, meme si `Sortie` est fermee,
 - aucun bouton du shell ne reste sans couverture de test UI.
 
 ## Seuils techniques MVP

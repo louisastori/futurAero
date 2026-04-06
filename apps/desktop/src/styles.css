@@ -384,6 +384,12 @@ button {
   border-bottom: 1px solid rgba(255, 255, 255, 0.05);
 }
 
+.command-row.is-last-command {
+  border-radius: 10px;
+  background: rgba(48, 118, 231, 0.12);
+  border-bottom-color: rgba(88, 159, 255, 0.16);
+}
+
 .command-row:last-child {
   border-bottom: 0;
 }
@@ -413,6 +419,16 @@ button {
 .run-button:disabled {
   opacity: 0.6;
   cursor: wait;
+}
+
+.command-feedback {
+  margin-bottom: 12px;
+  padding: 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(88, 159, 255, 0.24);
+  background: rgba(18, 68, 150, 0.16);
+  display: grid;
+  gap: 4px;
 }
 
 .separator {

@@ -9,3 +9,4 @@ node_modules/
 Thumbs.db
 examples/**/cache/
 apps/desktop/src-tauri/gen/
+artifacts/
