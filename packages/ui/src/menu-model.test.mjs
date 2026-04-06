@@ -39,6 +39,8 @@ const requiredShellTranslationKeys = [
   "ui.workspace.empty_section",
   "ui.workspace.enabled",
   "ui.workspace.disabled",
+  "ui.workspace.resize_left",
+  "ui.workspace.resize_right",
   "ui.output.recent_activity",
   "ui.output.no_activity",
   "ui.output.raw_status",

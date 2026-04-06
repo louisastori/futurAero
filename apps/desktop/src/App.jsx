@@ -1,13 +1,17 @@
 import { useEffect, useRef, useState } from "react";
 
 import {
+  calculateResizedDockWidths,
+  defaultWorkspaceDockWidths,
   defaultWorkspacePanels,
   defaultLocale,
   getWorkspaceColumnState,
+  getVisibleSidebarWidth,
   localizeMenuModel,
   panelIdFromCommand,
   supportedLocales,
   toggleWorkspacePanel,
+  WORKSPACE_RESIZER_WIDTH,
   translate
 } from "@futureaero/ui";
 
@@ -88,7 +92,7 @@ function Panel({ title, children, accent, collapsed = false, onToggle, toggleLab
             aria-label={toggleLabel}
             title={toggleLabel}
           >
-            {collapsed ? "+" : "−"}
+            {collapsed ? "+" : "-"}
           </button>
         ) : null}
       </header>
@@ -271,7 +275,11 @@ export default function App() {
   const [aiDraft, setAiDraft] = useState("");
   const [aiBusy, setAiBusy] = useState(false);
   const [panelState, setPanelState] = useState(defaultWorkspacePanels);
+  const [dockWidths, setDockWidths] = useState(defaultWorkspaceDockWidths);
+  const [dragSide, setDragSide] = useState(null);
   const aiInputRef = useRef(null);
+  const workspaceRef = useRef(null);
+  const dragStateRef = useRef(null);
 
   const menus = localizeMenuModel(locale);
   const menu = menus.find((entry) => entry.id === activeMenuId) ?? menus[0];
@@ -279,8 +287,10 @@ export default function App() {
   const t = (key, fallback = key) => translate(locale, key, fallback);
   const { leftExpanded, rightExpanded } = getWorkspaceColumnState(panelState);
   const workspaceStyle = {
-    "--workspace-left-column": leftExpanded ? "minmax(240px, 290px)" : "84px",
-    "--workspace-right-column": rightExpanded ? "minmax(260px, 360px)" : "84px"
+    "--workspace-left-column": `${getVisibleSidebarWidth(dockWidths.left, leftExpanded)}px`,
+    "--workspace-right-column": `${getVisibleSidebarWidth(dockWidths.right, rightExpanded)}px`,
+    "--workspace-left-resizer": leftExpanded ? `${WORKSPACE_RESIZER_WIDTH}px` : "0px",
+    "--workspace-right-resizer": rightExpanded ? `${WORKSPACE_RESIZER_WIDTH}px` : "0px"
   };
   const starterPrompts = [
     t("ui.ai.prompt.summary", "Resume le projet courant"),
@@ -297,6 +307,74 @@ export default function App() {
       ? t("ui.panel.collapse", "Replier le panneau")
       : t("ui.panel.expand", "Rouvrir le panneau");
   }
+
+  function resizeHandleLabel(side) {
+    return side === "left"
+      ? t("ui.workspace.resize_left", "Redimensionner le panneau gauche")
+      : t("ui.workspace.resize_right", "Redimensionner le panneau droit");
+  }
+
+  function startDockResize(side, event) {
+    if (event.button !== 0) {
+      return;
+    }
+
+    event.preventDefault();
+    dragStateRef.current = {
+      side,
+      startX: event.clientX,
+      startWidths: dockWidths
+    };
+    setDragSide(side);
+  }
+
+  function resetDockWidth(side) {
+    setDockWidths((previous) => ({
+      ...previous,
+      [side]: defaultWorkspaceDockWidths[side]
+    }));
+  }
+
+  useEffect(() => {
+    if (!dragSide) {
+      return undefined;
+    }
+
+    function handlePointerMove(event) {
+      if (!dragStateRef.current) {
+        return;
+      }
+
+      const layoutWidth = workspaceRef.current?.clientWidth ?? 0;
+      const deltaX = event.clientX - dragStateRef.current.startX;
+      setDockWidths(
+        calculateResizedDockWidths({
+          side: dragStateRef.current.side,
+          startWidths: dragStateRef.current.startWidths,
+          deltaX,
+          layoutWidth,
+          leftExpanded,
+          rightExpanded
+        })
+      );
+    }
+
+    function stopDragging() {
+      dragStateRef.current = null;
+      setDragSide(null);
+      document.body.classList.remove("is-resizing");
+    }
+
+    document.body.classList.add("is-resizing");
+    window.addEventListener("mousemove", handlePointerMove);
+    window.addEventListener("mouseup", stopDragging);
+
+    return () => {
+      window.removeEventListener("mousemove", handlePointerMove);
+      window.removeEventListener("mouseup", stopDragging);
+      document.body.classList.remove("is-resizing");
+    };
+  }, [dragSide, leftExpanded, rightExpanded]);
 
   useEffect(() => {
     let mounted = true;
@@ -507,7 +585,7 @@ export default function App() {
         </div>
       </div>
 
-      <main className="workspace" style={workspaceStyle}>
+      <main className="workspace" style={workspaceStyle} ref={workspaceRef}>
         <aside className={leftExpanded ? "workspace-left" : "workspace-left workspace-column-collapsed"}>
           <Panel
             title={t("ui.panel.project_explorer", "Explorateur de projet")}
@@ -621,6 +699,21 @@ export default function App() {
           </Panel>
         </aside>
 
+        <div
+          className={
+            leftExpanded
+              ? dragSide === "left"
+                ? "workspace-resizer is-active"
+                : "workspace-resizer"
+              : "workspace-resizer workspace-resizer-hidden"
+          }
+          aria-hidden={!leftExpanded}
+          aria-label={resizeHandleLabel("left")}
+          title={resizeHandleLabel("left")}
+          onMouseDown={(event) => startDockResize("left", event)}
+          onDoubleClick={() => resetDockWidth("left")}
+        />
+
         <section className="workspace-center">
           <Panel
             title={t("ui.panel.command_surface", "Surface de commandes")}
@@ -671,6 +764,21 @@ export default function App() {
             </div>
           </Panel>
         </section>
+
+        <div
+          className={
+            rightExpanded
+              ? dragSide === "right"
+                ? "workspace-resizer is-active"
+                : "workspace-resizer"
+              : "workspace-resizer workspace-resizer-hidden"
+          }
+          aria-hidden={!rightExpanded}
+          aria-label={resizeHandleLabel("right")}
+          title={resizeHandleLabel("right")}
+          onMouseDown={(event) => startDockResize("right", event)}
+          onDoubleClick={() => resetDockWidth("right")}
+        />
 
         <aside className={rightExpanded ? "workspace-right" : "workspace-right workspace-column-collapsed"}>
           <Panel

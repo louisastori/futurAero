@@ -17,5 +17,13 @@ export {
   setWorkspacePanel,
   toggleWorkspacePanel
 } from "./workspace-layout.mjs";
+export {
+  calculateResizedDockWidths,
+  defaultWorkspaceDockWidths,
+  getVisibleSidebarWidth,
+  WORKSPACE_COLLAPSED_WIDTH,
+  WORKSPACE_RESIZER_WIDTH,
+  workspaceDockWidthLimits
+} from "./workspace-resize.mjs";
 
 export const uiScaffoldStatus = "menu-model-ready";

@@ -174,6 +174,7 @@ Ciblent:
 - localisation FR par defaut avec EN/ES disponibles,
 - chargement des fixtures desktop via backend,
 - panneaux retractables et rouvrables sans reset de session,
+- colonnes laterales redimensionnables a la souris avec bornes stables,
 - panneau de discussion IA locale avec etats vide, charge, reponse et fallback.
 
 ## Fixtures officielles MVP
@@ -520,6 +521,22 @@ Attendu:
 - les colonnes laterales peuvent rester en mode compact,
 - la session chargee, les compteurs et le contexte courant sont conserves,
 - la reouverture remet le contenu precedent sans rechargement force.
+
+### CT-018 - Redimensionnement des colonnes laterales
+
+Etapes:
+
+1. ouvrir le shell desktop sur une fixture,
+2. faire glisser la poignee entre la colonne gauche et la zone centrale,
+3. faire glisser la poignee entre la zone centrale et la colonne droite,
+4. verifier le comportement apres repli puis reouverture d un panneau lateral.
+
+Attendu:
+
+- les colonnes laterales changent bien de largeur a la souris,
+- des bornes minimales et maximales evitent de casser la zone centrale,
+- le viewport et la surface de commandes restent utilisables pendant le resize,
+- la largeur precedente est conservee quand on rouvre une colonne repliee.
 
 ## Seuils techniques MVP
 

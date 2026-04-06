@@ -25,6 +25,11 @@ body {
     radial-gradient(circle at 20% 0%, rgba(23, 94, 217, 0.2), transparent 24%);
 }
 
+body.is-resizing {
+  cursor: col-resize;
+  user-select: none;
+}
+
 button {
   font: inherit;
 }
@@ -174,9 +179,10 @@ button {
   display: grid;
   grid-template-columns:
     var(--workspace-left-column, minmax(240px, 290px))
+    var(--workspace-left-resizer, 0px)
     minmax(0, 1fr)
+    var(--workspace-right-resizer, 0px)
     var(--workspace-right-column, minmax(260px, 360px));
-  gap: 12px;
   padding: 12px;
 }
 
@@ -186,6 +192,46 @@ button {
   display: grid;
   gap: 12px;
   align-content: start;
+  min-width: 0;
+}
+
+.workspace-left {
+  padding-right: 6px;
+}
+
+.workspace-center {
+  padding-inline: 6px;
+}
+
+.workspace-right {
+  padding-left: 6px;
+}
+
+.workspace-resizer {
+  position: relative;
+  cursor: col-resize;
+}
+
+.workspace-resizer::before {
+  content: "";
+  position: absolute;
+  top: 10px;
+  bottom: 10px;
+  left: 50%;
+  width: 3px;
+  transform: translateX(-50%);
+  border-radius: 999px;
+  background: rgba(146, 182, 255, 0.24);
+  transition: background 120ms ease, opacity 120ms ease;
+}
+
+.workspace-resizer:hover::before,
+.workspace-resizer.is-active::before {
+  background: rgba(56, 149, 255, 0.9);
+}
+
+.workspace-resizer-hidden {
+  pointer-events: none;
 }
 
 .panel {
@@ -539,6 +585,16 @@ button {
 @media (max-width: 1100px) {
   .workspace {
     grid-template-columns: 1fr;
+  }
+
+  .workspace-left,
+  .workspace-center,
+  .workspace-right {
+    padding: 0;
+  }
+
+  .workspace-resizer {
+    display: none;
   }
 }
 
