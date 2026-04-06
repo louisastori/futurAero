@@ -125,4 +125,49 @@ mod tests {
         assert!(!registry.is_enabled("plg.integration.viewer"));
         assert_eq!(registry.installed_count(), 1);
     }
+
+    #[test]
+    fn rejects_duplicate_install_and_missing_enable_disable() {
+        let mut registry = PluginRegistry::default();
+        let manifest = sample_manifest(vec!["project.read"]);
+
+        registry
+            .install(manifest.clone())
+            .expect("first install should succeed");
+
+        let duplicate = registry
+            .install(manifest)
+            .expect_err("duplicate install should fail");
+        assert_eq!(
+            duplicate,
+            PluginHostError::AlreadyInstalled("plg.integration.viewer".to_string())
+        );
+
+        let missing_enable = PluginRegistry::default()
+            .enable("missing.plugin")
+            .expect_err("missing plugin enable should fail");
+        assert_eq!(
+            missing_enable,
+            PluginHostError::NotInstalled("missing.plugin".to_string())
+        );
+
+        let missing_disable = PluginRegistry::default()
+            .disable("missing.plugin")
+            .expect_err("missing plugin disable should fail");
+        assert_eq!(
+            missing_disable,
+            PluginHostError::NotInstalled("missing.plugin".to_string())
+        );
+    }
+
+    #[test]
+    fn allowed_permissions_contains_expected_runtime_scope() {
+        let permissions = allowed_permissions();
+
+        assert!(permissions.contains("project.read"));
+        assert!(permissions.contains("project.write"));
+        assert!(permissions.contains("integration.observe"));
+        assert!(permissions.contains("integration.control"));
+        assert!(permissions.contains("plugin.ui.mount"));
+    }
 }

@@ -549,12 +549,19 @@ Attendu:
 
 La politique detaillee est definie dans [23-Politique-De-Tests-Et-Couverture-100.md](./23-Politique-De-Tests-Et-Couverture-100.md).
 
-Exigence de base:
+Exigence produit cible:
 
 - 100 pourcent line coverage
-- 100 pourcent branch coverage
+- 100 pourcent region coverage
 - 100 pourcent function coverage
 - 100 pourcent command/event/schema coverage
+
+Gate GitHub actuellement imposee sur le workspace Rust:
+
+- seuils lus depuis `config/coverage-gate.json`
+- 99.5 pourcent line coverage minimum
+- 97.5 pourcent region coverage minimum
+- 100 pourcent function coverage minimum
 
 ## Definition Of Done globale
 

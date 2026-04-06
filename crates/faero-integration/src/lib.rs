@@ -229,4 +229,46 @@ mod tests {
         assert_eq!(report.sample_count, 1);
         assert!(report.replayable);
     }
+
+    #[test]
+    fn simulate_link_returns_live_metrics_and_none_for_unknown_endpoint() {
+        let registry = IntegrationStubRegistry::seeded();
+
+        let live_metrics = registry
+            .simulate_link("ext_wifi_001", false)
+            .expect("wifi endpoint should exist");
+        assert_eq!(live_metrics.latency_ms, Some(18));
+        assert_eq!(live_metrics.drop_rate, Some(0.0));
+
+        assert!(registry.simulate_link("missing.endpoint", false).is_none());
+    }
+
+    #[test]
+    fn replay_trace_returns_none_when_trace_is_missing() {
+        let registry = IntegrationStubRegistry::seeded();
+        assert!(registry.replay_trace("missing.trace").is_none());
+    }
+
+    #[test]
+    fn stub_factories_produce_expected_transport_kinds() {
+        assert_eq!(
+            stub_ros2_endpoint().transport_profile.transport_kind,
+            "ros2"
+        );
+        assert_eq!(
+            stub_opcua_endpoint().transport_profile.transport_kind,
+            "opcua"
+        );
+        assert_eq!(stub_plc_endpoint().transport_profile.transport_kind, "plc");
+        assert_eq!(
+            stub_robot_controller_endpoint()
+                .transport_profile
+                .transport_kind,
+            "robot_controller"
+        );
+        assert_eq!(
+            stub_wifi_endpoint().transport_profile.transport_kind,
+            "wifi"
+        );
+    }
 }

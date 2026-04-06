@@ -128,16 +128,7 @@ struct OllamaChatResponse {
 
 pub fn query_runtime_status() -> AiRuntimeStatus {
     let config = AiRuntimeConfig::from_env();
-    let client = match build_http_client(config.timeout_secs) {
-        Ok(client) => client,
-        Err(error) => {
-            return unavailable_runtime_status(
-                &config,
-                format!("client init failed: {error}"),
-                Vec::new(),
-            );
-        }
-    };
+    let client = build_http_client(config.timeout_secs);
 
     match fetch_model_names(&client, &config) {
         Ok(models) => runtime_status_from_models(&config, models),
@@ -157,7 +148,7 @@ pub fn chat_with_project(
     }
 
     let config = AiRuntimeConfig::from_env();
-    let client = build_http_client(config.timeout_secs)?;
+    let client = build_http_client(config.timeout_secs);
     let references = collect_context_references(document);
 
     let response = match fetch_model_names(&client, &config) {
@@ -214,10 +205,11 @@ pub fn chat_with_project(
     Ok(response)
 }
 
-fn build_http_client(timeout_secs: u64) -> Result<Client, reqwest::Error> {
+fn build_http_client(timeout_secs: u64) -> Client {
     Client::builder()
         .timeout(Duration::from_secs(timeout_secs))
         .build()
+        .expect("ollama client should initialize")
 }
 
 fn fetch_model_names(client: &Client, config: &AiRuntimeConfig) -> Result<Vec<String>, AiError> {
@@ -617,6 +609,15 @@ impl AsLabel for faero_types::EndpointType {
 
 #[cfg(test)]
 mod tests {
+    use std::{
+        env,
+        io::{BufRead, BufReader, Read, Write},
+        net::{TcpListener, TcpStream},
+        panic::{AssertUnwindSafe, catch_unwind},
+        sync::{Mutex, OnceLock},
+        thread,
+    };
+
     use faero_types::{
         Addressing, ConnectionMode, EndpointType, EntityRecord, ExternalEndpoint, LinkMetrics,
         PluginManifest, ProjectDocument, QosProfile, StreamDirection, TelemetryStream,
@@ -624,6 +625,128 @@ mod tests {
     };
 
     use super::*;
+
+    #[derive(Clone)]
+    struct MockHttpResponse {
+        status: u16,
+        body: String,
+    }
+
+    fn env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    fn with_env<R>(entries: &[(&str, Option<&str>)], test: impl FnOnce() -> R) -> R {
+        let _guard = env_lock()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let previous = entries
+            .iter()
+            .map(|(key, _)| ((*key).to_string(), env::var(key).ok()))
+            .collect::<Vec<_>>();
+
+        for (key, value) in entries {
+            match value {
+                Some(value) => unsafe { env::set_var(key, value) },
+                None => unsafe { env::remove_var(key) },
+            }
+        }
+
+        let result = catch_unwind(AssertUnwindSafe(test));
+
+        for (key, value) in previous {
+            match value {
+                Some(value) => unsafe { env::set_var(&key, value) },
+                None => unsafe { env::remove_var(&key) },
+            }
+        }
+
+        match result {
+            Ok(value) => value,
+            Err(panic) => std::panic::resume_unwind(panic),
+        }
+    }
+
+    fn read_request_path(stream: &mut TcpStream) -> String {
+        let mut reader = BufReader::new(stream.try_clone().expect("stream should clone"));
+        let mut request_line = String::new();
+        reader
+            .read_line(&mut request_line)
+            .expect("request line should be readable");
+
+        let mut content_length = 0usize;
+        loop {
+            let mut line = String::new();
+            reader
+                .read_line(&mut line)
+                .expect("header line should be readable");
+            if line == "\r\n" || line.is_empty() {
+                break;
+            }
+            let lower = line.to_ascii_lowercase();
+            if let Some(value) = lower.strip_prefix("content-length:") {
+                content_length = value.trim().parse::<usize>().unwrap_or(0);
+            }
+        }
+
+        if content_length > 0 {
+            let mut body = vec![0u8; content_length];
+            reader
+                .read_exact(&mut body)
+                .expect("request body should be readable");
+        }
+
+        request_line
+            .split_whitespace()
+            .nth(1)
+            .expect("request path should be present")
+            .to_string()
+    }
+
+    fn write_response(stream: &mut TcpStream, response: &MockHttpResponse) {
+        let reason = match response.status {
+            200 => "OK",
+            500 => "Internal Server Error",
+            404 => "Not Found",
+            _ => "Mock",
+        };
+        let payload = response.body.as_bytes();
+        write!(
+            stream,
+            "HTTP/1.1 {} {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            response.status,
+            reason,
+            payload.len()
+        )
+        .expect("headers should be written");
+        stream.write_all(payload).expect("body should be written");
+        stream.flush().expect("response should flush");
+    }
+
+    fn spawn_mock_ollama_server(
+        expected: Vec<(&'static str, MockHttpResponse)>,
+    ) -> (String, thread::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("listener should bind");
+        let endpoint = format!(
+            "http://127.0.0.1:{}",
+            listener
+                .local_addr()
+                .expect("listener should expose local address")
+                .port()
+        );
+
+        let handle = thread::spawn(move || {
+            for (expected_path, response) in expected {
+                let (mut stream, _) = listener.accept().expect("connection should arrive");
+                let path = read_request_path(&mut stream);
+                assert_eq!(path, expected_path);
+                write_response(&mut stream, &response);
+            }
+        });
+
+        (endpoint, handle)
+    }
 
     fn sample_document() -> ProjectDocument {
         let mut document = ProjectDocument::empty("AI Demo");
@@ -727,6 +850,18 @@ mod tests {
     }
 
     #[test]
+    fn select_default_model_falls_back_to_first_or_none() {
+        let models = vec!["mistral:7b".to_string()];
+        let preferred = vec!["gemma3:4b".to_string()];
+
+        assert_eq!(
+            select_default_model(&models, &preferred),
+            Some("mistral:7b".to_string())
+        );
+        assert_eq!(select_default_model(&[], &preferred), None);
+    }
+
+    #[test]
     fn project_summary_contains_core_workspace_counts() {
         let summary = build_project_summary(&sample_document());
 
@@ -776,5 +911,487 @@ mod tests {
         let answer = build_fallback_answer("fr", "Resume le projet", &document, &runtime);
         assert!(answer.contains("AI Demo"));
         assert!(answer.contains(runtime.endpoint.as_str()));
+    }
+
+    #[test]
+    fn runtime_config_defaults_and_overrides_are_deterministic() {
+        with_env(
+            &[
+                ("FUTUREAERO_OLLAMA_ENDPOINT", None),
+                ("FUTUREAERO_OLLAMA_TIMEOUT_SECS", None),
+                ("FUTUREAERO_OLLAMA_MODEL", None),
+            ],
+            || {
+                let config = AiRuntimeConfig::from_env();
+                assert_eq!(config.endpoint, DEFAULT_OLLAMA_ENDPOINT);
+                assert_eq!(config.timeout_secs, DEFAULT_TIMEOUT_SECS);
+                assert_eq!(
+                    config.preferred_models,
+                    vec!["gemma3:4b".to_string(), "phi3:mini".to_string()]
+                );
+            },
+        );
+
+        with_env(
+            &[
+                ("FUTUREAERO_OLLAMA_ENDPOINT", Some("http://127.0.0.1:18080")),
+                ("FUTUREAERO_OLLAMA_TIMEOUT_SECS", Some("9")),
+                ("FUTUREAERO_OLLAMA_MODEL", Some("phi3:mini")),
+            ],
+            || {
+                let config = AiRuntimeConfig::from_env();
+                assert_eq!(config.endpoint, "http://127.0.0.1:18080");
+                assert_eq!(config.timeout_secs, 9);
+                assert_eq!(
+                    config.preferred_models,
+                    vec!["phi3:mini".to_string(), "gemma3:4b".to_string()]
+                );
+            },
+        );
+
+        with_env(
+            &[
+                ("FUTUREAERO_OLLAMA_ENDPOINT", Some("  ")),
+                ("FUTUREAERO_OLLAMA_TIMEOUT_SECS", Some("invalid")),
+                ("FUTUREAERO_OLLAMA_MODEL", Some("   ")),
+            ],
+            || {
+                let config = AiRuntimeConfig::from_env();
+                assert_eq!(config.endpoint, DEFAULT_OLLAMA_ENDPOINT);
+                assert_eq!(config.timeout_secs, DEFAULT_TIMEOUT_SECS);
+                assert_eq!(
+                    config.preferred_models,
+                    vec!["gemma3:4b".to_string(), "phi3:mini".to_string()]
+                );
+            },
+        );
+    }
+
+    #[test]
+    fn query_runtime_status_reads_local_models_and_handles_failures() {
+        let (endpoint, handle) = spawn_mock_ollama_server(vec![(
+            "/api/tags",
+            MockHttpResponse {
+                status: 200,
+                body: r#"{"models":[{"name":"phi3:mini"},{"name":"gemma3:4b"}]}"#.to_string(),
+            },
+        )]);
+
+        with_env(
+            &[
+                ("FUTUREAERO_OLLAMA_ENDPOINT", Some(endpoint.as_str())),
+                ("FUTUREAERO_OLLAMA_MODEL", Some("phi3:mini")),
+            ],
+            || {
+                let status = query_runtime_status();
+                assert!(status.available);
+                assert_eq!(status.provider, "ollama");
+                assert_eq!(status.active_model, Some("phi3:mini".to_string()));
+                assert_eq!(
+                    status.available_models,
+                    vec!["phi3:mini".to_string(), "gemma3:4b".to_string()]
+                );
+            },
+        );
+        handle.join().expect("server thread should finish");
+
+        let unavailable = with_env(
+            &[
+                ("FUTUREAERO_OLLAMA_ENDPOINT", Some("http://127.0.0.1:1")),
+                ("FUTUREAERO_OLLAMA_MODEL", None),
+            ],
+            query_runtime_status,
+        );
+        assert!(!unavailable.available);
+        assert_eq!(unavailable.mode, "fallback-local");
+        assert!(unavailable.warning.is_some());
+    }
+
+    #[test]
+    fn chat_with_project_rejects_empty_message() {
+        let error = chat_with_project(&sample_document(), "fr", &[], "   ")
+            .expect_err("empty message should fail");
+        assert!(matches!(error, AiError::EmptyMessage));
+    }
+
+    #[test]
+    fn chat_with_project_returns_live_answer_when_ollama_is_available() {
+        let document = sample_document();
+        let history = vec![
+            AiConversationMessage {
+                role: "assistant".to_string(),
+                content: "Etat precedent".to_string(),
+            },
+            AiConversationMessage {
+                role: "user".to_string(),
+                content: "Quelle est la cellule ?".to_string(),
+            },
+        ];
+        let (endpoint, handle) = spawn_mock_ollama_server(vec![
+            (
+                "/api/tags",
+                MockHttpResponse {
+                    status: 200,
+                    body: r#"{"models":[{"name":"gemma3:4b"}]}"#.to_string(),
+                },
+            ),
+            (
+                "/api/chat",
+                MockHttpResponse {
+                    status: 200,
+                    body: r#"{"message":{"role":"assistant","content":"  Reponse locale validee.  "}}"#
+                        .to_string(),
+                },
+            ),
+        ]);
+
+        let response = with_env(
+            &[
+                ("FUTUREAERO_OLLAMA_ENDPOINT", Some(endpoint.as_str())),
+                ("FUTUREAERO_OLLAMA_MODEL", Some("gemma3:4b")),
+            ],
+            || chat_with_project(&document, "fr", &history, "Resume le projet"),
+        )
+        .expect("chat should succeed");
+        handle.join().expect("server thread should finish");
+
+        assert_eq!(response.source, "ollama-local");
+        assert_eq!(response.answer, "Reponse locale validee.");
+        assert!(response.runtime.available);
+        assert!(response.warnings.is_empty());
+        assert!(
+            response
+                .references
+                .contains(&"project:prj_ai_001".to_string())
+        );
+        assert!(
+            response
+                .references
+                .iter()
+                .any(|reference| reference.starts_with("entity:"))
+        );
+    }
+
+    #[test]
+    fn chat_with_project_falls_back_when_runtime_has_no_models_or_chat_errors() {
+        let document = sample_document();
+
+        let (empty_endpoint, empty_handle) = spawn_mock_ollama_server(vec![(
+            "/api/tags",
+            MockHttpResponse {
+                status: 200,
+                body: r#"{"models":[]}"#.to_string(),
+            },
+        )]);
+        let empty_response = with_env(
+            &[("FUTUREAERO_OLLAMA_ENDPOINT", Some(empty_endpoint.as_str()))],
+            || chat_with_project(&document, "en", &[], "Explain the project"),
+        )
+        .expect("fallback response should still succeed");
+        empty_handle.join().expect("server thread should finish");
+
+        assert_eq!(empty_response.source, "fallback-local");
+        assert_eq!(empty_response.runtime.mode, "fallback-local");
+        assert_eq!(empty_response.runtime.active_model, None);
+        assert!(
+            empty_response
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("no preferred local model found"))
+        );
+        assert!(empty_response.answer.contains("Project: AI Demo"));
+
+        let (failing_endpoint, failing_handle) = spawn_mock_ollama_server(vec![
+            (
+                "/api/tags",
+                MockHttpResponse {
+                    status: 200,
+                    body: r#"{"models":[{"name":"phi3:mini"}]}"#.to_string(),
+                },
+            ),
+            (
+                "/api/chat",
+                MockHttpResponse {
+                    status: 500,
+                    body: r#"{"error":"unavailable"}"#.to_string(),
+                },
+            ),
+        ]);
+        let failing_response = with_env(
+            &[
+                (
+                    "FUTUREAERO_OLLAMA_ENDPOINT",
+                    Some(failing_endpoint.as_str()),
+                ),
+                ("FUTUREAERO_OLLAMA_MODEL", Some("phi3:mini")),
+            ],
+            || chat_with_project(&document, "es", &[], "Resume el proyecto"),
+        )
+        .expect("chat failure should fallback");
+        failing_handle.join().expect("server thread should finish");
+
+        assert_eq!(failing_response.source, "fallback-local");
+        assert!(
+            failing_response
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("500"))
+        );
+        assert!(failing_response.answer.contains("Proyecto: AI Demo"));
+    }
+
+    #[test]
+    fn chat_with_project_falls_back_when_tag_lookup_fails() {
+        let document = sample_document();
+        let (endpoint, handle) = spawn_mock_ollama_server(vec![(
+            "/api/tags",
+            MockHttpResponse {
+                status: 500,
+                body: r#"{"error":"tags failed"}"#.to_string(),
+            },
+        )]);
+
+        let response = with_env(
+            &[("FUTUREAERO_OLLAMA_ENDPOINT", Some(endpoint.as_str()))],
+            || chat_with_project(&document, "fr", &[], "Resume le projet"),
+        )
+        .expect("tag failure should fallback");
+        handle.join().expect("server thread should finish");
+
+        assert_eq!(response.source, "fallback-local");
+        assert!(
+            response
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("500"))
+        );
+        assert!(response.answer.contains("Projet: AI Demo"));
+    }
+
+    #[test]
+    fn helpers_cover_locales_labels_references_and_normalization() {
+        let document = sample_document();
+        let prompt = build_system_prompt("es", &document);
+        assert!(prompt.contains("Answer in Spanish."));
+        assert_eq!(language_instruction("en"), "in English");
+        assert_eq!(language_instruction("es"), "in Spanish");
+        assert_eq!(language_instruction("fr"), "in French");
+
+        let messages = build_ollama_messages(
+            "fr",
+            &[
+                AiConversationMessage {
+                    role: "system".to_string(),
+                    content: "ignore".to_string(),
+                },
+                AiConversationMessage {
+                    role: "user".to_string(),
+                    content: " besoin ".to_string(),
+                },
+            ],
+            "Etat courant",
+            &document,
+        );
+        assert_eq!(messages[0].role, "system");
+        assert_eq!(messages[1].role, "user");
+        assert_eq!(
+            messages.last().map(|message| message.role.as_str()),
+            Some("user")
+        );
+
+        let references = collect_context_references(&document);
+        assert_eq!(references[0], "project:prj_ai_001");
+        assert!(
+            references
+                .iter()
+                .any(|reference| reference == "endpoint:ext_wifi_001")
+        );
+
+        assert_eq!(StreamDirection::Inbound.as_str(), "inbound");
+        assert_eq!(StreamDirection::Outbound.as_str(), "outbound");
+        assert_eq!(StreamDirection::Bidirectional.as_str(), "bidirectional");
+        assert_eq!(EndpointType::Ros2.as_str(), "ros2");
+        assert_eq!(EndpointType::Opcua.as_str(), "opcua");
+        assert_eq!(EndpointType::Plc.as_str(), "plc");
+        assert_eq!(EndpointType::RobotController.as_str(), "robot_controller");
+        assert_eq!(EndpointType::BluetoothLe.as_str(), "bluetooth_le");
+        assert_eq!(EndpointType::BluetoothClassic.as_str(), "bluetooth_classic");
+        assert_eq!(EndpointType::MqttBroker.as_str(), "mqtt_broker");
+        assert_eq!(EndpointType::WebsocketPeer.as_str(), "websocket_peer");
+        assert_eq!(EndpointType::TcpStream.as_str(), "tcp_stream");
+        assert_eq!(EndpointType::UdpStream.as_str(), "udp_stream");
+        assert_eq!(EndpointType::SerialDevice.as_str(), "serial_device");
+        assert_eq!(EndpointType::FieldbusTrace.as_str(), "fieldbus_trace");
+        assert_eq!(EndpointType::CustomStream.as_str(), "custom_stream");
+
+        assert_eq!(
+            normalize_answer("  ".to_string(), "fr", &document),
+            build_fallback_answer(
+                "fr",
+                "assistant returned an empty answer",
+                &document,
+                &AiRuntimeStatus {
+                    available: false,
+                    provider: "ollama".to_string(),
+                    endpoint: DEFAULT_OLLAMA_ENDPOINT.to_string(),
+                    mode: "fallback-local".to_string(),
+                    local_only: true,
+                    active_model: None,
+                    available_models: Vec::new(),
+                    warning: Some("empty assistant answer".to_string()),
+                },
+            )
+        );
+        assert_eq!(
+            normalize_answer("  already clean  ".to_string(), "fr", &document),
+            "already clean"
+        );
+    }
+
+    #[test]
+    fn format_endpoint_covers_address_variants_and_summary_none_case() {
+        let mut document = sample_document();
+        document
+            .plugin_states
+            .insert("plg.integration.viewer".to_string(), false);
+        let host_port_path = document
+            .endpoints
+            .remove("ext_wifi_001")
+            .expect("sample endpoint should exist");
+        assert!(format_endpoint(&host_port_path).contains("edge-box.local:9001/telemetry"));
+
+        let host_port = ExternalEndpoint {
+            addressing: Addressing {
+                host: Some("edge-box.local".to_string()),
+                port: Some(9001),
+                path: None,
+                device_id: None,
+            },
+            ..host_port_path.clone()
+        };
+        assert!(format_endpoint(&host_port).ends_with("@ edge-box.local:9001"));
+
+        let host_path = ExternalEndpoint {
+            addressing: Addressing {
+                host: Some("edge-box.local".to_string()),
+                port: None,
+                path: Some("/telemetry".to_string()),
+                device_id: None,
+            },
+            ..host_port_path.clone()
+        };
+        assert!(format_endpoint(&host_path).ends_with("@ edge-box.local/telemetry"));
+
+        let host_only = ExternalEndpoint {
+            addressing: Addressing {
+                host: Some("edge-box.local".to_string()),
+                port: None,
+                path: None,
+                device_id: None,
+            },
+            ..host_port_path.clone()
+        };
+        assert!(format_endpoint(&host_only).ends_with("@ edge-box.local"));
+
+        let device_only = ExternalEndpoint {
+            addressing: Addressing {
+                host: None,
+                port: None,
+                path: None,
+                device_id: Some("dev-01".to_string()),
+            },
+            ..host_port_path.clone()
+        };
+        assert!(format_endpoint(&device_only).ends_with("@ dev-01"));
+
+        let none_address = ExternalEndpoint {
+            addressing: Addressing::default(),
+            ..host_port_path
+        };
+        assert!(format_endpoint(&none_address).ends_with("@ n/a"));
+
+        let none_summary = summarize_named_items(Vec::<String>::new().into_iter());
+        assert_eq!(none_summary, "none");
+
+        let summary = build_project_summary(&document);
+        assert!(summary.contains("[disabled]"));
+    }
+
+    #[test]
+    fn with_env_restores_previous_values_even_after_panic() {
+        unsafe { env::set_var("FUTUREAERO_TEST_SENTINEL", "sentinel") };
+        let panic_result = catch_unwind(AssertUnwindSafe(|| {
+            with_env(&[("FUTUREAERO_TEST_SENTINEL", Some("temporary"))], || {
+                panic!("forced test panic")
+            });
+        }));
+        assert!(panic_result.is_err());
+        assert_eq!(
+            env::var("FUTUREAERO_TEST_SENTINEL").ok().as_deref(),
+            Some("sentinel")
+        );
+        unsafe { env::remove_var("FUTUREAERO_TEST_SENTINEL") };
+    }
+
+    #[test]
+    fn write_response_supports_not_found_and_custom_status_reason() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("listener should bind");
+        let address = listener
+            .local_addr()
+            .expect("listener should expose local address");
+
+        let client = thread::spawn(move || {
+            let mut stream = TcpStream::connect(address).expect("client should connect");
+            stream
+                .write_all(b"GET /missing HTTP/1.1\r\nHost: localhost\r\n\r\n")
+                .expect("request should write");
+            let mut payload = String::new();
+            stream
+                .read_to_string(&mut payload)
+                .expect("response should read");
+            payload
+        });
+
+        let (mut stream, _) = listener.accept().expect("server should accept");
+        let _ = read_request_path(&mut stream);
+        write_response(
+            &mut stream,
+            &MockHttpResponse {
+                status: 404,
+                body: "{}".to_string(),
+            },
+        );
+        drop(stream);
+        let response = client.join().expect("client should join");
+        assert!(response.contains("404 Not Found"));
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("listener should bind");
+        let address = listener
+            .local_addr()
+            .expect("listener should expose local address");
+        let client = thread::spawn(move || {
+            let mut stream = TcpStream::connect(address).expect("client should connect");
+            stream
+                .write_all(b"GET /custom HTTP/1.1\r\nHost: localhost\r\n\r\n")
+                .expect("request should write");
+            let mut payload = String::new();
+            stream
+                .read_to_string(&mut payload)
+                .expect("response should read");
+            payload
+        });
+
+        let (mut stream, _) = listener.accept().expect("server should accept");
+        let _ = read_request_path(&mut stream);
+        write_response(
+            &mut stream,
+            &MockHttpResponse {
+                status: 418,
+                body: "{}".to_string(),
+            },
+        );
+        drop(stream);
+        let response = client.join().expect("client should join");
+        assert!(response.contains("418 Mock"));
     }
 }

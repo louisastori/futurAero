@@ -103,6 +103,7 @@ name = "faero-core"
 version = "0.1.0"
 dependencies = [
  "faero-types",
+ "serde",
  "serde_json",
  "thiserror",
 ]

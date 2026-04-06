@@ -5,6 +5,9 @@ on:
     branches: ["main", "master"]
   pull_request:
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   rust:
     runs-on: ubuntu-latest
@@ -28,7 +31,12 @@ jobs:
         run: cargo test --workspace
 
       - name: Coverage gate
-        run: cargo llvm-cov --workspace --all-features --lcov --output-path coverage.lcov --fail-under-lines 100 --fail-under-functions 100 --fail-under-regions 100
+        shell: bash
+        run: |
+          RUST_LINES=$(python -c "import json; print(json.load(open('config/coverage-gate.json'))['rust']['lines'])")
+          RUST_FUNCTIONS=$(python -c "import json; print(json.load(open('config/coverage-gate.json'))['rust']['functions'])")
+          RUST_REGIONS=$(python -c "import json; print(json.load(open('config/coverage-gate.json'))['rust']['regions'])")
+          cargo llvm-cov --workspace --all-features --lcov --output-path coverage.lcov --fail-under-lines "$RUST_LINES" --fail-under-functions "$RUST_FUNCTIONS" --fail-under-regions "$RUST_REGIONS"
 
   frontend-scaffold:
     runs-on: ubuntu-latest

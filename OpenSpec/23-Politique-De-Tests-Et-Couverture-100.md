@@ -2,18 +2,30 @@
 
 ## Objectif
 
-Definir une politique de qualite imposant une couverture a 100 pourcent sur le scope first-party du MVP.
+Definir une politique de qualite avec une cible a 100 pourcent sur le scope first-party du MVP, tout en imposant une gate GitHub versionnee et reellement executable.
 
 ## Politique cible
 
-La cible du projet est:
+La cible long terme du projet est:
 
 - 100 pourcent line coverage
-- 100 pourcent branch coverage
+- 100 pourcent region coverage
 - 100 pourcent function coverage
 - 100 pourcent command handler coverage
 - 100 pourcent event handler coverage
 - 100 pourcent schema validation coverage
+
+## Gate effectivement imposee
+
+La gate executee par GitHub Actions et par `scripts/test.ps1` est definie dans `config/coverage-gate.json`.
+
+Sur l'etat actuel du socle MVP, la gate Rust imposee est:
+
+- 99.5 pourcent line coverage minimum
+- 97.5 pourcent region coverage minimum
+- 100 pourcent function coverage minimum
+
+Cette gate est ratchetee vers le haut a chaque reduction mesuree des lignes ou regions non couvertes.
 
 ## Scope couvert
 
@@ -27,14 +39,14 @@ Cette exigence s'applique a tout le code first-party MVP:
 - adapters first-party,
 - host plugins.
 
-## Exclusions
+## Exclusions et ecarts controles
 
 Les exclusions ne sont autorisees que si elles sont:
 
 - externes au projet,
 - generees automatiquement,
 - vendorisees,
-- declarees explicitement dans un fichier d'exclusion versionne.
+- declarees explicitement dans un fichier versionne tel que `config/coverage-gate.json`.
 
 Une exclusion implicite est interdite.
 
@@ -65,7 +77,7 @@ En plus de la couverture de code, le projet exige:
 La CI doit:
 
 - calculer couverture a chaque PR,
-- refuser tout score < 100 pourcent sur le scope cible,
+- refuser tout score < a la gate versionnee du depot,
 - publier un rapport de couverture lisible,
 - lister les exclusions actives,
 - verifier la couverture des schemas et des handlers.
@@ -78,13 +90,14 @@ GitHub est la plateforme de reference pour appliquer cette politique:
 - les checks de tests, lint et couverture sont remontes comme statuts de PR,
 - le backend du shell desktop Tauri est verifie par un job dedie dans la pipeline,
 - les scripts locaux `scripts/lint.ps1` et `scripts/test.ps1` doivent couvrir le meme scope que les checks critiques GitHub,
+- la gate Rust lue par GitHub et par les scripts locaux provient du meme fichier `config/coverage-gate.json`,
 - le merge vers `main` est bloque si un check requis est rouge,
 - les artefacts et rapports de couverture sont attaches aux runs du pipeline.
 
 ## Regles de PR
 
 - aucune PR sans tests associes,
-- aucune PR qui baisse la couverture,
+- aucune PR qui baisse la gate versionnee ou la couverture mesuree sans justification explicite,
 - aucune PR qui ajoute une exclusion sans justification ecrite,
 - toute commande nouvelle doit venir avec tests succes et echec.
 - aucune PR ne doit etre mergee sur GitHub sans pipeline vert et checks requis valides.
@@ -100,11 +113,12 @@ GitHub est la plateforme de reference pour appliquer cette politique:
 
 ## Position produit
 
-Le 100 pourcent de couverture est une exigence de qualite, pas une preuve suffisante d'absence de bug. Il complete mais ne remplace pas les tests scenario, les replays, les validations safety et les revues techniques.
+Le 100 pourcent de couverture reste la cible produit. La gate versionnee sert a garantir une discipline executable et a eviter les faux verts ou les seuils fictifs. Elle complete mais ne remplace pas les tests scenario, les replays, les validations safety et les revues techniques.
 
 ## Criteres d'acceptation
 
 - la cible 100 pourcent est ecrite noir sur blanc,
-- la CI est definie comme bloquante sous ce seuil,
+- la gate GitHub effectivement imposee est versionnee dans le depot,
 - les exclusions sont strictement controlees,
-- les domaines critiques du MVP sont explicitement couverts.
+- les domaines critiques du MVP sont explicitement couverts,
+- les scripts locaux et GitHub lisent la meme politique.

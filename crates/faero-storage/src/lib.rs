@@ -37,33 +37,28 @@ pub fn save_project(
     write_yaml(root.join("project.yaml"), &document.metadata)?;
 
     for node in document.nodes.values() {
-        write_json(
-            root.join("graph/nodes").join(format!("{}.json", node.id)),
-            node,
-        )?;
+        let node_path = root.join("graph/nodes").join(format!("{}.json", node.id));
+        write_json(node_path, node)?;
     }
     write_jsonl(root.join("graph/edges.jsonl"), &document.edges)?;
 
     for endpoint in document.endpoints.values() {
-        write_json(
-            root.join("integration/endpoints")
-                .join(format!("{}.json", endpoint.id)),
-            endpoint,
-        )?;
+        let endpoint_path = root
+            .join("integration/endpoints")
+            .join(format!("{}.json", endpoint.id));
+        write_json(endpoint_path, endpoint)?;
     }
     for stream in document.streams.values() {
-        write_json(
-            root.join("integration/streams")
-                .join(format!("{}.json", stream.id)),
-            stream,
-        )?;
+        let stream_path = root
+            .join("integration/streams")
+            .join(format!("{}.json", stream.id));
+        write_json(stream_path, stream)?;
     }
     for manifest in document.plugin_manifests.values() {
-        write_json(
-            root.join("plugins/manifests")
-                .join(format!("{}.json", manifest.plugin_id)),
-            manifest,
-        )?;
+        let manifest_path = root
+            .join("plugins/manifests")
+            .join(format!("{}.json", manifest.plugin_id));
+        write_json(manifest_path, manifest)?;
     }
     write_json(
         root.join("plugins/state/plugins.json"),
@@ -115,27 +110,21 @@ pub fn load_project(path: impl AsRef<Path>) -> Result<ProjectDocument, StorageEr
 }
 
 fn write_json<T: serde::Serialize>(path: PathBuf, value: &T) -> Result<(), StorageError> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
+    path.parent().map(fs::create_dir_all).transpose()?;
     let payload = serde_json::to_vec_pretty(value)?;
     fs::write(path, payload)?;
     Ok(())
 }
 
 fn write_yaml<T: serde::Serialize>(path: PathBuf, value: &T) -> Result<(), StorageError> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
+    path.parent().map(fs::create_dir_all).transpose()?;
     let payload = serde_yaml::to_string(value)?;
     fs::write(path, payload)?;
     Ok(())
 }
 
 fn write_jsonl<T: serde::Serialize>(path: PathBuf, values: &[T]) -> Result<(), StorageError> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
+    path.parent().map(fs::create_dir_all).transpose()?;
     let mut file = fs::File::create(path)?;
     for value in values {
         serde_json::to_writer(&mut file, value)?;
@@ -191,6 +180,8 @@ fn read_json_dir<T: DeserializeOwned>(path: PathBuf) -> Result<Vec<T>, StorageEr
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
     use faero_types::{
         Addressing, ConnectionMode, DisplayUnits, EndpointType, LinkMetrics, PluginManifest,
         ProjectDocument, ProjectMetadata, QosProfile, StreamDirection, TelemetryStream,
@@ -323,5 +314,108 @@ mod tests {
             loaded.plugin_states.get("plg.integration.viewer"),
             Some(&true)
         );
+    }
+
+    #[test]
+    fn load_project_defaults_missing_optional_artifacts_to_empty() {
+        let dir = tempdir().expect("tempdir should be available");
+        let project_root = dir.path().join("minimal.faero");
+        fs::create_dir_all(&project_root).expect("project root should exist");
+        fs::write(
+            project_root.join("project.yaml"),
+            serde_yaml::to_string(&ProjectMetadata::scaffold("Minimal"))
+                .expect("metadata should serialize"),
+        )
+        .expect("metadata file should be written");
+
+        let loaded = load_project(&project_root).expect("minimal project should load");
+
+        assert_eq!(loaded.metadata.name, "Minimal");
+        assert!(loaded.nodes.is_empty());
+        assert!(loaded.edges.is_empty());
+        assert!(loaded.endpoints.is_empty());
+        assert!(loaded.streams.is_empty());
+        assert!(loaded.plugin_manifests.is_empty());
+        assert!(loaded.plugin_states.is_empty());
+        assert!(loaded.commands.is_empty());
+        assert!(loaded.events.is_empty());
+    }
+
+    #[test]
+    fn read_jsonl_skips_blank_lines_and_returns_empty_for_missing_file() {
+        let dir = tempdir().expect("tempdir should be available");
+        let missing = dir.path().join("missing.jsonl");
+        let values: Vec<GraphEdge> = read_jsonl(missing).expect("missing file should return empty");
+        assert!(values.is_empty());
+
+        let jsonl = dir.path().join("edges.jsonl");
+        fs::write(
+            &jsonl,
+            "{\"edgeId\":\"edg_1\",\"from\":\"a\",\"to\":\"b\",\"type\":\"contains\",\"createdAt\":\"2026-04-06T00:00:00Z\"}\n\n",
+        )
+        .expect("jsonl file should be written");
+
+        let values: Vec<GraphEdge> = read_jsonl(jsonl).expect("jsonl should load");
+        assert_eq!(values.len(), 1);
+        assert_eq!(values[0].edge_id, "edg_1");
+    }
+
+    #[test]
+    fn read_json_dir_ignores_missing_directory_and_non_file_entries() {
+        let dir = tempdir().expect("tempdir should be available");
+        let missing = dir.path().join("missing");
+        let missing_values: Vec<EntityRecord> =
+            read_json_dir(missing).expect("missing directory should return empty");
+        assert!(missing_values.is_empty());
+
+        let nodes_dir = dir.path().join("nodes");
+        fs::create_dir_all(nodes_dir.join("nested")).expect("nested directory should exist");
+        fs::write(
+            nodes_dir.join("b.json"),
+            serde_json::to_string(&EntityRecord {
+                id: "ent_b".to_string(),
+                entity_type: "Part".to_string(),
+                name: "B".to_string(),
+                revision: "rev_0002".to_string(),
+                status: "active".to_string(),
+                data: serde_json::json!({}),
+            })
+            .expect("entity should serialize"),
+        )
+        .expect("entity file should be written");
+        fs::write(
+            nodes_dir.join("a.json"),
+            serde_json::to_string(&EntityRecord {
+                id: "ent_a".to_string(),
+                entity_type: "Part".to_string(),
+                name: "A".to_string(),
+                revision: "rev_0001".to_string(),
+                status: "active".to_string(),
+                data: serde_json::json!({}),
+            })
+            .expect("entity should serialize"),
+        )
+        .expect("entity file should be written");
+
+        let values: Vec<EntityRecord> = read_json_dir(nodes_dir).expect("directory should load");
+        assert_eq!(values.len(), 2);
+        assert_eq!(values[0].id, "ent_a");
+        assert_eq!(values[1].id, "ent_b");
+    }
+
+    #[test]
+    fn invalid_json_and_yaml_surfaces_structured_errors() {
+        let dir = tempdir().expect("tempdir should be available");
+        let invalid_json = dir.path().join("invalid.json");
+        fs::write(&invalid_json, "{not valid json").expect("json fixture should write");
+        let json_error =
+            read_json::<ProjectMetadata>(invalid_json).expect_err("invalid json should fail");
+        assert!(matches!(json_error, StorageError::Json(_)));
+
+        let invalid_yaml = dir.path().join("invalid.yaml");
+        fs::write(&invalid_yaml, "name: [broken").expect("yaml fixture should write");
+        let yaml_error =
+            read_yaml::<ProjectMetadata>(invalid_yaml).expect_err("invalid yaml should fail");
+        assert!(matches!(yaml_error, StorageError::Yaml(_)));
     }
 }

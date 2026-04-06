@@ -4,6 +4,7 @@ use faero_types::{
     CommandEnvelope, EntityRecord, EventEnvelope, ExternalEndpoint, PluginManifest,
     ProjectDocument, TelemetryStream,
 };
+use serde::Serialize;
 use serde_json::Value;
 use thiserror::Error;
 
@@ -21,8 +22,6 @@ pub enum CoreError {
     PluginAlreadyInstalled(String),
     #[error("plugin `{0}` is not installed")]
     PluginNotInstalled(String),
-    #[error("serialization failure")]
-    Serialization,
 }
 
 #[derive(Debug, Clone)]
@@ -116,8 +115,7 @@ impl ProjectGraph {
                     return Err(CoreError::EntityAlreadyExists(entity.id));
                 }
 
-                let payload =
-                    serde_json::to_value(&entity).map_err(|_| CoreError::Serialization)?;
+                let payload = serialize_payload(&entity);
                 let command_id = self.record_command(
                     "entity.create",
                     Some(entity.id.clone()),
@@ -142,8 +140,7 @@ impl ProjectGraph {
                     return Err(CoreError::EndpointAlreadyExists(endpoint.id));
                 }
 
-                let payload =
-                    serde_json::to_value(&endpoint).map_err(|_| CoreError::Serialization)?;
+                let payload = serialize_payload(&endpoint);
                 let command_id = self.record_command(
                     "wireless.endpoint.create",
                     Some(endpoint.id.clone()),
@@ -171,8 +168,7 @@ impl ProjectGraph {
                     return Err(CoreError::UnknownEndpoint(stream.endpoint_id));
                 }
 
-                let payload =
-                    serde_json::to_value(&stream).map_err(|_| CoreError::Serialization)?;
+                let payload = serialize_payload(&stream);
                 let command_id = self.record_command(
                     "telemetry.stream.create",
                     Some(stream.id.clone()),
@@ -201,8 +197,7 @@ impl ProjectGraph {
                     return Err(CoreError::PluginAlreadyInstalled(manifest.plugin_id));
                 }
 
-                let payload =
-                    serde_json::to_value(&manifest).map_err(|_| CoreError::Serialization)?;
+                let payload = serialize_payload(&manifest);
                 let command_id = self.record_command(
                     "plugin.install",
                     Some(manifest.plugin_id.clone()),
@@ -323,6 +318,10 @@ fn next_counter<'a>(ids: impl Iterator<Item = &'a str>, prefix: &str) -> usize {
     .max()
     .map(|value| value + 1)
     .unwrap_or(1)
+}
+
+fn serialize_payload<T: Serialize>(value: &T) -> Value {
+    serde_json::to_value(value).expect("core payload should always serialize")
 }
 
 #[cfg(test)]
@@ -489,6 +488,109 @@ mod tests {
                 .last()
                 .map(|command| command.command_id.as_str()),
             Some("cmd_0003")
+        );
+    }
+
+    #[test]
+    fn accessors_reflect_current_document_state() {
+        let mut graph = ProjectGraph::new("Demo");
+        graph
+            .apply_command(CoreCommand::RegisterEndpoint(sample_endpoint()))
+            .expect("endpoint should register");
+        graph
+            .apply_command(CoreCommand::RegisterStream(sample_stream("ext_wifi_001")))
+            .expect("stream should register");
+        graph
+            .apply_command(CoreCommand::InstallPlugin(sample_plugin()))
+            .expect("plugin should install");
+
+        assert_eq!(graph.project_name(), "Demo");
+        assert_eq!(graph.stream_count(), 1);
+        assert_eq!(graph.plugin_count(), 1);
+    }
+
+    #[test]
+    fn rejects_duplicate_entity_endpoint_stream_and_plugin() {
+        let mut graph = ProjectGraph::new("Demo");
+        graph
+            .apply_command(CoreCommand::CreateEntity(sample_entity()))
+            .expect("entity should register");
+        let duplicate_entity = graph
+            .apply_command(CoreCommand::CreateEntity(sample_entity()))
+            .expect_err("duplicate entity should fail");
+        assert_eq!(
+            duplicate_entity,
+            CoreError::EntityAlreadyExists("ent_part_001".to_string())
+        );
+
+        graph
+            .apply_command(CoreCommand::RegisterEndpoint(sample_endpoint()))
+            .expect("endpoint should register");
+        let duplicate_endpoint = graph
+            .apply_command(CoreCommand::RegisterEndpoint(sample_endpoint()))
+            .expect_err("duplicate endpoint should fail");
+        assert_eq!(
+            duplicate_endpoint,
+            CoreError::EndpointAlreadyExists("ext_wifi_001".to_string())
+        );
+
+        graph
+            .apply_command(CoreCommand::RegisterStream(sample_stream("ext_wifi_001")))
+            .expect("stream should register");
+        let duplicate_stream = graph
+            .apply_command(CoreCommand::RegisterStream(sample_stream("ext_wifi_001")))
+            .expect_err("duplicate stream should fail");
+        assert_eq!(
+            duplicate_stream,
+            CoreError::StreamAlreadyExists("str_bumper_001".to_string())
+        );
+
+        graph
+            .apply_command(CoreCommand::InstallPlugin(sample_plugin()))
+            .expect("plugin should install");
+        let duplicate_plugin = graph
+            .apply_command(CoreCommand::InstallPlugin(sample_plugin()))
+            .expect_err("duplicate plugin should fail");
+        assert_eq!(
+            duplicate_plugin,
+            CoreError::PluginAlreadyInstalled("plg.integration.viewer".to_string())
+        );
+    }
+
+    #[test]
+    fn plugin_enable_disable_requires_installation_and_records_both_states() {
+        let mut graph = ProjectGraph::new("Demo");
+        let missing = graph
+            .apply_command(CoreCommand::SetPluginEnabled {
+                plugin_id: "missing.plugin".to_string(),
+                enabled: true,
+            })
+            .expect_err("unknown plugin should fail");
+        assert_eq!(
+            missing,
+            CoreError::PluginNotInstalled("missing.plugin".to_string())
+        );
+
+        graph
+            .apply_command(CoreCommand::InstallPlugin(sample_plugin()))
+            .expect("plugin should install");
+        graph
+            .apply_command(CoreCommand::SetPluginEnabled {
+                plugin_id: "plg.integration.viewer".to_string(),
+                enabled: true,
+            })
+            .expect("plugin should enable");
+        let disabled = graph
+            .apply_command(CoreCommand::SetPluginEnabled {
+                plugin_id: "plg.integration.viewer".to_string(),
+                enabled: false,
+            })
+            .expect("plugin should disable");
+
+        assert_eq!(disabled.kind, "plugin.disabled");
+        assert_eq!(
+            graph.plugin_state().get("plg.integration.viewer"),
+            Some(&false)
         );
     }
 }

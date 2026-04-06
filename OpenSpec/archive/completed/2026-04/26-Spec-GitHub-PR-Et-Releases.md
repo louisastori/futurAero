@@ -47,6 +47,8 @@ Checks GitHub attendus:
 
 Le nom exact peut suivre le workflow GitHub Actions, mais la couverture des domaines ci-dessus est obligatoire.
 
+La gate de couverture Rust attendue par GitHub est versionnee dans `config/coverage-gate.json` afin d'eviter toute divergence entre le poste local et le pipeline.
+
 ## Regles de revue PR
 
 - au moins une revue humaine avant merge
