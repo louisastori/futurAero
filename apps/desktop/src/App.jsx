@@ -19,7 +19,24 @@ const FALLBACK_STATUS = {
   projectName: "Shell Preview",
   entityCount: 0,
   endpointCount: 0,
+  streamCount: 0,
   pluginCount: 0
+};
+
+const FALLBACK_SNAPSHOT = {
+  status: FALLBACK_STATUS,
+  details: {
+    projectId: "prj_preview",
+    formatVersion: "0.1.0",
+    defaultFrame: "world",
+    rootSceneId: null,
+    activeConfigurationId: "cfg_default"
+  },
+  entities: [],
+  endpoints: [],
+  streams: [],
+  plugins: [],
+  recentActivity: []
 };
 
 function MenuBar({ menus }) {
@@ -55,6 +72,22 @@ async function invokeBackend(command, payload) {
   }
 }
 
+function buildFallbackSnapshot(projectId = FALLBACK_STATUS.fixtureId) {
+  const fixture = FALLBACK_FIXTURES.find((entry) => entry.id === projectId) ?? FALLBACK_FIXTURES[0];
+  return {
+    ...FALLBACK_SNAPSHOT,
+    status: {
+      ...FALLBACK_STATUS,
+      fixtureId: fixture.id,
+      projectName: fixture.projectName
+    },
+    details: {
+      ...FALLBACK_SNAPSHOT.details,
+      projectId: `preview:${fixture.id}`
+    }
+  };
+}
+
 async function fetchBackendStatus() {
   return (await invokeBackend("backend_status")) ?? FALLBACK_STATUS;
 }
@@ -63,18 +96,8 @@ async function fetchFixtureProjects() {
   return (await invokeBackend("available_fixture_projects")) ?? FALLBACK_FIXTURES;
 }
 
-async function loadFixtureProject(projectId) {
-  const status = await invokeBackend("load_fixture_project", { projectId });
-  if (status) {
-    return status;
-  }
-
-  const fixture = FALLBACK_FIXTURES.find((entry) => entry.id === projectId) ?? FALLBACK_FIXTURES[0];
-  return {
-    ...FALLBACK_STATUS,
-    fixtureId: fixture.id,
-    projectName: fixture.projectName
-  };
+async function fetchProjectSnapshot(projectId) {
+  return (await invokeBackend("load_project_snapshot", { projectId })) ?? buildFallbackSnapshot(projectId);
 }
 
 function runtimeLabel(locale, runtime) {
@@ -90,9 +113,17 @@ function fixtureLabel(fixtures, fixtureId) {
   return currentFixture?.projectName ?? fixtureId;
 }
 
+function activityChannelLabel(locale, channel) {
+  if (channel === "command") {
+    return translate(locale, "ui.activity.command", channel);
+  }
+
+  return translate(locale, "ui.activity.event", channel);
+}
+
 export default function App() {
   const [locale, setLocale] = useState(defaultLocale);
-  const [backendStatus, setBackendStatus] = useState(FALLBACK_STATUS);
+  const [projectSnapshot, setProjectSnapshot] = useState(FALLBACK_SNAPSHOT);
   const [fixtureProjects, setFixtureProjects] = useState(FALLBACK_FIXTURES);
   const [selectedFixtureId, setSelectedFixtureId] = useState(FALLBACK_STATUS.fixtureId);
   const [activeMenuId, setActiveMenuId] = useState("file");
@@ -100,33 +131,39 @@ export default function App() {
 
   const menus = localizeMenuModel(locale);
   const menu = menus.find((entry) => entry.id === activeMenuId) ?? menus[0];
+  const currentStatus = projectSnapshot.status;
   const t = (key, fallback = key) => translate(locale, key, fallback);
 
   useEffect(() => {
     let mounted = true;
 
-    Promise.all([fetchFixtureProjects(), fetchBackendStatus()])
-      .then(([fixtures, status]) => {
+    async function bootstrapWorkspace() {
+      try {
+        const fixtures = await fetchFixtureProjects();
+        const nextFixtures = fixtures.length > 0 ? fixtures : FALLBACK_FIXTURES;
+        const status = await fetchBackendStatus();
+        const nextFixtureId = status.fixtureId ?? nextFixtures[0].id;
+        const snapshot = await fetchProjectSnapshot(nextFixtureId);
+
         if (!mounted) {
           return;
         }
 
-        const nextFixtures = fixtures.length > 0 ? fixtures : FALLBACK_FIXTURES;
-        const nextFixtureId = status.fixtureId ?? nextFixtures[0].id;
-
         setFixtureProjects(nextFixtures);
-        setBackendStatus(status);
+        setProjectSnapshot(snapshot);
         setSelectedFixtureId(nextFixtureId);
-      })
-      .catch(() => {
+      } catch {
         if (!mounted) {
           return;
         }
 
         setFixtureProjects(FALLBACK_FIXTURES);
-        setBackendStatus(FALLBACK_STATUS);
+        setProjectSnapshot(buildFallbackSnapshot());
         setSelectedFixtureId(FALLBACK_STATUS.fixtureId);
-      });
+      }
+    }
+
+    bootstrapWorkspace();
 
     return () => {
       mounted = false;
@@ -139,8 +176,8 @@ export default function App() {
     setFixtureLoading(true);
 
     try {
-      const status = await loadFixtureProject(nextFixtureId);
-      setBackendStatus(status);
+      const snapshot = await fetchProjectSnapshot(nextFixtureId);
+      setProjectSnapshot(snapshot);
     } finally {
       setFixtureLoading(false);
     }
@@ -196,8 +233,8 @@ export default function App() {
           </div>
 
           <div className="status-pills">
-            <span className="status-pill">{runtimeLabel(locale, backendStatus.runtime)}</span>
-            <span className="status-pill">{backendStatus.projectName}</span>
+            <span className="status-pill">{runtimeLabel(locale, currentStatus.runtime)}</span>
+            <span className="status-pill">{currentStatus.projectName}</span>
             <span className="status-pill">
               {fixtureLoading
                 ? t("ui.fixture.loading", "Chargement...")
@@ -226,27 +263,99 @@ export default function App() {
         <aside className="workspace-left">
           <Panel
             title={t("ui.panel.project_explorer", "Explorateur de projet")}
-            accent={`${backendStatus.entityCount} ${t("ui.workspace.entities", "entites")}`}
+            accent={`${currentStatus.entityCount} ${t("ui.workspace.entities", "entites")}`}
           >
             <ul className="tree-list">
-              <li>{t("ui.workspace.root", "Workspace FutureAero")}</li>
-              <li>{t("ui.workspace.robot_cell", "Cellule robotique")}</li>
-              <li>{t("ui.workspace.simulation", "Simulation")}</li>
-              <li>{t("ui.workspace.integration", "Integration")}</li>
-              <li>{t("ui.workspace.plugins", "Plugins")}</li>
+              <li className="tree-root">{currentStatus.projectName}</li>
+
+              <li className="tree-section">
+                <div className="tree-section-title">{t("ui.workspace.entities_section", "Entites")}</div>
+                <ul className="tree-sublist">
+                  {projectSnapshot.entities.length > 0 ? (
+                    projectSnapshot.entities.map((entity) => (
+                      <li key={entity.id} className="tree-row">
+                        <span>{entity.name}</span>
+                        <span className="tree-meta">{entity.entityType}</span>
+                      </li>
+                    ))
+                  ) : (
+                    <li className="tree-empty">{t("ui.workspace.empty_section", "Aucun element")}</li>
+                  )}
+                </ul>
+              </li>
+
+              <li className="tree-section">
+                <div className="tree-section-title">{t("ui.workspace.endpoints_section", "Endpoints")}</div>
+                <ul className="tree-sublist">
+                  {projectSnapshot.endpoints.length > 0 ? (
+                    projectSnapshot.endpoints.map((endpoint) => (
+                      <li key={endpoint.id} className="tree-row">
+                        <span>{endpoint.name}</span>
+                        <span className="tree-meta">{endpoint.endpointType}</span>
+                      </li>
+                    ))
+                  ) : (
+                    <li className="tree-empty">{t("ui.workspace.empty_section", "Aucun element")}</li>
+                  )}
+                </ul>
+              </li>
+
+              <li className="tree-section">
+                <div className="tree-section-title">{t("ui.workspace.streams_section", "Flux")}</div>
+                <ul className="tree-sublist">
+                  {projectSnapshot.streams.length > 0 ? (
+                    projectSnapshot.streams.map((stream) => (
+                      <li key={stream.id} className="tree-row">
+                        <span>{stream.name}</span>
+                        <span className="tree-meta">{stream.direction}</span>
+                      </li>
+                    ))
+                  ) : (
+                    <li className="tree-empty">{t("ui.workspace.empty_section", "Aucun element")}</li>
+                  )}
+                </ul>
+              </li>
+
+              <li className="tree-section">
+                <div className="tree-section-title">{t("ui.workspace.plugins_section", "Plugins")}</div>
+                <ul className="tree-sublist">
+                  {projectSnapshot.plugins.length > 0 ? (
+                    projectSnapshot.plugins.map((plugin) => (
+                      <li key={plugin.pluginId} className="tree-row">
+                        <span>{plugin.pluginId}</span>
+                        <span className="tree-meta">
+                          {plugin.enabled
+                            ? t("ui.workspace.enabled", "active")
+                            : t("ui.workspace.disabled", "inactive")}
+                        </span>
+                      </li>
+                    ))
+                  ) : (
+                    <li className="tree-empty">{t("ui.workspace.empty_section", "Aucun element")}</li>
+                  )}
+                </ul>
+              </li>
             </ul>
           </Panel>
 
           <Panel title={t("ui.panel.properties", "Proprietes")} accent="F4">
             <dl className="property-grid">
               <dt>{t("ui.property.project", "Projet")}</dt>
-              <dd>{backendStatus.projectName}</dd>
+              <dd>{currentStatus.projectName}</dd>
+              <dt>{t("ui.property.project_id", "ID projet")}</dt>
+              <dd>{projectSnapshot.details.projectId}</dd>
               <dt>{t("ui.property.runtime", "Runtime")}</dt>
-              <dd>{runtimeLabel(locale, backendStatus.runtime)}</dd>
+              <dd>{runtimeLabel(locale, currentStatus.runtime)}</dd>
+              <dt>{t("ui.property.default_frame", "Repere par defaut")}</dt>
+              <dd>{projectSnapshot.details.defaultFrame}</dd>
+              <dt>{t("ui.property.root_scene", "Scene racine")}</dt>
+              <dd>{projectSnapshot.details.rootSceneId ?? "-"}</dd>
               <dt>{t("ui.property.endpoints", "Endpoints")}</dt>
-              <dd>{backendStatus.endpointCount}</dd>
+              <dd>{currentStatus.endpointCount}</dd>
+              <dt>{t("ui.property.streams", "Flux")}</dt>
+              <dd>{currentStatus.streamCount}</dd>
               <dt>{t("ui.property.plugins", "Plugins")}</dt>
-              <dd>{backendStatus.pluginCount}</dd>
+              <dd>{currentStatus.pluginCount}</dd>
               <dt>{t("ui.property.language", "Langue")}</dt>
               <dd>{supportedLocales.find((entry) => entry.id === locale)?.label ?? locale}</dd>
               <dt>{t("ui.property.fixture", "Fixture")}</dt>
@@ -274,7 +383,10 @@ export default function App() {
             </ul>
           </Panel>
 
-          <Panel title={t("ui.panel.viewport", "Viewport 3D")} accent={t("ui.panel.scene_host", "Hote de scene")}>
+          <Panel
+            title={t("ui.panel.viewport", "Viewport 3D")}
+            accent={projectSnapshot.details.rootSceneId ?? t("ui.panel.scene_host", "Hote de scene")}
+          >
             <div className="viewport-card">
               <div className="viewport-wireframe" />
               <div className="viewport-caption">{t("ui.viewport.caption", "Shell React/Tauri")}</div>
@@ -284,9 +396,31 @@ export default function App() {
 
         <aside className="workspace-right">
           <Panel title={t("ui.panel.output", "Sortie")} accent={t("ui.panel.live", "Actif")}>
-            <pre className="output-box">
-{JSON.stringify(backendStatus, null, 2)}
-            </pre>
+            <div className="stack-block">
+              <div className="subsection-label">{t("ui.output.recent_activity", "Activite recente")}</div>
+              {projectSnapshot.recentActivity.length > 0 ? (
+                <ul className="command-list">
+                  {projectSnapshot.recentActivity.map((entry) => (
+                    <li key={entry.id} className="command-row">
+                      <div>
+                        <strong>{entry.kind}</strong>
+                        <div className="command-id">
+                          {activityChannelLabel(locale, entry.channel)} · {entry.targetId ?? currentStatus.projectName}
+                        </div>
+                      </div>
+                      <span className="shortcut">{entry.timestamp}</span>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="muted">{t("ui.output.no_activity", "Aucune activite commande/evenement.")}</p>
+              )}
+
+              <div className="subsection-label">{t("ui.output.raw_status", "Etat brut")}</div>
+              <pre className="output-box">
+{JSON.stringify(currentStatus, null, 2)}
+              </pre>
+            </div>
           </Panel>
 
           <Panel

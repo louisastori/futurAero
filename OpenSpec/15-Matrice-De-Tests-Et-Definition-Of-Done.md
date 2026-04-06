@@ -454,6 +454,22 @@ Attendu:
 - panneaux principaux accessibles depuis `View`,
 - la version francaise est la valeur par defaut du shell.
 
+### CT-014 - Snapshot desktop de fixture
+
+Etapes:
+
+1. charger `FX-004` dans le shell desktop,
+2. recuperer le snapshot backend correspondant,
+3. verifier l affichage de l arbre projet, des endpoints, des flux et des plugins,
+4. verifier l affichage de l activite recente.
+
+Attendu:
+
+- les compteurs du shell refletent le contenu `.faero`,
+- l explorateur desktop n utilise pas de liste statique,
+- les derniers `commands/events` de la fixture sont visibles dans la sortie,
+- le changement de fixture recharge un snapshot coherent.
+
 ## Seuils techniques MVP
 
 - ouverture projet vide: < 2 s sur machine dev cible

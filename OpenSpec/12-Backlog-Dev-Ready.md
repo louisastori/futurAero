@@ -634,6 +634,20 @@ Criteres:
 - panneaux principaux accessibles depuis `View`,
 - aucune action mutante ne contourne le pipeline de commandes.
 
+### ST-705 - Workspace desktop pilote par snapshots `.faero`
+
+- Priorite: `P1`
+- Modules: `faero-ui`, `faero-app`, `faero-storage`
+- Dependances: `ST-701`, `ST-704`
+- Sortie: arbre projet, proprietes et sortie relies aux fixtures backend
+
+Criteres:
+
+- le shell charge un snapshot projet depuis le backend Tauri,
+- l explorateur de projet affiche entites, endpoints, flux et plugins reels,
+- le panneau proprietes expose les metadonnees utiles du projet charge,
+- le panneau sortie affiche une activite recente commande/evenement issue de la fixture.
+
 ## Ordre de livraison recommande
 
 1. `E0`

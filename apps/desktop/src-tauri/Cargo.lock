@@ -853,7 +853,9 @@ version = "0.1.0"
 dependencies = [
  "faero-core",
  "faero-storage",
+ "faero-types",
  "serde",
+ "serde_json",
  "tauri",
  "tauri-build",
 ]
