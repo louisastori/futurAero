@@ -47,3 +47,13 @@ jobs:
         run: npm run lint
       - name: Frontend tests
         run: npm test
+
+  desktop-shell:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.94.1
+      - name: Desktop shell backend tests
+        run: cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml

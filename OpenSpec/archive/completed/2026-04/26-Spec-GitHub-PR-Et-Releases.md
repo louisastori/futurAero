@@ -1,5 +1,15 @@
 # Spec GitHub PR Et Releases
 
+Statut: implemente-et-teste puis archive le 2026-04-06
+
+Implementation de reference:
+
+- `.github/workflows/ci.yml`
+- `README.md`
+- `OpenSpec/13-Plan-Repo-Et-Scaffold.md`
+- `OpenSpec/15-Matrice-De-Tests-Et-Definition-Of-Done.md`
+- `OpenSpec/23-Politique-De-Tests-Et-Couverture-100.md`
+
 ## Objectif
 
 Definir le role exact de GitHub pour la gouvernance du depot, la protection de branche, le pipeline de PR et la publication des releases.
@@ -31,6 +41,7 @@ Checks GitHub attendus:
 - `rust / Coverage gate`
 - `frontend-scaffold / Frontend lint`
 - `frontend-scaffold / Frontend tests`
+- `desktop-shell / Desktop shell backend tests`
 
 Le nom exact peut suivre le workflow GitHub Actions, mais la couverture des domaines ci-dessus est obligatoire.
 
@@ -68,4 +79,3 @@ Le pipeline de release doit a terme permettre:
 - les checks requis sont listes explicitement
 - les PR et releases ont un workflow GitHub lisible
 - la politique de merge est coherente avec la CI du depot
-

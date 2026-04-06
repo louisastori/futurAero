@@ -337,8 +337,8 @@ Role GitHub attendu:
 - `22-Spec-Plugin-SDK`: `faero-plugin-host`
 - `23-Politique-De-Tests-Et-Couverture-100`: repo entier
 - `24-Spec-Connectivite-Sans-Fil-Et-Telemetrie`: `faero-integration`
-- `25-Spec-UI-Workspace-Et-Menus`: `faero-app`, `faero-ui`
-- `26-Spec-GitHub-PR-Et-Releases`: repo entier
+- `archive/completed/2026-04/25-Spec-UI-Workspace-Et-Menus`: `apps/desktop`, `packages/ui`
+- `archive/completed/2026-04/26-Spec-GitHub-PR-Et-Releases`: repo entier
 
 ## Livrable scaffold accepte
 

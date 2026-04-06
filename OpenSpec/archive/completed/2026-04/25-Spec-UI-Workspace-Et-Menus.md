@@ -1,5 +1,15 @@
 # Spec UI Workspace Et Menus
 
+Statut: implemente-et-teste puis archive le 2026-04-06
+
+Implementation de reference:
+
+- `apps/desktop/src/App.jsx`
+- `apps/desktop/src/styles.css`
+- `packages/ui/src/menu-model.mjs`
+- `packages/ui/src/i18n.mjs`
+- `packages/ui/src/menu-model.test.mjs`
+
 ## Objectif
 
 Definir un workspace desktop avec une barre de menus proche de Visual Studio, tout en restant adaptee a un logiciel FutureAero de CAO, simulation, robotique et jumeau numerique.
@@ -160,5 +170,5 @@ Ordre recommande:
 - le shell desktop expose les menus top-level dans l'ordre defini,
 - chaque item de menu est relie a un `command id`,
 - les panneaux principaux sont pilotables depuis `View`,
-- les commandes `Build`, `Debug`, `Test` et `Analyze` sont distinctes et non melangees.
-
+- les commandes `Build`, `Debug`, `Test` et `Analyze` sont distinctes et non melangees,
+- l'application privilegie le francais par defaut et expose l'anglais et l'espagnol comme langues secondaires du shell.

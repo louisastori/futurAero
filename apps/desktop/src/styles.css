@@ -39,6 +39,8 @@ button {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
   padding: 14px 18px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.08);
   background: rgba(10, 15, 23, 0.9);
@@ -77,6 +79,45 @@ button {
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
+}
+
+.header-right {
+  display: grid;
+  gap: 10px;
+  justify-items: end;
+}
+
+.header-controls {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.control-group {
+  display: grid;
+  gap: 6px;
+  min-width: 180px;
+}
+
+.control-group span {
+  font-size: 0.72rem;
+  color: #8ea2ba;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.shell-select {
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 10px;
+  background: rgba(7, 11, 17, 0.88);
+  color: #e6edf7;
+  padding: 10px 12px;
+  min-width: 180px;
+}
+
+.shell-select:disabled {
+  opacity: 0.65;
 }
 
 .status-pill {
@@ -262,3 +303,13 @@ button {
   }
 }
 
+@media (max-width: 900px) {
+  .header-right {
+    width: 100%;
+    justify-items: start;
+  }
+
+  .header-controls {
+    justify-content: start;
+  }
+}

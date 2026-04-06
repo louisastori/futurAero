@@ -169,7 +169,9 @@ Ciblent:
 - inspecteur de proprietes,
 - affichage jobs,
 - affichage suggestion IA,
-- structure de menus desktop.
+- structure de menus desktop,
+- localisation FR par defaut avec EN/ES disponibles,
+- chargement des fixtures desktop via backend.
 
 ## Fixtures officielles MVP
 
@@ -442,13 +444,15 @@ Etapes:
 
 1. charger le menu model desktop,
 2. verifier l'ordre des menus top-level,
-3. verifier que chaque item actionnable expose une commande.
+3. verifier que chaque item actionnable expose une commande,
+4. verifier la localisation FR par defaut puis EN/ES en secondaire.
 
 Attendu:
 
 - ordre stable des menus,
 - aucune commande vide,
-- panneaux principaux accessibles depuis `View`.
+- panneaux principaux accessibles depuis `View`,
+- la version francaise est la valeur par defaut du shell.
 
 ## Seuils techniques MVP
 
