@@ -9,6 +9,8 @@ Implementation de reference:
 - `packages/ui/src/menu-model.mjs`
 - `packages/ui/src/i18n.mjs`
 - `packages/ui/src/menu-model.test.mjs`
+- `packages/ui/src/workspace-layout.mjs`
+- `packages/ui/src/workspace-layout.test.mjs`
 
 ## Objectif
 
@@ -170,5 +172,6 @@ Ordre recommande:
 - le shell desktop expose les menus top-level dans l'ordre defini,
 - chaque item de menu est relie a un `command id`,
 - les panneaux principaux sont pilotables depuis `View`,
+- les panneaux principaux peuvent etre replies puis rouverts sans perdre le contexte courant,
 - les commandes `Build`, `Debug`, `Test` et `Analyze` sont distinctes et non melangees,
 - l'application privilegie le francais par defaut et expose l'anglais et l'espagnol comme langues secondaires du shell.

@@ -172,7 +172,10 @@ button {
 
 .workspace {
   display: grid;
-  grid-template-columns: minmax(240px, 290px) minmax(0, 1fr) minmax(240px, 320px);
+  grid-template-columns:
+    var(--workspace-left-column, minmax(240px, 290px))
+    minmax(0, 1fr)
+    var(--workspace-right-column, minmax(260px, 360px));
   gap: 12px;
   padding: 12px;
 }
@@ -197,9 +200,18 @@ button {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 10px;
   padding: 10px 12px;
   background: rgba(255, 255, 255, 0.03);
   border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.panel-header-main {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 1 1 auto;
 }
 
 .panel-title {
@@ -207,11 +219,42 @@ button {
   font-weight: 600;
   letter-spacing: 0.04em;
   text-transform: uppercase;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .panel-accent {
   color: #92b6ff;
   font-size: 0.78rem;
+  white-space: nowrap;
+}
+
+.panel-toggle {
+  width: 28px;
+  height: 28px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.03);
+  color: #d8e6f7;
+  cursor: pointer;
+  flex: 0 0 auto;
+}
+
+.panel-toggle:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.panel-collapsed .panel-header {
+  border-bottom: 0;
+}
+
+.workspace-column-collapsed .panel {
+  overflow: hidden;
+}
+
+.workspace-column-collapsed .panel-accent {
+  display: none;
 }
 
 .panel-body {

@@ -173,6 +173,7 @@ Ciblent:
 - structure de menus desktop,
 - localisation FR par defaut avec EN/ES disponibles,
 - chargement des fixtures desktop via backend,
+- panneaux retractables et rouvrables sans reset de session,
 - panneau de discussion IA locale avec etats vide, charge, reponse et fallback.
 
 ## Fixtures officielles MVP
@@ -503,6 +504,22 @@ Attendu:
 - le contexte du projet courant est visible dans la reponse ou ses references,
 - le modele actif ou le fallback local est explicite,
 - aucune mutation du projet n est appliquee silencieusement.
+
+### CT-017 - Repli et reouverture des panneaux workspace
+
+Etapes:
+
+1. ouvrir le shell desktop sur une fixture,
+2. replier `Explorateur de projet`, `Surface de commandes` et `Sortie`,
+3. verifier que le layout reste utilisable,
+4. rouvrir les panneaux depuis l entete du panneau ou via `View`.
+
+Attendu:
+
+- le corps des panneaux se replie sans crash,
+- les colonnes laterales peuvent rester en mode compact,
+- la session chargee, les compteurs et le contexte courant sont conserves,
+- la reouverture remet le contenu precedent sans rechargement force.
 
 ## Seuils techniques MVP
 

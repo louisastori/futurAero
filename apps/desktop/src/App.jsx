@@ -1,9 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 
 import {
+  defaultWorkspacePanels,
   defaultLocale,
+  getWorkspaceColumnState,
   localizeMenuModel,
+  panelIdFromCommand,
   supportedLocales,
+  toggleWorkspacePanel,
   translate
 } from "@futureaero/ui";
 
@@ -67,14 +71,28 @@ function MenuBar({ menus, activeMenuId, onSelect }) {
   );
 }
 
-function Panel({ title, children, accent }) {
+function Panel({ title, children, accent, collapsed = false, onToggle, toggleLabel }) {
   return (
-    <section className="panel">
+    <section className={collapsed ? "panel panel-collapsed" : "panel"}>
       <header className="panel-header">
-        <span className="panel-title">{title}</span>
-        {accent ? <span className="panel-accent">{accent}</span> : null}
+        <div className="panel-header-main">
+          <span className="panel-title">{title}</span>
+          {accent ? <span className="panel-accent">{accent}</span> : null}
+        </div>
+        {onToggle ? (
+          <button
+            className="panel-toggle"
+            type="button"
+            onClick={onToggle}
+            aria-expanded={!collapsed}
+            aria-label={toggleLabel}
+            title={toggleLabel}
+          >
+            {collapsed ? "+" : "−"}
+          </button>
+        ) : null}
       </header>
-      <div className="panel-body">{children}</div>
+      {collapsed ? null : <div className="panel-body">{children}</div>}
     </section>
   );
 }
@@ -252,17 +270,33 @@ export default function App() {
   const [aiMessages, setAiMessages] = useState([]);
   const [aiDraft, setAiDraft] = useState("");
   const [aiBusy, setAiBusy] = useState(false);
+  const [panelState, setPanelState] = useState(defaultWorkspacePanels);
   const aiInputRef = useRef(null);
 
   const menus = localizeMenuModel(locale);
   const menu = menus.find((entry) => entry.id === activeMenuId) ?? menus[0];
   const currentStatus = projectSnapshot.status;
   const t = (key, fallback = key) => translate(locale, key, fallback);
+  const { leftExpanded, rightExpanded } = getWorkspaceColumnState(panelState);
+  const workspaceStyle = {
+    "--workspace-left-column": leftExpanded ? "minmax(240px, 290px)" : "84px",
+    "--workspace-right-column": rightExpanded ? "minmax(260px, 360px)" : "84px"
+  };
   const starterPrompts = [
     t("ui.ai.prompt.summary", "Resume le projet courant"),
     t("ui.ai.prompt.integration", "Quels endpoints et flux sont relies a ce projet ?"),
     t("ui.ai.prompt.next_step", "Quel est le prochain jalon technique concret ?")
   ];
+
+  function togglePanel(panelId) {
+    setPanelState((previous) => toggleWorkspacePanel(previous, panelId));
+  }
+
+  function panelToggleLabel(panelId) {
+    return panelState[panelId]
+      ? t("ui.panel.collapse", "Replier le panneau")
+      : t("ui.panel.expand", "Rouvrir le panneau");
+  }
 
   useEffect(() => {
     let mounted = true;
@@ -310,13 +344,21 @@ export default function App() {
   }
 
   async function handleCommandExecute(commandId) {
-    if (commandId === "view.ai_assistant") {
+    const panelId = panelIdFromCommand(commandId);
+    if (panelId) {
+      const willBeVisible = !panelState[panelId];
+      setPanelState((previous) => toggleWorkspacePanel(previous, panelId));
       setCommandResult({
         commandId,
-        status: "focused",
-        message: t("ui.ai.focused", "Panneau Assistant IA local actif.")
+        status: "layout",
+        message: panelState[panelId]
+          ? t("ui.panel.collapsed_status", "Panneau replie.")
+          : t("ui.panel.expanded_status", "Panneau rouvert.")
       });
-      aiInputRef.current?.focus();
+
+      if (panelId === "aiAssistant" && willBeVisible) {
+        window.setTimeout(() => aiInputRef.current?.focus(), 0);
+      }
       return;
     }
 
@@ -465,11 +507,14 @@ export default function App() {
         </div>
       </div>
 
-      <main className="workspace">
-        <aside className="workspace-left">
+      <main className="workspace" style={workspaceStyle}>
+        <aside className={leftExpanded ? "workspace-left" : "workspace-left workspace-column-collapsed"}>
           <Panel
             title={t("ui.panel.project_explorer", "Explorateur de projet")}
             accent={`${currentStatus.entityCount} ${t("ui.workspace.entities", "entites")}`}
+            collapsed={!panelState.projectExplorer}
+            onToggle={() => togglePanel("projectExplorer")}
+            toggleLabel={panelToggleLabel("projectExplorer")}
           >
             <ul className="tree-list">
               <li className="tree-root">{currentStatus.projectName}</li>
@@ -544,7 +589,13 @@ export default function App() {
             </ul>
           </Panel>
 
-          <Panel title={t("ui.panel.properties", "Proprietes")} accent="F4">
+          <Panel
+            title={t("ui.panel.properties", "Proprietes")}
+            accent="F4"
+            collapsed={!panelState.properties}
+            onToggle={() => togglePanel("properties")}
+            toggleLabel={panelToggleLabel("properties")}
+          >
             <dl className="property-grid">
               <dt>{t("ui.property.project", "Projet")}</dt>
               <dd>{currentStatus.projectName}</dd>
@@ -571,7 +622,13 @@ export default function App() {
         </aside>
 
         <section className="workspace-center">
-          <Panel title={t("ui.panel.command_surface", "Surface de commandes")} accent={menu.label}>
+          <Panel
+            title={t("ui.panel.command_surface", "Surface de commandes")}
+            accent={menu.label}
+            collapsed={!panelState.commandSurface}
+            onToggle={() => togglePanel("commandSurface")}
+            toggleLabel={panelToggleLabel("commandSurface")}
+          >
             <ul className="command-list">
               {menu.items.map((item, index) =>
                 item.type === "separator" ? (
@@ -604,6 +661,9 @@ export default function App() {
           <Panel
             title={t("ui.panel.viewport", "Viewport 3D")}
             accent={projectSnapshot.details.rootSceneId ?? t("ui.panel.scene_host", "Hote de scene")}
+            collapsed={!panelState.viewport}
+            onToggle={() => togglePanel("viewport")}
+            toggleLabel={panelToggleLabel("viewport")}
           >
             <div className="viewport-card">
               <div className="viewport-wireframe" />
@@ -612,8 +672,14 @@ export default function App() {
           </Panel>
         </section>
 
-        <aside className="workspace-right">
-          <Panel title={t("ui.panel.ai_assistant", "Assistant IA local")} accent={assistantAccent(locale, aiRuntime)}>
+        <aside className={rightExpanded ? "workspace-right" : "workspace-right workspace-column-collapsed"}>
+          <Panel
+            title={t("ui.panel.ai_assistant", "Assistant IA local")}
+            accent={assistantAccent(locale, aiRuntime)}
+            collapsed={!panelState.aiAssistant}
+            onToggle={() => togglePanel("aiAssistant")}
+            toggleLabel={panelToggleLabel("aiAssistant")}
+          >
             <div className="stack-block">
               <div className={aiRuntime.available ? "assistant-runtime ready" : "assistant-runtime fallback"}>
                 <div className="assistant-runtime-row">
@@ -717,7 +783,13 @@ export default function App() {
             </div>
           </Panel>
 
-          <Panel title={t("ui.panel.output", "Sortie")} accent={t("ui.panel.live", "Actif")}>
+          <Panel
+            title={t("ui.panel.output", "Sortie")}
+            accent={t("ui.panel.live", "Actif")}
+            collapsed={!panelState.output}
+            onToggle={() => togglePanel("output")}
+            toggleLabel={panelToggleLabel("output")}
+          >
             <div className="stack-block">
               <div className="subsection-label">{t("ui.command.last_result", "Dernier resultat")}</div>
               {commandResult ? (
@@ -759,6 +831,9 @@ export default function App() {
           <Panel
             title={t("ui.panel.problems", "Problemes")}
             accent={t("ui.problems.none_blocking", "0 bloquant")}
+            collapsed={!panelState.problems}
+            onToggle={() => togglePanel("problems")}
+            toggleLabel={panelToggleLabel("problems")}
           >
             <p className="muted">{t("ui.output.problems", "Les checks critiques remontent ici.")}</p>
           </Panel>
