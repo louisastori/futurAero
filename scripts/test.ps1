@@ -35,3 +35,4 @@ Invoke-Checked cargo @(
 )
 Invoke-Checked cargo @("test", "--manifest-path", "apps/desktop/src-tauri/Cargo.toml")
 Invoke-Checked npm @("test")
+Invoke-Checked npm @("run", "test:e2e")

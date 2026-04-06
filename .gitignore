@@ -10,3 +10,5 @@ Thumbs.db
 examples/**/cache/
 apps/desktop/src-tauri/gen/
 artifacts/
+test-results/
+playwright-report/

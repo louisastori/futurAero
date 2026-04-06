@@ -573,6 +573,21 @@ Attendu:
 - les commandes du menu `Fichier` exposent un retour visible immediat dans la surface de commandes, meme si `Sortie` est fermee,
 - aucun bouton du shell ne reste sans couverture de test UI.
 
+### CT-021 - Pilotage navigateur de type Cypress/Playwright
+
+Etapes:
+
+1. lancer le shell web avec un backend mock injectable,
+2. piloter l interface depuis un navigateur automatise,
+3. cliquer des boutons `Executer`, changer des fixtures, rouvrir des panneaux et envoyer un message IA,
+4. verifier les effets visibles et le texte retourne a l ecran.
+
+Attendu:
+
+- une suite E2E navigateur controle l application comme un utilisateur reel,
+- le backend mock rend les tests deterministes sans dependre du runtime Tauri,
+- les chemins critiques `command surface`, `Parametres` et `chat gemma3` restent verifies en continu dans la CI.
+
 ## Seuils techniques MVP
 
 - ouverture projet vide: < 2 s sur machine dev cible
