@@ -689,7 +689,7 @@ mod tests {
         io::{BufRead, BufReader, Read, Write},
         net::{TcpListener, TcpStream},
         panic::{AssertUnwindSafe, catch_unwind},
-        sync::{Mutex, OnceLock},
+        sync::{Mutex, MutexGuard, OnceLock},
         thread,
     };
 
@@ -712,34 +712,51 @@ mod tests {
         LOCK.get_or_init(|| Mutex::new(()))
     }
 
-    fn with_env<R>(entries: &[(&str, Option<&str>)], test: impl FnOnce() -> R) -> R {
-        let _guard = env_lock()
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let previous = entries
-            .iter()
-            .map(|(key, _)| ((*key).to_string(), env::var(key).ok()))
-            .collect::<Vec<_>>();
+    struct TestEnvScope {
+        previous: Vec<(String, Option<String>)>,
+        _guard: MutexGuard<'static, ()>,
+    }
 
-        for (key, value) in entries {
-            match value {
-                Some(value) => unsafe { env::set_var(key, value) },
-                None => unsafe { env::remove_var(key) },
+    impl TestEnvScope {
+        fn new(entries: &[(&str, Option<&str>)]) -> Self {
+            let guard = match env_lock().lock() {
+                Ok(guard) => guard,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            let previous = entries
+                .iter()
+                .map(|(key, _)| ((*key).to_string(), env::var(key).ok()))
+                .collect::<Vec<_>>();
+
+            for (key, value) in entries {
+                match value {
+                    Some(value) => unsafe { env::set_var(key, value) },
+                    None => unsafe { env::remove_var(key) },
+                }
+            }
+
+            Self {
+                previous,
+                _guard: guard,
             }
         }
+    }
 
-        let result = catch_unwind(AssertUnwindSafe(test));
-
-        for (key, value) in previous {
-            match value {
-                Some(value) => unsafe { env::set_var(&key, value) },
-                None => unsafe { env::remove_var(&key) },
+    impl Drop for TestEnvScope {
+        fn drop(&mut self) {
+            for (key, value) in self.previous.drain(..) {
+                match value {
+                    Some(value) => unsafe { env::set_var(&key, value) },
+                    None => unsafe { env::remove_var(&key) },
+                }
             }
         }
+    }
 
-        match result {
-            Ok(value) => value,
-            Err(panic) => std::panic::resume_unwind(panic),
+    fn recover_env_lock_after_panic() -> MutexGuard<'static, ()> {
+        match env_lock().lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
         }
     }
 
@@ -823,8 +840,36 @@ mod tests {
         (endpoint, handle)
     }
 
+    fn spawn_drop_on_chat_server(
+        tags_response: MockHttpResponse,
+    ) -> (String, thread::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("listener should bind");
+        let endpoint = format!(
+            "http://127.0.0.1:{}",
+            listener
+                .local_addr()
+                .expect("listener should expose local address")
+                .port()
+        );
+
+        let handle = thread::spawn(move || {
+            let (mut tags_stream, _) = listener.accept().expect("tag connection should arrive");
+            let tags_path = read_request_path(&mut tags_stream);
+            assert_eq!(tags_path, "/api/tags");
+            write_response(&mut tags_stream, &tags_response);
+            drop(tags_stream);
+
+            let (mut chat_stream, _) = listener.accept().expect("chat connection should arrive");
+            let chat_path = read_request_path(&mut chat_stream);
+            assert_eq!(chat_path, "/api/chat");
+            drop(chat_stream);
+        });
+
+        (endpoint, handle)
+    }
+
     fn sample_document() -> ProjectDocument {
-        let mut document = ProjectDocument::empty("AI Demo");
+        let mut document = ProjectDocument::empty("AI Demo".to_string());
         document.metadata.project_id = "prj_ai_001".to_string();
         document.nodes.insert(
             "ent_cell_001".to_string(),
@@ -984,6 +1029,26 @@ mod tests {
     }
 
     #[test]
+    fn combine_warnings_covers_all_match_arms() {
+        assert_eq!(
+            combine_warnings(
+                Some("primary warning".to_string()),
+                Some("secondary warning".to_string())
+            ),
+            Some("primary warning; secondary warning".to_string())
+        );
+        assert_eq!(
+            combine_warnings(Some("primary warning".to_string()), None),
+            Some("primary warning".to_string())
+        );
+        assert_eq!(
+            combine_warnings(None, Some("secondary warning".to_string())),
+            Some("secondary warning".to_string())
+        );
+        assert_eq!(combine_warnings(None, None), None);
+    }
+
+    #[test]
     fn project_summary_contains_core_workspace_counts() {
         let summary = build_project_summary(&sample_document());
 
@@ -1038,71 +1103,65 @@ mod tests {
 
     #[test]
     fn runtime_config_defaults_and_overrides_are_deterministic() {
-        with_env(
-            &[
+        {
+            let _env = TestEnvScope::new(&[
                 ("FUTUREAERO_OLLAMA_ENDPOINT", None),
                 ("FUTUREAERO_OLLAMA_TIMEOUT_SECS", None),
                 ("FUTUREAERO_OLLAMA_MODEL", None),
-            ],
-            || {
-                let config = AiRuntimeConfig::from_env();
-                assert_eq!(config.endpoint, DEFAULT_OLLAMA_ENDPOINT);
-                assert_eq!(config.timeout_secs, DEFAULT_TIMEOUT_SECS);
-                assert_eq!(
-                    config.preferred_models,
-                    vec![
-                        "gemma3:27b".to_string(),
-                        "gemma3:12b".to_string(),
-                        "gemma3:4b".to_string(),
-                        "phi3:mini".to_string()
-                    ]
-                );
-            },
-        );
+            ]);
+            let config = AiRuntimeConfig::from_env();
+            assert_eq!(config.endpoint, DEFAULT_OLLAMA_ENDPOINT);
+            assert_eq!(config.timeout_secs, DEFAULT_TIMEOUT_SECS);
+            assert_eq!(
+                config.preferred_models,
+                vec![
+                    "gemma3:27b".to_string(),
+                    "gemma3:12b".to_string(),
+                    "gemma3:4b".to_string(),
+                    "phi3:mini".to_string()
+                ]
+            );
+        }
 
-        with_env(
-            &[
+        {
+            let _env = TestEnvScope::new(&[
                 ("FUTUREAERO_OLLAMA_ENDPOINT", Some("http://127.0.0.1:18080")),
                 ("FUTUREAERO_OLLAMA_TIMEOUT_SECS", Some("9")),
                 ("FUTUREAERO_OLLAMA_MODEL", Some("phi3:mini")),
-            ],
-            || {
-                let config = AiRuntimeConfig::from_env();
-                assert_eq!(config.endpoint, "http://127.0.0.1:18080");
-                assert_eq!(config.timeout_secs, 9);
-                assert_eq!(
-                    config.preferred_models,
-                    vec![
-                        "phi3:mini".to_string(),
-                        "gemma3:27b".to_string(),
-                        "gemma3:12b".to_string(),
-                        "gemma3:4b".to_string()
-                    ]
-                );
-            },
-        );
+            ]);
+            let config = AiRuntimeConfig::from_env();
+            assert_eq!(config.endpoint, "http://127.0.0.1:18080");
+            assert_eq!(config.timeout_secs, 9);
+            assert_eq!(
+                config.preferred_models,
+                vec![
+                    "phi3:mini".to_string(),
+                    "gemma3:27b".to_string(),
+                    "gemma3:12b".to_string(),
+                    "gemma3:4b".to_string()
+                ]
+            );
+        }
 
-        with_env(
-            &[
+        {
+            let _env = TestEnvScope::new(&[
                 ("FUTUREAERO_OLLAMA_ENDPOINT", Some("  ")),
                 ("FUTUREAERO_OLLAMA_TIMEOUT_SECS", Some("invalid")),
                 ("FUTUREAERO_OLLAMA_MODEL", Some("   ")),
-            ],
-            || {
-                let config = AiRuntimeConfig::from_env();
-                assert_eq!(config.endpoint, DEFAULT_OLLAMA_ENDPOINT);
-                assert_eq!(config.timeout_secs, DEFAULT_TIMEOUT_SECS);
-                assert_eq!(
-                    config.preferred_models,
-                    vec![
-                        "gemma3:27b".to_string(),
-                        "gemma3:12b".to_string(),
-                        "gemma3:4b".to_string(),
-                        "phi3:mini".to_string()
-                    ]
-                );
-            },
-        );
+            ]);
+            let config = AiRuntimeConfig::from_env();
+            assert_eq!(config.endpoint, DEFAULT_OLLAMA_ENDPOINT);
+            assert_eq!(config.timeout_secs, DEFAULT_TIMEOUT_SECS);
+            assert_eq!(
+                config.preferred_models,
+                vec![
+                    "gemma3:27b".to_string(),
+                    "gemma3:12b".to_string(),
+                    "gemma3:4b".to_string(),
+                    "phi3:mini".to_string()
+                ]
+            );
+        }
     }
 
     #[test]
@@ -1115,39 +1174,37 @@ mod tests {
             },
         )]);
 
-        with_env(
-            &[
+        {
+            let _env = TestEnvScope::new(&[
                 ("FUTUREAERO_OLLAMA_ENDPOINT", Some(endpoint.as_str())),
                 ("FUTUREAERO_OLLAMA_MODEL", None),
-            ],
-            || {
-                let status = query_runtime_status();
-                assert!(status.available);
-                assert_eq!(status.provider, "ollama");
-                assert_eq!(status.active_model, Some("gemma3:27b".to_string()));
-                assert_eq!(
-                    status.gemma3_models,
-                    vec!["gemma3:4b".to_string(), "gemma3:27b".to_string()]
-                );
-                assert_eq!(
-                    status.available_models,
-                    vec![
-                        "phi3:mini".to_string(),
-                        "gemma3:4b".to_string(),
-                        "gemma3:27b".to_string()
-                    ]
-                );
-            },
-        );
+            ]);
+            let status = query_runtime_status();
+            assert!(status.available);
+            assert_eq!(status.provider, "ollama");
+            assert_eq!(status.active_model, Some("gemma3:27b".to_string()));
+            assert_eq!(
+                status.gemma3_models,
+                vec!["gemma3:4b".to_string(), "gemma3:27b".to_string()]
+            );
+            assert_eq!(
+                status.available_models,
+                vec![
+                    "phi3:mini".to_string(),
+                    "gemma3:4b".to_string(),
+                    "gemma3:27b".to_string()
+                ]
+            );
+        }
         handle.join().expect("server thread should finish");
 
-        let unavailable = with_env(
-            &[
+        let unavailable = {
+            let _env = TestEnvScope::new(&[
                 ("FUTUREAERO_OLLAMA_ENDPOINT", Some("http://127.0.0.1:1")),
                 ("FUTUREAERO_OLLAMA_MODEL", None),
-            ],
-            query_runtime_status,
-        );
+            ]);
+            query_runtime_status()
+        };
         assert!(!unavailable.available);
         assert_eq!(unavailable.mode, "fallback-local");
         assert!(unavailable.warning.is_some());
@@ -1155,9 +1212,89 @@ mod tests {
 
     #[test]
     fn chat_with_project_rejects_empty_message() {
-        let error = chat_with_project(&sample_document(), "fr", &[], "   ", None)
+        let _error = chat_with_project(&sample_document(), "fr", &[], "   ", None)
             .expect_err("empty message should fail");
-        assert!(matches!(error, AiError::EmptyMessage));
+    }
+
+    #[test]
+    fn query_runtime_status_handles_invalid_tag_payloads() {
+        let (endpoint, handle) = spawn_mock_ollama_server(vec![(
+            "/api/tags",
+            MockHttpResponse {
+                status: 200,
+                body: r#"{"models":"broken"}"#.to_string(),
+            },
+        )]);
+
+        let status = {
+            let _env = TestEnvScope::new(&[
+                ("FUTUREAERO_OLLAMA_ENDPOINT", Some(endpoint.as_str())),
+                ("FUTUREAERO_OLLAMA_MODEL", None),
+            ]);
+            query_runtime_status()
+        };
+        handle.join().expect("server thread should finish");
+
+        assert!(!status.available);
+        assert_eq!(status.mode, "fallback-local");
+    }
+
+    #[test]
+    fn chat_with_project_falls_back_when_chat_connection_or_payload_is_invalid() {
+        let document = sample_document();
+
+        let (disconnecting_endpoint, disconnecting_handle) =
+            spawn_drop_on_chat_server(MockHttpResponse {
+                status: 200,
+                body: r#"{"models":[{"name":"gemma3:27b"}]}"#.to_string(),
+            });
+        let disconnecting_response = {
+            let _env = TestEnvScope::new(&[
+                (
+                    "FUTUREAERO_OLLAMA_ENDPOINT",
+                    Some(disconnecting_endpoint.as_str()),
+                ),
+                ("FUTUREAERO_OLLAMA_MODEL", None),
+            ]);
+            chat_with_project(&document, "fr", &[], "Resume le projet", Some("gemma3:27b"))
+        }
+        .expect("disconnecting chat should fallback");
+        disconnecting_handle
+            .join()
+            .expect("disconnecting server thread should finish");
+        assert_eq!(disconnecting_response.source, "fallback-local");
+
+        let (invalid_payload_endpoint, invalid_payload_handle) = spawn_mock_ollama_server(vec![
+            (
+                "/api/tags",
+                MockHttpResponse {
+                    status: 200,
+                    body: r#"{"models":[{"name":"gemma3:27b"}]}"#.to_string(),
+                },
+            ),
+            (
+                "/api/chat",
+                MockHttpResponse {
+                    status: 200,
+                    body: r#"{"message":"broken"}"#.to_string(),
+                },
+            ),
+        ]);
+        let invalid_payload_response = {
+            let _env = TestEnvScope::new(&[
+                (
+                    "FUTUREAERO_OLLAMA_ENDPOINT",
+                    Some(invalid_payload_endpoint.as_str()),
+                ),
+                ("FUTUREAERO_OLLAMA_MODEL", None),
+            ]);
+            chat_with_project(&document, "fr", &[], "Resume le projet", Some("gemma3:27b"))
+        }
+        .expect("invalid chat payload should fallback");
+        invalid_payload_handle
+            .join()
+            .expect("invalid payload server thread should finish");
+        assert_eq!(invalid_payload_response.source, "fallback-local");
     }
 
     #[test]
@@ -1191,21 +1328,19 @@ mod tests {
             ),
         ]);
 
-        let response = with_env(
-            &[
+        let response = {
+            let _env = TestEnvScope::new(&[
                 ("FUTUREAERO_OLLAMA_ENDPOINT", Some(endpoint.as_str())),
                 ("FUTUREAERO_OLLAMA_MODEL", None),
-            ],
-            || {
-                chat_with_project(
-                    &document,
-                    "fr",
-                    &history,
-                    "Resume le projet",
-                    Some("gemma3:27b"),
-                )
-            },
-        )
+            ]);
+            chat_with_project(
+                &document,
+                "fr",
+                &history,
+                "Resume le projet",
+                Some("gemma3:27b"),
+            )
+        }
         .expect("chat should succeed");
         handle.join().expect("server thread should finish");
 
@@ -1241,10 +1376,11 @@ mod tests {
                 body: r#"{"models":[]}"#.to_string(),
             },
         )]);
-        let empty_response = with_env(
-            &[("FUTUREAERO_OLLAMA_ENDPOINT", Some(empty_endpoint.as_str()))],
-            || chat_with_project(&document, "en", &[], "Explain the project", None),
-        )
+        let empty_response = {
+            let _env =
+                TestEnvScope::new(&[("FUTUREAERO_OLLAMA_ENDPOINT", Some(empty_endpoint.as_str()))]);
+            chat_with_project(&document, "en", &[], "Explain the project", None)
+        }
         .expect("fallback response should still succeed");
         empty_handle.join().expect("server thread should finish");
 
@@ -1275,24 +1411,22 @@ mod tests {
                 },
             ),
         ]);
-        let failing_response = with_env(
-            &[
+        let failing_response = {
+            let _env = TestEnvScope::new(&[
                 (
                     "FUTUREAERO_OLLAMA_ENDPOINT",
                     Some(failing_endpoint.as_str()),
                 ),
                 ("FUTUREAERO_OLLAMA_MODEL", None),
-            ],
-            || {
-                chat_with_project(
-                    &document,
-                    "es",
-                    &[],
-                    "Resume el proyecto",
-                    Some("gemma3:27b"),
-                )
-            },
-        )
+            ]);
+            chat_with_project(
+                &document,
+                "es",
+                &[],
+                "Resume el proyecto",
+                Some("gemma3:27b"),
+            )
+        }
         .expect("chat failure should fallback");
         failing_handle.join().expect("server thread should finish");
 
@@ -1317,10 +1451,11 @@ mod tests {
             },
         )]);
 
-        let response = with_env(
-            &[("FUTUREAERO_OLLAMA_ENDPOINT", Some(endpoint.as_str()))],
-            || chat_with_project(&document, "fr", &[], "Resume le projet", None),
-        )
+        let response = {
+            let _env =
+                TestEnvScope::new(&[("FUTUREAERO_OLLAMA_ENDPOINT", Some(endpoint.as_str()))]);
+            chat_with_project(&document, "fr", &[], "Resume le projet", None)
+        }
         .expect("tag failure should fallback");
         handle.join().expect("server thread should finish");
 
@@ -1485,14 +1620,39 @@ mod tests {
     }
 
     #[test]
+    fn recover_env_lock_after_panic_returns_clean_guard_when_not_poisoned() {
+        env_lock().clear_poison();
+        let _guard = recover_env_lock_after_panic();
+    }
+
+    #[test]
     fn with_env_restores_previous_values_even_after_panic() {
         unsafe { env::set_var("FUTUREAERO_TEST_SENTINEL", "sentinel") };
         let panic_result = catch_unwind(AssertUnwindSafe(|| {
-            with_env(&[("FUTUREAERO_TEST_SENTINEL", Some("temporary"))], || {
-                panic!("forced test panic")
-            });
+            let _env = TestEnvScope::new(&[("FUTUREAERO_TEST_SENTINEL", Some("temporary"))]);
+            assert_eq!(
+                env::var("FUTUREAERO_TEST_SENTINEL").ok().as_deref(),
+                Some("temporary")
+            );
+            panic!("forced test panic")
         }));
         assert!(panic_result.is_err());
+        assert_eq!(
+            env::var("FUTUREAERO_TEST_SENTINEL").ok().as_deref(),
+            Some("sentinel")
+        );
+
+        {
+            let _guard = recover_env_lock_after_panic();
+        }
+
+        {
+            let _env = TestEnvScope::new(&[("FUTUREAERO_TEST_SENTINEL", Some("restored"))]);
+            assert_eq!(
+                env::var("FUTUREAERO_TEST_SENTINEL").ok().as_deref(),
+                Some("restored")
+            );
+        }
         assert_eq!(
             env::var("FUTUREAERO_TEST_SENTINEL").ok().as_deref(),
             Some("sentinel")

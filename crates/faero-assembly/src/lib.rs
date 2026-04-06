@@ -161,4 +161,35 @@ mod tests {
             Err(AssemblyError::InvalidConstraintGraph)
         );
     }
+
+    #[test]
+    fn rejects_unknown_occurrences_and_duplicate_reverse_pairs() {
+        assert_eq!(
+            solve_assembly(
+                &occurrences(),
+                &[MateConstraint {
+                    left_occurrence_id: "occ_a".to_string(),
+                    right_occurrence_id: "missing".to_string(),
+                }],
+            ),
+            Err(AssemblyError::InvalidConstraintGraph)
+        );
+
+        assert_eq!(
+            solve_assembly(
+                &occurrences(),
+                &[
+                    MateConstraint {
+                        left_occurrence_id: "occ_b".to_string(),
+                        right_occurrence_id: "occ_a".to_string(),
+                    },
+                    MateConstraint {
+                        left_occurrence_id: "occ_a".to_string(),
+                        right_occurrence_id: "occ_b".to_string(),
+                    },
+                ],
+            ),
+            Err(AssemblyError::InvalidConstraintGraph)
+        );
+    }
 }

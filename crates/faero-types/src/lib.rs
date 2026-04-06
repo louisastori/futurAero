@@ -279,7 +279,7 @@ pub struct ProjectDocument {
 }
 
 impl ProjectDocument {
-    pub fn empty(name: impl Into<String>) -> Self {
+    pub fn empty(name: String) -> Self {
         Self {
             metadata: ProjectMetadata::scaffold(name),
             ..Self::default()
@@ -293,7 +293,7 @@ mod tests {
 
     #[test]
     fn project_document_scaffold_has_expected_defaults() {
-        let document = ProjectDocument::empty("Demo");
+        let document = ProjectDocument::empty("Demo".to_string());
 
         assert_eq!(document.metadata.name, "Demo");
         assert_eq!(document.metadata.project_id, "prj_0001");

@@ -44,7 +44,7 @@ pub struct ProjectGraph {
 impl ProjectGraph {
     pub fn new(name: impl Into<String>) -> Self {
         Self {
-            document: ProjectDocument::empty(name),
+            document: ProjectDocument::empty(name.into()),
             revision_counter: 1,
             command_counter: 1,
             event_counter: 1,

@@ -82,12 +82,17 @@ mod tests {
     use super::*;
 
     fn sample_manifest(permissions: Vec<&str>) -> PluginManifest {
+        let mut permission_values = Vec::with_capacity(permissions.len());
+        for permission in permissions {
+            permission_values.push(permission.to_string());
+        }
+
         PluginManifest {
             id: "ent_plugin_001".to_string(),
             plugin_id: "plg.integration.viewer".to_string(),
             version: "0.1.0".to_string(),
             capabilities: vec!["panel".to_string()],
-            permissions: permissions.into_iter().map(str::to_string).collect(),
+            permissions: permission_values,
             entrypoints: vec!["plugins/integration-viewer/index.js".to_string()],
             compatibility: vec!["faero-core@0.1".to_string()],
             status: "installed".to_string(),
@@ -169,5 +174,22 @@ mod tests {
         assert!(permissions.contains("integration.observe"));
         assert!(permissions.contains("integration.control"));
         assert!(permissions.contains("plugin.ui.mount"));
+    }
+
+    #[test]
+    fn accepts_manifests_without_explicit_permissions() {
+        let manifest = sample_manifest(Vec::new());
+        assert_eq!(validate_manifest(&manifest), Ok(()));
+    }
+
+    #[test]
+    fn install_rejects_invalid_permissions_before_registering_plugin() {
+        let mut registry = PluginRegistry::default();
+        let invalid_manifest = sample_manifest(vec!["system.shell"]);
+
+        let _error = registry
+            .install(invalid_manifest)
+            .expect_err("invalid permissions should block installation");
+        assert_eq!(registry.installed_count(), 0);
     }
 }
