@@ -77,6 +77,7 @@ GitHub est la plateforme de reference pour appliquer cette politique:
 - GitHub Actions execute le pipeline sur `push` et `pull_request`,
 - les checks de tests, lint et couverture sont remontes comme statuts de PR,
 - le backend du shell desktop Tauri est verifie par un job dedie dans la pipeline,
+- les scripts locaux `scripts/lint.ps1` et `scripts/test.ps1` doivent couvrir le meme scope que les checks critiques GitHub,
 - le merge vers `main` est bloque si un check requis est rouge,
 - les artefacts et rapports de couverture sont attaches aux runs du pipeline.
 

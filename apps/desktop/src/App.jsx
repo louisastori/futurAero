@@ -39,11 +39,16 @@ const FALLBACK_SNAPSHOT = {
   recentActivity: []
 };
 
-function MenuBar({ menus }) {
+function MenuBar({ menus, activeMenuId, onSelect }) {
   return (
     <nav className="menu-bar" aria-label="Application menu">
       {menus.map((menu) => (
-        <button key={menu.id} className="menu-button" type="button">
+        <button
+          key={menu.id}
+          className={menu.id === activeMenuId ? "menu-button active" : "menu-button"}
+          type="button"
+          onClick={() => onSelect(menu.id)}
+        >
           {menu.label}
         </button>
       ))}
@@ -280,19 +285,11 @@ export default function App() {
         </div>
       </header>
 
-      <MenuBar menus={menus} />
+      <MenuBar menus={menus} activeMenuId={activeMenuId} onSelect={setActiveMenuId} />
 
-      <div className="toolbar">
-        {menus.map((entry) => (
-          <button
-            key={entry.id}
-            className={entry.id === activeMenuId ? "tool-button active" : "tool-button"}
-            type="button"
-            onClick={() => setActiveMenuId(entry.id)}
-          >
-            {entry.label}
-          </button>
-        ))}
+      <div className="context-bar">
+        <div className="context-title">{menu.label}</div>
+        <div className="context-meta">{menu.items.filter((item) => item.type !== "separator").length} commandes</div>
       </div>
 
       <main className="workspace">

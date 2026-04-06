@@ -41,6 +41,8 @@ Checks GitHub attendus:
 - `rust / Coverage gate`
 - `frontend-scaffold / Frontend lint`
 - `frontend-scaffold / Frontend tests`
+- `desktop-shell / Desktop shell format`
+- `desktop-shell / Desktop shell lint`
 - `desktop-shell / Desktop shell backend tests`
 
 Le nom exact peut suivre le workflow GitHub Actions, mais la couverture des domaines ci-dessus est obligatoire.

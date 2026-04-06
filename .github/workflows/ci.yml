@@ -55,5 +55,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: 1.94.1
+          components: rustfmt, clippy
+      - name: Desktop shell format
+        run: cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml --check
+      - name: Desktop shell lint
+        run: cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets -- -D warnings
       - name: Desktop shell backend tests
         run: cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml

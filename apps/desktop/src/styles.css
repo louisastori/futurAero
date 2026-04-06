@@ -136,8 +136,7 @@ button {
   border-bottom: 1px solid rgba(255, 255, 255, 0.06);
 }
 
-.menu-button,
-.tool-button {
+.menu-button {
   border: 0;
   color: #d6e1ef;
   background: transparent;
@@ -147,18 +146,28 @@ button {
 }
 
 .menu-button:hover,
-.tool-button:hover,
-.tool-button.active {
+.menu-button.active {
   background: rgba(255, 255, 255, 0.08);
 }
 
-.toolbar {
+.context-bar {
   display: flex;
-  gap: 6px;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
   padding: 8px 12px;
-  overflow-x: auto;
   border-bottom: 1px solid rgba(255, 255, 255, 0.06);
   background: rgba(11, 16, 23, 0.92);
+}
+
+.context-title {
+  font-size: 0.92rem;
+  font-weight: 600;
+}
+
+.context-meta {
+  font-size: 0.8rem;
+  color: #8ea2ba;
 }
 
 .workspace {
