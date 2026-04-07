@@ -578,6 +578,101 @@ async function executeWorkspaceCommand(commandId, currentSnapshot) {
     };
   }
 
+  if (commandId === "entity.create.robot_cell") {
+    const index = currentSnapshot.entities.length + 1;
+    return {
+      snapshot: {
+        ...appendFallbackActivity(currentSnapshot, "system", "entity.create.robot_cell", `ent_cell_${String(index).padStart(3, "0")}`),
+        status: {
+          ...currentSnapshot.status,
+          entityCount: currentSnapshot.entities.length + 1
+        },
+        entities: [
+          ...currentSnapshot.entities,
+          {
+            id: `ent_cell_${String(index).padStart(3, "0")}`,
+            entityType: "RobotCell",
+            name: `RobotCell-${String(index).padStart(3, "0")}`,
+            revision: "rev_seed",
+            status: "active",
+            detail: "3 pts | 896 mm | 3491 ms",
+            robotCellSummary: {
+              targetCount: 3,
+              pathLengthMm: 896,
+              maxSegmentMm: 470,
+              estimatedCycleTimeMs: 3491,
+              safetyZoneCount: 1,
+              warningCount: 0
+            }
+          }
+        ]
+      },
+      result: {
+        commandId,
+        status: "applied",
+        message: "cellule robotique ajoutee dans l apercu web"
+      }
+    };
+  }
+
+  if (commandId === "simulation.run.start") {
+    const robotCells = currentSnapshot.entities.filter((entity) => entity.robotCellSummary);
+    const nextEntities = [...currentSnapshot.entities];
+    if (robotCells.length === 0) {
+      nextEntities.push({
+        id: "ent_cell_001",
+        entityType: "RobotCell",
+        name: "RobotCell-001",
+        revision: "rev_seed",
+        status: "active",
+        detail: "3 pts | 896 mm | 3491 ms",
+        robotCellSummary: {
+          targetCount: 3,
+          pathLengthMm: 896,
+          maxSegmentMm: 470,
+          estimatedCycleTimeMs: 3491,
+          safetyZoneCount: 1,
+          warningCount: 0
+        }
+      });
+    }
+
+    const runIndex = nextEntities.length + 1;
+    return {
+      snapshot: {
+        ...appendFallbackActivity(currentSnapshot, "system", "simulation.run.completed", `ent_run_${String(runIndex).padStart(3, "0")}`),
+        status: {
+          ...currentSnapshot.status,
+          entityCount: nextEntities.length + 1
+        },
+        entities: [
+          ...nextEntities,
+          {
+            id: `ent_run_${String(runIndex).padStart(3, "0")}`,
+            entityType: "SimulationRun",
+            name: `SimulationRun-${String(runIndex).padStart(3, "0")}`,
+            revision: "rev_seed",
+            status: "active",
+            detail: "completed | 3497 ms | 0 coll",
+            simulationRunSummary: {
+              status: "completed",
+              collisionCount: 0,
+              cycleTimeMs: 3497,
+              maxTrackingErrorMm: 0.27,
+              energyEstimateJ: 74.82,
+              timelineSampleCount: 12
+            }
+          }
+        ]
+      },
+      result: {
+        commandId,
+        status: "applied",
+        message: "run de simulation termine dans l apercu web"
+      }
+    };
+  }
+
   return {
     snapshot: appendFallbackActivity(currentSnapshot, "system", "command.simulated", commandId),
     result: {
@@ -725,6 +820,24 @@ function latestParametricPartFromSnapshot(snapshot) {
   return parametricParts[parametricParts.length - 1] ?? null;
 }
 
+function formatRobotCellSummary(locale, robotCellSummary) {
+  return `${robotCellSummary.targetCount} pts | ${formatDecimal(locale, robotCellSummary.pathLengthMm, 0)} mm | ${robotCellSummary.estimatedCycleTimeMs} ms`;
+}
+
+function latestRobotCellFromSnapshot(snapshot) {
+  const robotCells = snapshot.entities.filter((entity) => entity.robotCellSummary);
+  return robotCells[robotCells.length - 1] ?? null;
+}
+
+function formatSimulationRunSummary(locale, simulationRunSummary) {
+  return `${simulationRunSummary.status} | ${simulationRunSummary.cycleTimeMs} ms | ${simulationRunSummary.collisionCount} coll`;
+}
+
+function latestSimulationRunFromSnapshot(snapshot) {
+  const simulationRuns = snapshot.entities.filter((entity) => entity.simulationRunSummary);
+  return simulationRuns[simulationRuns.length - 1] ?? null;
+}
+
 function parsePositiveDimension(value) {
   const parsed = Number(value);
   if (!Number.isFinite(parsed) || parsed <= 0) {
@@ -801,6 +914,10 @@ export default function App({ backend = defaultDesktopBackend }) {
   const currentStatus = projectSnapshot.status;
   const parametricParts = projectSnapshot.entities.filter((entity) => entity.partGeometry);
   const latestParametricPart = latestParametricPartFromSnapshot(projectSnapshot);
+  const robotCells = projectSnapshot.entities.filter((entity) => entity.robotCellSummary);
+  const latestRobotCell = latestRobotCellFromSnapshot(projectSnapshot);
+  const simulationRuns = projectSnapshot.entities.filter((entity) => entity.simulationRunSummary);
+  const latestSimulationRun = latestSimulationRunFromSnapshot(projectSnapshot);
   const fixtureOptions =
     selectedFixtureId && !fixtureProjects.some((fixture) => fixture.id === selectedFixtureId)
       ? [{ id: selectedFixtureId, projectName: currentStatus.projectName }, ...fixtureProjects]
@@ -1505,6 +1622,92 @@ export default function App({ backend = defaultDesktopBackend }) {
                   {t(
                     "ui.property.no_parametric_parts",
                     "Aucune piece parametrique regeneree dans cette session."
+                  )}
+                </p>
+              )}
+            </div>
+
+            <div className="property-section">
+              <div className="subsection-label">
+                {t("ui.property.robot_cells", "Cellules robotiques")}
+              </div>
+              {robotCells.length > 0 ? (
+                <div className="property-card-list">
+                  {[...robotCells].reverse().slice(0, 2).map((entity) => (
+                    <article
+                      key={entity.id}
+                      className="result-card property-card"
+                      data-robot-cell-summary={entity.id}
+                    >
+                      <strong>{entity.name}</strong>
+                      <div className="command-id">
+                        {formatRobotCellSummary(locale, entity.robotCellSummary)}
+                      </div>
+                      <div className="muted">
+                        {entity.robotCellSummary.safetyZoneCount} {t("ui.property.safety_zones", "zones safety")} | {entity.robotCellSummary.warningCount} {t("ui.property.warnings", "warning(s)")}
+                      </div>
+                      <div className="property-inline-metrics">
+                        <span>
+                          {t("ui.property.path_length", "Trajet")} {formatDecimal(locale, entity.robotCellSummary.pathLengthMm, 0)} mm
+                        </span>
+                        <span>
+                          {t("ui.property.max_segment", "Segment max")} {formatDecimal(locale, entity.robotCellSummary.maxSegmentMm, 0)} mm
+                        </span>
+                        <span data-robot-cell-targets={entity.id}>
+                          {t("ui.property.targets", "Cibles")} {entity.robotCellSummary.targetCount}
+                        </span>
+                      </div>
+                    </article>
+                  ))}
+                </div>
+              ) : (
+                <p className="muted">
+                  {t(
+                    "ui.property.no_robot_cells",
+                    "Aucune cellule robotique construite dans cette session."
+                  )}
+                </p>
+              )}
+            </div>
+
+            <div className="property-section">
+              <div className="subsection-label">
+                {t("ui.property.simulation_runs", "Runs de simulation")}
+              </div>
+              {simulationRuns.length > 0 ? (
+                <div className="property-card-list">
+                  {[...simulationRuns].reverse().slice(0, 2).map((entity) => (
+                    <article
+                      key={entity.id}
+                      className="result-card property-card"
+                      data-simulation-run-summary={entity.id}
+                    >
+                      <strong>{entity.name}</strong>
+                      <div className="command-id">
+                        {formatSimulationRunSummary(locale, entity.simulationRunSummary)}
+                      </div>
+                      <div className="muted">
+                        {t("ui.property.timeline_samples", "Echantillons timeline")} {entity.simulationRunSummary.timelineSampleCount}
+                      </div>
+                      <div className="property-inline-metrics">
+                        <span>
+                          {t("ui.property.tracking_error", "Erreur max")} {formatDecimal(locale, entity.simulationRunSummary.maxTrackingErrorMm, 2)} mm
+                        </span>
+                        <span>
+                          {t("ui.property.energy", "Energie")} {formatDecimal(locale, entity.simulationRunSummary.energyEstimateJ, 2)} J
+                        </span>
+                        <span data-simulation-run-collisions={entity.id}>
+                          {t("ui.property.collisions", "Collisions")} {entity.simulationRunSummary.collisionCount}
+                        </span>
+                      </div>
+                    </article>
+                  ))}
+                </div>
+              ) : (
+                <p className="muted">
+                  {t(
+                    "ui.property.no_simulation_runs",
+                    "Aucun run de simulation execute dans cette session."
                   )}
                 </p>
               )}

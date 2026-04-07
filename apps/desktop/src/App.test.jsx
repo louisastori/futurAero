@@ -226,6 +226,72 @@ function createMockBackend() {
           }
         ];
         snapshot.status.entityCount = snapshot.entities.length;
+      } else if (commandId === "entity.create.robot_cell") {
+        const index = snapshot.entities.length + 1;
+        snapshot.entities = [
+          ...snapshot.entities,
+          {
+            id: `ent_cell_${index.toString().padStart(3, "0")}`,
+            entityType: "RobotCell",
+            name: `RobotCell-${index.toString().padStart(3, "0")}`,
+            revision: "rev_seed",
+            status: "active",
+            detail: "3 pts | 896 mm | 3491 ms",
+            robotCellSummary: {
+              targetCount: 3,
+              pathLengthMm: 896,
+              maxSegmentMm: 470,
+              estimatedCycleTimeMs: 3491,
+              safetyZoneCount: 1,
+              warningCount: 0
+            }
+          }
+        ];
+        snapshot.status.entityCount = snapshot.entities.length;
+      } else if (commandId === "simulation.run.start") {
+        const hasRobotCell = snapshot.entities.some((entity) => entity.robotCellSummary);
+        if (!hasRobotCell) {
+          snapshot.entities = [
+            ...snapshot.entities,
+            {
+              id: "ent_cell_001",
+              entityType: "RobotCell",
+              name: "RobotCell-001",
+              revision: "rev_seed",
+              status: "active",
+              detail: "3 pts | 896 mm | 3491 ms",
+              robotCellSummary: {
+                targetCount: 3,
+                pathLengthMm: 896,
+                maxSegmentMm: 470,
+                estimatedCycleTimeMs: 3491,
+                safetyZoneCount: 1,
+                warningCount: 0
+              }
+            }
+          ];
+        }
+        const index = snapshot.entities.length + 1;
+        snapshot.entities = [
+          ...snapshot.entities,
+          {
+            id: `ent_run_${index.toString().padStart(3, "0")}`,
+            entityType: "SimulationRun",
+            name: `SimulationRun-${index.toString().padStart(3, "0")}`,
+            revision: "rev_seed",
+            status: "active",
+            detail: "completed | 3497 ms | 0 coll",
+            simulationRunSummary: {
+              status: "completed",
+              collisionCount: 0,
+              cycleTimeMs: 3497,
+              maxTrackingErrorMm: 0.27,
+              energyEstimateJ: 74.82,
+              timelineSampleCount: 12
+            }
+          }
+        ];
+        snapshot.status.entityCount = snapshot.entities.length;
       } else if (commandId === "plugin.manage") {
         const existing = snapshot.plugins[0];
         if (existing) {
@@ -523,6 +589,40 @@ describe("App shell buttons", () => {
       assert.equal(
         document.querySelector("[data-command-feedback]")?.getAttribute("data-command-feedback"),
         "build.regenerate_part"
+      );
+    });
+  });
+
+  test("creating a robot cell surfaces path and timing metrics in properties", async () => {
+    const { user } = await renderApp();
+
+    await user.click(screen.getByRole("button", { name: "Projet" }));
+    await user.click(document.querySelector('[data-command-id="entity.create.robot_cell"]'));
+
+    await waitFor(() => {
+      assert.ok(screen.getByText("Cellules robotiques"));
+      assert.ok(document.querySelector('[data-robot-cell-summary="ent_cell_002"]'));
+      assert.ok(
+        document.querySelector('[data-robot-cell-targets="ent_cell_002"]')?.textContent?.includes("3")
+      );
+    });
+  });
+
+  test("starting a simulation surfaces a completed run summary in properties", async () => {
+    const { user } = await renderApp();
+
+    await user.click(screen.getByRole("button", { name: "Debogage" }));
+    await user.click(document.querySelector('[data-command-id="simulation.run.start"]'));
+
+    await waitFor(() => {
+      assert.ok(screen.getByText("Runs de simulation"));
+      assert.ok(document.querySelector('[data-simulation-run-summary="ent_run_003"]'));
+      assert.ok(
+        document.querySelector('[data-simulation-run-collisions="ent_run_003"]')?.textContent?.includes("0")
+      );
+      assert.equal(
+        document.querySelector("[data-command-feedback]")?.getAttribute("data-command-feedback"),
+        "simulation.run.start"
       );
     });
   });

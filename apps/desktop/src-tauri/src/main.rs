@@ -19,6 +19,8 @@ use faero_geometry::{
     regenerate_extrusion,
 };
 use faero_plugin_host::validate_manifest;
+use faero_robotics::{CartesianPose, RobotTarget, validate_sequence};
+use faero_sim::{SimulationRequest, SimulationStatus, run_simulation};
 use faero_types::{
     EntityRecord, ExternalEndpoint, PluginManifest, ProjectDocument, QosProfile, StreamDirection,
     TelemetryStream, TimingProfile,
@@ -71,6 +73,8 @@ struct EntitySummary {
     detail: Option<String>,
     part_geometry: Option<PartGeometrySummary>,
     assembly_summary: Option<AssemblyEntitySummary>,
+    robot_cell_summary: Option<RobotCellEntitySummary>,
+    simulation_run_summary: Option<SimulationRunEntitySummary>,
 }
 
 #[derive(Serialize, Clone)]
@@ -96,6 +100,28 @@ struct AssemblyEntitySummary {
     mate_count: usize,
     degrees_of_freedom_estimate: usize,
     warning_count: usize,
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct RobotCellEntitySummary {
+    target_count: usize,
+    path_length_mm: f64,
+    max_segment_mm: f64,
+    estimated_cycle_time_ms: u32,
+    safety_zone_count: usize,
+    warning_count: usize,
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct SimulationRunEntitySummary {
+    status: String,
+    collision_count: u32,
+    cycle_time_ms: u32,
+    max_tracking_error_mm: f64,
+    energy_estimate_j: f64,
+    timeline_sample_count: usize,
 }
 
 #[derive(Serialize, Clone)]
@@ -406,23 +432,22 @@ impl WorkspaceSession {
             }
             "entity.create.robot_cell" => {
                 let index = self.graph.entity_count() + 1;
-                let entity = sample_entity(
-                    "RobotCell",
+                let (entity, summary) = build_robot_cell_entity(
                     &format!("ent_cell_{index:03}"),
                     &format!("RobotCell-{index:03}"),
-                    serde_json::json!({
-                        "robotIds": [],
-                        "equipmentIds": [],
-                        "sequenceIds": []
-                    }),
-                );
+                )?;
                 self.graph
                     .apply_command(CoreCommand::CreateEntity(entity))
                     .map_err(|error| error.to_string())?;
                 Ok(CommandResult {
                     command_id: command_id.to_string(),
                     status: "applied".to_string(),
-                    message: "cellule robotique ajoutee".to_string(),
+                    message: format!(
+                        "cellule robotique ajoutee: {} cibles | {:.0} mm | {} ms",
+                        summary.target_count,
+                        summary.path_length_mm,
+                        summary.estimated_cycle_time_ms
+                    ),
                 })
             }
             "entity.create.sensor_rig" => {
@@ -505,11 +530,46 @@ impl WorkspaceSession {
                 }
             }
             "simulation.run.start" => {
-                self.push_system_activity("simulation.run.started", Some(self.fixture_id.clone()));
+                let robot_cell = if let Some(existing) = self
+                    .graph
+                    .document()
+                    .nodes
+                    .values()
+                    .filter(|entity| robot_cell_summary_from_entity(entity).is_some())
+                    .max_by(|left, right| left.id.cmp(&right.id))
+                    .cloned()
+                {
+                    existing
+                } else {
+                    let index = self.graph.entity_count() + 1;
+                    let (entity, _) = build_robot_cell_entity(
+                        &format!("ent_cell_{index:03}"),
+                        &format!("RobotCell-{index:03}"),
+                    )?;
+                    self.graph
+                        .apply_command(CoreCommand::CreateEntity(entity.clone()))
+                        .map_err(|error| error.to_string())?;
+                    entity
+                };
+
+                let run_index = self.graph.entity_count() + 1;
+                let (entity, summary) = build_simulation_run_entity(
+                    &format!("ent_run_{run_index:03}"),
+                    &format!("SimulationRun-{run_index:03}"),
+                    &robot_cell,
+                    self.graph.endpoint_count(),
+                )?;
+                self.graph
+                    .apply_command(CoreCommand::CreateEntity(entity.clone()))
+                    .map_err(|error| error.to_string())?;
+                self.push_system_activity("simulation.run.completed", Some(entity.id));
                 Ok(CommandResult {
                     command_id: command_id.to_string(),
-                    status: "simulated".to_string(),
-                    message: "run de simulation lance en mode shell".to_string(),
+                    status: "applied".to_string(),
+                    message: format!(
+                        "run de simulation termine: {} | {} ms | {} collision(s)",
+                        summary.status, summary.cycle_time_ms, summary.collision_count
+                    ),
                 })
             }
             "test.run_fixture" => {
@@ -676,6 +736,8 @@ fn build_project_snapshot_from_document(
         .map(|entity| {
             let part_geometry = part_geometry_summary_from_entity(entity);
             let assembly_summary = assembly_summary_from_entity(entity);
+            let robot_cell_summary = robot_cell_summary_from_entity(entity);
+            let simulation_run_summary = simulation_run_summary_from_entity(entity);
             EntitySummary {
                 id: entity.id.clone(),
                 entity_type: entity.entity_type.clone(),
@@ -685,9 +747,21 @@ fn build_project_snapshot_from_document(
                 detail: part_geometry
                     .as_ref()
                     .map(format_part_entity_detail)
-                    .or_else(|| assembly_summary.as_ref().map(format_assembly_entity_detail)),
+                    .or_else(|| assembly_summary.as_ref().map(format_assembly_entity_detail))
+                    .or_else(|| {
+                        robot_cell_summary
+                            .as_ref()
+                            .map(format_robot_cell_entity_detail)
+                    })
+                    .or_else(|| {
+                        simulation_run_summary
+                            .as_ref()
+                            .map(format_simulation_run_entity_detail)
+                    }),
                 part_geometry,
                 assembly_summary,
+                robot_cell_summary,
+                simulation_run_summary,
             }
         })
         .collect::<Vec<_>>();
@@ -998,6 +1072,136 @@ fn assembly_solve_report_json(report: &AssemblySolveReport) -> serde_json::Value
     })
 }
 
+fn sample_robot_targets() -> Vec<RobotTarget> {
+    vec![
+        RobotTarget {
+            id: "pick".to_string(),
+            pose: CartesianPose {
+                x_mm: 0.0,
+                y_mm: 0.0,
+                z_mm: 120.0,
+            },
+            nominal_speed_mm_s: 250,
+            dwell_time_ms: 120,
+        },
+        RobotTarget {
+            id: "transfer".to_string(),
+            pose: CartesianPose {
+                x_mm: 450.0,
+                y_mm: 60.0,
+                z_mm: 240.0,
+            },
+            nominal_speed_mm_s: 320,
+            dwell_time_ms: 40,
+        },
+        RobotTarget {
+            id: "place".to_string(),
+            pose: CartesianPose {
+                x_mm: 860.0,
+                y_mm: 120.0,
+                z_mm: 140.0,
+            },
+            nominal_speed_mm_s: 240,
+            dwell_time_ms: 160,
+        },
+    ]
+}
+
+fn build_robot_cell_entity(
+    id: &str,
+    name: &str,
+) -> Result<(EntityRecord, RobotCellEntitySummary), String> {
+    let targets = sample_robot_targets();
+    let validation = validate_sequence(&targets).map_err(|error| error.to_string())?;
+    let safety_zone_count = 1_usize;
+    let summary = RobotCellEntitySummary {
+        target_count: validation.target_count,
+        path_length_mm: validation.path_length_mm,
+        max_segment_mm: validation.max_segment_mm,
+        estimated_cycle_time_ms: validation.estimated_cycle_time_ms,
+        safety_zone_count,
+        warning_count: validation.warning_count,
+    };
+    let entity = sample_entity(
+        "RobotCell",
+        id,
+        name,
+        serde_json::json!({
+            "controller": {
+                "robotModel": "FAERO-X90",
+                "tcpPayloadKg": 8.0
+            },
+            "targets": targets,
+            "sequenceValidation": {
+                "targetCount": summary.target_count,
+                "pathLengthMm": summary.path_length_mm,
+                "maxSegmentMm": summary.max_segment_mm,
+                "estimatedCycleTimeMs": summary.estimated_cycle_time_ms,
+                "warningCount": summary.warning_count
+            },
+            "safety": {
+                "zoneCount": summary.safety_zone_count,
+                "interlockCount": 2
+            }
+        }),
+    );
+
+    Ok((entity, summary))
+}
+
+fn build_simulation_run_entity(
+    id: &str,
+    name: &str,
+    robot_cell: &EntityRecord,
+    endpoint_count: usize,
+) -> Result<(EntityRecord, SimulationRunEntitySummary), String> {
+    let robot_summary = robot_cell_summary_from_entity(robot_cell)
+        .ok_or_else(|| "robot cell summary missing".to_string())?;
+    let request = SimulationRequest {
+        scenario_name: robot_cell.name.clone(),
+        seed: robot_summary.target_count as u64 * 97 + endpoint_count as u64 * 17,
+        step_count: (robot_summary.target_count.max(3) as u32) * 4,
+        planned_cycle_time_ms: robot_summary.estimated_cycle_time_ms,
+        path_length_mm: robot_summary.path_length_mm,
+        endpoint_count: endpoint_count as u32,
+        safety_zone_count: robot_summary.safety_zone_count as u32,
+    };
+    let run = run_simulation(&request).map_err(|error| error.to_string())?;
+    let summary = SimulationRunEntitySummary {
+        status: simulation_status_label(&run.status).to_string(),
+        collision_count: run.collision_count,
+        cycle_time_ms: run.cycle_time_ms,
+        max_tracking_error_mm: run.max_tracking_error_mm,
+        energy_estimate_j: run.energy_estimate_j,
+        timeline_sample_count: run.timeline_samples.len(),
+    };
+    let entity = sample_entity(
+        "SimulationRun",
+        id,
+        name,
+        serde_json::json!({
+            "scenario": {
+                "name": request.scenario_name,
+                "seed": request.seed,
+                "stepCount": request.step_count,
+                "endpointCount": request.endpoint_count,
+                "safetyZoneCount": request.safety_zone_count
+            },
+            "summary": {
+                "status": summary.status.clone(),
+                "collisionCount": summary.collision_count,
+                "cycleTimeMs": summary.cycle_time_ms,
+                "maxTrackingErrorMm": summary.max_tracking_error_mm,
+                "energyEstimateJ": summary.energy_estimate_j,
+                "timelineSampleCount": summary.timeline_sample_count
+            },
+            "timelineSamples": run.timeline_samples,
+        }),
+    );
+
+    Ok((entity, summary))
+}
+
 fn number_from_value(value: &serde_json::Value, key: &str) -> Option<f64> {
     value.get(key)?.as_f64()
 }
@@ -1050,6 +1254,47 @@ fn assembly_summary_from_entity(entity: &EntityRecord) -> Option<AssemblyEntityS
     })
 }
 
+fn robot_cell_summary_from_entity(entity: &EntityRecord) -> Option<RobotCellEntitySummary> {
+    if entity.entity_type != "RobotCell" {
+        return None;
+    }
+
+    let validation = entity.data.get("sequenceValidation")?;
+    let safety = entity.data.get("safety")?;
+    Some(RobotCellEntitySummary {
+        target_count: validation.get("targetCount")?.as_u64()? as usize,
+        path_length_mm: number_from_value(validation, "pathLengthMm")?,
+        max_segment_mm: number_from_value(validation, "maxSegmentMm")?,
+        estimated_cycle_time_ms: validation.get("estimatedCycleTimeMs")?.as_u64()? as u32,
+        safety_zone_count: safety.get("zoneCount")?.as_u64()? as usize,
+        warning_count: validation.get("warningCount")?.as_u64()? as usize,
+    })
+}
+
+fn simulation_status_label(status: &SimulationStatus) -> &'static str {
+    match status {
+        SimulationStatus::Completed => "completed",
+        SimulationStatus::Warning => "warning",
+        SimulationStatus::Collided => "collided",
+    }
+}
+
+fn simulation_run_summary_from_entity(entity: &EntityRecord) -> Option<SimulationRunEntitySummary> {
+    if entity.entity_type != "SimulationRun" {
+        return None;
+    }
+
+    let summary = entity.data.get("summary")?;
+    Some(SimulationRunEntitySummary {
+        status: string_from_value(summary, "status")?,
+        collision_count: summary.get("collisionCount")?.as_u64()? as u32,
+        cycle_time_ms: summary.get("cycleTimeMs")?.as_u64()? as u32,
+        max_tracking_error_mm: number_from_value(summary, "maxTrackingErrorMm")?,
+        energy_estimate_j: number_from_value(summary, "energyEstimateJ")?,
+        timeline_sample_count: summary.get("timelineSampleCount")?.as_u64()? as usize,
+    })
+}
+
 fn format_part_entity_detail(summary: &PartGeometrySummary) -> String {
     format!(
         "{:.1} x {:.1} x {:.1} mm | {:.1} g",
@@ -1064,6 +1309,20 @@ fn format_assembly_entity_detail(summary: &AssemblyEntitySummary) -> String {
         summary.occurrence_count,
         summary.mate_count,
         summary.degrees_of_freedom_estimate
+    )
+}
+
+fn format_robot_cell_entity_detail(summary: &RobotCellEntitySummary) -> String {
+    format!(
+        "{} pts | {:.0} mm | {} ms",
+        summary.target_count, summary.path_length_mm, summary.estimated_cycle_time_ms
+    )
+}
+
+fn format_simulation_run_entity_detail(summary: &SimulationRunEntitySummary) -> String {
+    format!(
+        "{} | {} ms | {} coll",
+        summary.status, summary.cycle_time_ms, summary.collision_count
     )
 }
 
@@ -1396,21 +1655,64 @@ mod tests {
     }
 
     #[test]
-    fn workspace_session_records_simulated_commands_in_system_activity() {
+    fn created_robot_cell_exposes_path_and_cycle_summary() {
+        let mut session = WorkspaceSession::empty("Session");
+
+        let result = session
+            .execute_command("entity.create.robot_cell")
+            .expect("robot cell should be created");
+        let snapshot = session.snapshot();
+        let robot_cell = snapshot
+            .entities
+            .iter()
+            .find(|entity| entity.entity_type == "RobotCell")
+            .expect("robot cell summary should exist");
+        let summary = robot_cell
+            .robot_cell_summary
+            .as_ref()
+            .expect("robot cell details should exist");
+
+        assert_eq!(result.status, "applied");
+        assert_eq!(summary.target_count, 3);
+        assert!(summary.path_length_mm > 850.0);
+        assert!(summary.estimated_cycle_time_ms > 3_000);
+        assert!(
+            robot_cell
+                .detail
+                .as_ref()
+                .is_some_and(|detail| detail.contains("pts"))
+        );
+    }
+
+    #[test]
+    fn simulation_run_creates_a_summary_entity_and_activity() {
         let mut session = WorkspaceSession::load_fixture(DEFAULT_FIXTURE_ID)
             .expect("fixture-backed session should load");
 
         let result = session
             .execute_command("simulation.run.start")
-            .expect("simulation command should be simulated");
+            .expect("simulation command should run");
+        let snapshot = session.snapshot();
+        let simulation = snapshot
+            .entities
+            .iter()
+            .find(|entity| entity.entity_type == "SimulationRun")
+            .expect("simulation run should be created");
+        let summary = simulation
+            .simulation_run_summary
+            .as_ref()
+            .expect("simulation summary should exist");
 
-        assert_eq!(result.status, "simulated");
+        assert_eq!(result.status, "applied");
+        assert_eq!(summary.status, "completed");
+        assert_eq!(summary.collision_count, 0);
+        assert!(summary.cycle_time_ms > 3_000);
+        assert!(summary.timeline_sample_count >= 10);
         assert!(
-            session
-                .snapshot()
+            snapshot
                 .recent_activity
                 .iter()
-                .any(|entry| entry.channel == "system")
+                .any(|entry| entry.kind == "simulation.run.completed")
         );
     }
 
