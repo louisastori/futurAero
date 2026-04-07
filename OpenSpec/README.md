@@ -72,6 +72,7 @@ Le produit vise un usage proche d'un environnement CAD/CAE industriel, avec un f
 - Un premier flux d assemblage reel avec occurrences, mates explicites et solve report visible dans les donnees de session.
 - Un premier flux robotique reel avec cibles cartesiennes, longueur de trajectoire et temps de cycle exposes dans le shell desktop.
 - Un premier run de simulation deterministe avec resume de collisions, erreur de suivi, energie et timeline visible dans la session.
+- Un premier rapport safety reel avec zones typees, interlocks explicites et statut `clear|warning|blocked` visible dans le shell desktop.
 - Un cadre GitHub explicite pour branch protections, PR, checks requis et releases.
 - Un premier decoupage des outils a programmer.
 - Un workflow GitHub avec remote canonique, PR, checks obligatoires et pipeline GitHub Actions.

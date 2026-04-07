@@ -782,6 +782,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "faero-safety"
+version = "0.1.0"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "faero-sim"
 version = "0.1.0"
 dependencies = [
@@ -924,6 +931,7 @@ dependencies = [
  "faero-integration",
  "faero-plugin-host",
  "faero-robotics",
+ "faero-safety",
  "faero-sim",
  "faero-storage",
  "faero-types",

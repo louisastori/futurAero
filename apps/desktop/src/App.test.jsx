@@ -242,7 +242,7 @@ function createMockBackend() {
               pathLengthMm: 896,
               maxSegmentMm: 470,
               estimatedCycleTimeMs: 3491,
-              safetyZoneCount: 1,
+              safetyZoneCount: 2,
               warningCount: 0
             }
           }
@@ -265,7 +265,7 @@ function createMockBackend() {
                 pathLengthMm: 896,
                 maxSegmentMm: 470,
                 estimatedCycleTimeMs: 3491,
-                safetyZoneCount: 1,
+                safetyZoneCount: 2,
                 warningCount: 0
               }
             }
@@ -288,6 +288,49 @@ function createMockBackend() {
               maxTrackingErrorMm: 0.27,
               energyEstimateJ: 74.82,
               timelineSampleCount: 12
+            }
+          }
+        ];
+        snapshot.status.entityCount = snapshot.entities.length;
+      } else if (commandId === "analyze.safety") {
+        const hasRobotCell = snapshot.entities.some((entity) => entity.robotCellSummary);
+        if (!hasRobotCell) {
+          snapshot.entities = [
+            ...snapshot.entities,
+            {
+              id: "ent_cell_001",
+              entityType: "RobotCell",
+              name: "RobotCell-001",
+              revision: "rev_seed",
+              status: "active",
+              detail: "3 pts | 896 mm | 3491 ms",
+              robotCellSummary: {
+                targetCount: 3,
+                pathLengthMm: 896,
+                maxSegmentMm: 470,
+                estimatedCycleTimeMs: 3491,
+                safetyZoneCount: 2,
+                warningCount: 0
+              }
+            }
+          ];
+        }
+        const index = snapshot.entities.length + 1;
+        snapshot.entities = [
+          ...snapshot.entities,
+          {
+            id: `ent_safe_${index.toString().padStart(3, "0")}`,
+            entityType: "SafetyReport",
+            name: `SafetyReport-${index.toString().padStart(3, "0")}`,
+            revision: "rev_seed",
+            status: "active",
+            detail: "warning | 1 active | 0 block",
+            safetyReportSummary: {
+              status: "warning",
+              inhibited: false,
+              activeZoneCount: 1,
+              blockingInterlockCount: 0,
+              advisoryZoneCount: 1
             }
           }
         ];
@@ -623,6 +666,25 @@ describe("App shell buttons", () => {
       assert.equal(
         document.querySelector("[data-command-feedback]")?.getAttribute("data-command-feedback"),
         "simulation.run.start"
+      );
+    });
+  });
+
+  test("running safety analysis surfaces a safety report in properties", async () => {
+    const { user } = await renderApp();
+
+    await user.click(screen.getByRole("button", { name: "Analyse" }));
+    await user.click(document.querySelector('[data-command-id="analyze.safety"]'));
+
+    await waitFor(() => {
+      assert.ok(screen.getByText("Rapports safety"));
+      assert.ok(document.querySelector('[data-safety-report-summary="ent_safe_003"]'));
+      assert.ok(
+        document.querySelector('[data-safety-report-blocks="ent_safe_003"]')?.textContent?.includes("0")
+      );
+      assert.equal(
+        document.querySelector("[data-command-feedback]")?.getAttribute("data-command-feedback"),
+        "analyze.safety"
       );
     });
   });

@@ -20,6 +20,7 @@ use faero_geometry::{
 };
 use faero_plugin_host::validate_manifest;
 use faero_robotics::{CartesianPose, RobotTarget, validate_sequence};
+use faero_safety::{SafetyInterlock, SafetyStatus, SafetyZone, SafetyZoneKind, evaluate_safety};
 use faero_sim::{SimulationRequest, SimulationStatus, run_simulation};
 use faero_types::{
     EntityRecord, ExternalEndpoint, PluginManifest, ProjectDocument, QosProfile, StreamDirection,
@@ -75,6 +76,7 @@ struct EntitySummary {
     assembly_summary: Option<AssemblyEntitySummary>,
     robot_cell_summary: Option<RobotCellEntitySummary>,
     simulation_run_summary: Option<SimulationRunEntitySummary>,
+    safety_report_summary: Option<SafetyReportEntitySummary>,
 }
 
 #[derive(Serialize, Clone)]
@@ -122,6 +124,16 @@ struct SimulationRunEntitySummary {
     max_tracking_error_mm: f64,
     energy_estimate_j: f64,
     timeline_sample_count: usize,
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct SafetyReportEntitySummary {
+    status: String,
+    inhibited: bool,
+    active_zone_count: usize,
+    blocking_interlock_count: usize,
+    advisory_zone_count: usize,
 }
 
 #[derive(Serialize, Clone)]
@@ -580,6 +592,48 @@ impl WorkspaceSession {
                     message: "fixture de test rejouee".to_string(),
                 })
             }
+            "analyze.safety" => {
+                let robot_cell = if let Some(existing) = self
+                    .graph
+                    .document()
+                    .nodes
+                    .values()
+                    .filter(|entity| robot_cell_summary_from_entity(entity).is_some())
+                    .max_by(|left, right| left.id.cmp(&right.id))
+                    .cloned()
+                {
+                    existing
+                } else {
+                    let index = self.graph.entity_count() + 1;
+                    let (entity, _) = build_robot_cell_entity(
+                        &format!("ent_cell_{index:03}"),
+                        &format!("RobotCell-{index:03}"),
+                    )?;
+                    self.graph
+                        .apply_command(CoreCommand::CreateEntity(entity.clone()))
+                        .map_err(|error| error.to_string())?;
+                    entity
+                };
+                let report_index = self.graph.entity_count() + 1;
+                let (entity, summary) = build_safety_report_entity(
+                    &format!("ent_safe_{report_index:03}"),
+                    &format!("SafetyReport-{report_index:03}"),
+                    &robot_cell,
+                    "robot.move",
+                )?;
+                self.graph
+                    .apply_command(CoreCommand::CreateEntity(entity.clone()))
+                    .map_err(|error| error.to_string())?;
+                self.push_system_activity("analysis.safety.generated", Some(entity.id));
+                Ok(CommandResult {
+                    command_id: command_id.to_string(),
+                    status: "applied".to_string(),
+                    message: format!(
+                        "rapport safety genere: {} | {} zone(s) actives | {} blocage(s)",
+                        summary.status, summary.active_zone_count, summary.blocking_interlock_count
+                    ),
+                })
+            }
             "analyze.validation_report" => {
                 self.push_system_activity(
                     "analysis.validation.generated",
@@ -738,6 +792,7 @@ fn build_project_snapshot_from_document(
             let assembly_summary = assembly_summary_from_entity(entity);
             let robot_cell_summary = robot_cell_summary_from_entity(entity);
             let simulation_run_summary = simulation_run_summary_from_entity(entity);
+            let safety_report_summary = safety_report_summary_from_entity(entity);
             EntitySummary {
                 id: entity.id.clone(),
                 entity_type: entity.entity_type.clone(),
@@ -757,11 +812,17 @@ fn build_project_snapshot_from_document(
                         simulation_run_summary
                             .as_ref()
                             .map(format_simulation_run_entity_detail)
+                    })
+                    .or_else(|| {
+                        safety_report_summary
+                            .as_ref()
+                            .map(format_safety_report_entity_detail)
                     }),
                 part_geometry,
                 assembly_summary,
                 robot_cell_summary,
                 simulation_run_summary,
+                safety_report_summary,
             }
         })
         .collect::<Vec<_>>();
@@ -1107,13 +1168,47 @@ fn sample_robot_targets() -> Vec<RobotTarget> {
     ]
 }
 
+fn sample_safety_zones() -> Vec<SafetyZone> {
+    vec![
+        SafetyZone {
+            id: "zone_warning_perimeter".to_string(),
+            kind: SafetyZoneKind::Warning,
+            active: true,
+        },
+        SafetyZone {
+            id: "zone_lidar_protective".to_string(),
+            kind: SafetyZoneKind::LidarProtective,
+            active: false,
+        },
+    ]
+}
+
+fn sample_safety_interlocks() -> Vec<SafetyInterlock> {
+    vec![
+        SafetyInterlock {
+            id: "int_warning_reduce_speed".to_string(),
+            source_zone_id: "zone_warning_perimeter".to_string(),
+            inhibited_action: "robot.speed.up".to_string(),
+            requires_manual_reset: false,
+        },
+        SafetyInterlock {
+            id: "int_lidar_stop_move".to_string(),
+            source_zone_id: "zone_lidar_protective".to_string(),
+            inhibited_action: "robot.move".to_string(),
+            requires_manual_reset: true,
+        },
+    ]
+}
+
 fn build_robot_cell_entity(
     id: &str,
     name: &str,
 ) -> Result<(EntityRecord, RobotCellEntitySummary), String> {
     let targets = sample_robot_targets();
     let validation = validate_sequence(&targets).map_err(|error| error.to_string())?;
-    let safety_zone_count = 1_usize;
+    let safety_zones = sample_safety_zones();
+    let safety_interlocks = sample_safety_interlocks();
+    let safety_zone_count = safety_zones.len();
     let summary = RobotCellEntitySummary {
         target_count: validation.target_count,
         path_length_mm: validation.path_length_mm,
@@ -1141,7 +1236,9 @@ fn build_robot_cell_entity(
             },
             "safety": {
                 "zoneCount": summary.safety_zone_count,
-                "interlockCount": 2
+                "interlockCount": safety_interlocks.len(),
+                "zones": safety_zones,
+                "interlocks": safety_interlocks
             }
         }),
     );
@@ -1196,6 +1293,60 @@ fn build_simulation_run_entity(
                 "timelineSampleCount": summary.timeline_sample_count
             },
             "timelineSamples": run.timeline_samples,
+        }),
+    );
+
+    Ok((entity, summary))
+}
+
+fn build_safety_report_entity(
+    id: &str,
+    name: &str,
+    robot_cell: &EntityRecord,
+    attempted_action: &str,
+) -> Result<(EntityRecord, SafetyReportEntitySummary), String> {
+    let safety = robot_cell
+        .data
+        .get("safety")
+        .ok_or_else(|| "robot cell safety configuration missing".to_string())?;
+    let zones = serde_json::from_value::<Vec<SafetyZone>>(
+        safety
+            .get("zones")
+            .cloned()
+            .ok_or_else(|| "robot cell safety zones missing".to_string())?,
+    )
+    .map_err(|error| error.to_string())?;
+    let interlocks = serde_json::from_value::<Vec<SafetyInterlock>>(
+        safety
+            .get("interlocks")
+            .cloned()
+            .ok_or_else(|| "robot cell safety interlocks missing".to_string())?,
+    )
+    .map_err(|error| error.to_string())?;
+    let evaluation = evaluate_safety(&zones, &interlocks, attempted_action);
+    let summary = SafetyReportEntitySummary {
+        status: safety_status_label(&evaluation.status).to_string(),
+        inhibited: evaluation.inhibited,
+        active_zone_count: evaluation.active_zone_count,
+        blocking_interlock_count: evaluation.blocking_interlock_count,
+        advisory_zone_count: evaluation.advisory_zone_count,
+    };
+    let entity = sample_entity(
+        "SafetyReport",
+        id,
+        name,
+        serde_json::json!({
+            "attemptedAction": attempted_action,
+            "zones": zones,
+            "interlocks": interlocks,
+            "summary": {
+                "status": summary.status.clone(),
+                "inhibited": summary.inhibited,
+                "activeZoneCount": summary.active_zone_count,
+                "blockingInterlockCount": summary.blocking_interlock_count,
+                "advisoryZoneCount": summary.advisory_zone_count,
+                "causeZoneIds": evaluation.cause_zone_ids
+            }
         }),
     );
 
@@ -1279,6 +1430,14 @@ fn simulation_status_label(status: &SimulationStatus) -> &'static str {
     }
 }
 
+fn safety_status_label(status: &SafetyStatus) -> &'static str {
+    match status {
+        SafetyStatus::Clear => "clear",
+        SafetyStatus::Warning => "warning",
+        SafetyStatus::Blocked => "blocked",
+    }
+}
+
 fn simulation_run_summary_from_entity(entity: &EntityRecord) -> Option<SimulationRunEntitySummary> {
     if entity.entity_type != "SimulationRun" {
         return None;
@@ -1292,6 +1451,21 @@ fn simulation_run_summary_from_entity(entity: &EntityRecord) -> Option<Simulatio
         max_tracking_error_mm: number_from_value(summary, "maxTrackingErrorMm")?,
         energy_estimate_j: number_from_value(summary, "energyEstimateJ")?,
         timeline_sample_count: summary.get("timelineSampleCount")?.as_u64()? as usize,
+    })
+}
+
+fn safety_report_summary_from_entity(entity: &EntityRecord) -> Option<SafetyReportEntitySummary> {
+    if entity.entity_type != "SafetyReport" {
+        return None;
+    }
+
+    let summary = entity.data.get("summary")?;
+    Some(SafetyReportEntitySummary {
+        status: string_from_value(summary, "status")?,
+        inhibited: summary.get("inhibited")?.as_bool()?,
+        active_zone_count: summary.get("activeZoneCount")?.as_u64()? as usize,
+        blocking_interlock_count: summary.get("blockingInterlockCount")?.as_u64()? as usize,
+        advisory_zone_count: summary.get("advisoryZoneCount")?.as_u64()? as usize,
     })
 }
 
@@ -1323,6 +1497,13 @@ fn format_simulation_run_entity_detail(summary: &SimulationRunEntitySummary) -> 
     format!(
         "{} | {} ms | {} coll",
         summary.status, summary.cycle_time_ms, summary.collision_count
+    )
+}
+
+fn format_safety_report_entity_detail(summary: &SafetyReportEntitySummary) -> String {
+    format!(
+        "{} | {} active | {} block",
+        summary.status, summary.active_zone_count, summary.blocking_interlock_count
     )
 }
 
@@ -1713,6 +1894,37 @@ mod tests {
                 .recent_activity
                 .iter()
                 .any(|entry| entry.kind == "simulation.run.completed")
+        );
+    }
+
+    #[test]
+    fn safety_analysis_creates_a_report_entity_and_activity() {
+        let mut session = WorkspaceSession::empty("Session");
+
+        let result = session
+            .execute_command("analyze.safety")
+            .expect("safety command should run");
+        let snapshot = session.snapshot();
+        let report = snapshot
+            .entities
+            .iter()
+            .find(|entity| entity.entity_type == "SafetyReport")
+            .expect("safety report should be created");
+        let summary = report
+            .safety_report_summary
+            .as_ref()
+            .expect("safety summary should exist");
+
+        assert_eq!(result.status, "applied");
+        assert_eq!(summary.status, "warning");
+        assert!(!summary.inhibited);
+        assert_eq!(summary.active_zone_count, 1);
+        assert_eq!(summary.advisory_zone_count, 1);
+        assert!(
+            snapshot
+                .recent_activity
+                .iter()
+                .any(|entry| entry.kind == "analysis.safety.generated")
         );
     }
 

@@ -601,7 +601,7 @@ async function executeWorkspaceCommand(commandId, currentSnapshot) {
               pathLengthMm: 896,
               maxSegmentMm: 470,
               estimatedCycleTimeMs: 3491,
-              safetyZoneCount: 1,
+              safetyZoneCount: 2,
               warningCount: 0
             }
           }
@@ -631,7 +631,7 @@ async function executeWorkspaceCommand(commandId, currentSnapshot) {
           pathLengthMm: 896,
           maxSegmentMm: 470,
           estimatedCycleTimeMs: 3491,
-          safetyZoneCount: 1,
+          safetyZoneCount: 2,
           warningCount: 0
         }
       });
@@ -669,6 +669,62 @@ async function executeWorkspaceCommand(commandId, currentSnapshot) {
         commandId,
         status: "applied",
         message: "run de simulation termine dans l apercu web"
+      }
+    };
+  }
+
+  if (commandId === "analyze.safety") {
+    const nextEntities = [...currentSnapshot.entities];
+    if (!nextEntities.some((entity) => entity.robotCellSummary)) {
+      nextEntities.push({
+        id: "ent_cell_001",
+        entityType: "RobotCell",
+        name: "RobotCell-001",
+        revision: "rev_seed",
+        status: "active",
+        detail: "3 pts | 896 mm | 3491 ms",
+        robotCellSummary: {
+          targetCount: 3,
+          pathLengthMm: 896,
+          maxSegmentMm: 470,
+          estimatedCycleTimeMs: 3491,
+          safetyZoneCount: 2,
+          warningCount: 0
+        }
+      });
+    }
+
+    const reportIndex = nextEntities.length + 1;
+    return {
+      snapshot: {
+        ...appendFallbackActivity(currentSnapshot, "system", "analysis.safety.generated", `ent_safe_${String(reportIndex).padStart(3, "0")}`),
+        status: {
+          ...currentSnapshot.status,
+          entityCount: nextEntities.length + 1
+        },
+        entities: [
+          ...nextEntities,
+          {
+            id: `ent_safe_${String(reportIndex).padStart(3, "0")}`,
+            entityType: "SafetyReport",
+            name: `SafetyReport-${String(reportIndex).padStart(3, "0")}`,
+            revision: "rev_seed",
+            status: "active",
+            detail: "warning | 1 active | 0 block",
+            safetyReportSummary: {
+              status: "warning",
+              inhibited: false,
+              activeZoneCount: 1,
+              blockingInterlockCount: 0,
+              advisoryZoneCount: 1
+            }
+          }
+        ]
+      },
+      result: {
+        commandId,
+        status: "applied",
+        message: "rapport safety genere dans l apercu web"
       }
     };
   }
@@ -838,6 +894,15 @@ function latestSimulationRunFromSnapshot(snapshot) {
   return simulationRuns[simulationRuns.length - 1] ?? null;
 }
 
+function formatSafetyReportSummary(locale, safetyReportSummary) {
+  return `${safetyReportSummary.status} | ${safetyReportSummary.activeZoneCount} active | ${safetyReportSummary.blockingInterlockCount} block`;
+}
+
+function latestSafetyReportFromSnapshot(snapshot) {
+  const safetyReports = snapshot.entities.filter((entity) => entity.safetyReportSummary);
+  return safetyReports[safetyReports.length - 1] ?? null;
+}
+
 function parsePositiveDimension(value) {
   const parsed = Number(value);
   if (!Number.isFinite(parsed) || parsed <= 0) {
@@ -918,6 +983,8 @@ export default function App({ backend = defaultDesktopBackend }) {
   const latestRobotCell = latestRobotCellFromSnapshot(projectSnapshot);
   const simulationRuns = projectSnapshot.entities.filter((entity) => entity.simulationRunSummary);
   const latestSimulationRun = latestSimulationRunFromSnapshot(projectSnapshot);
+  const safetyReports = projectSnapshot.entities.filter((entity) => entity.safetyReportSummary);
+  const latestSafetyReport = latestSafetyReportFromSnapshot(projectSnapshot);
   const fixtureOptions =
     selectedFixtureId && !fixtureProjects.some((fixture) => fixture.id === selectedFixtureId)
       ? [{ id: selectedFixtureId, projectName: currentStatus.projectName }, ...fixtureProjects]
@@ -1708,6 +1775,51 @@ export default function App({ backend = defaultDesktopBackend }) {
                   {t(
                     "ui.property.no_simulation_runs",
                     "Aucun run de simulation execute dans cette session."
+                  )}
+                </p>
+              )}
+            </div>
+
+            <div className="property-section">
+              <div className="subsection-label">
+                {t("ui.property.safety_reports", "Rapports safety")}
+              </div>
+              {safetyReports.length > 0 ? (
+                <div className="property-card-list">
+                  {[...safetyReports].reverse().slice(0, 2).map((entity) => (
+                    <article
+                      key={entity.id}
+                      className="result-card property-card"
+                      data-safety-report-summary={entity.id}
+                    >
+                      <strong>{entity.name}</strong>
+                      <div className="command-id">
+                        {formatSafetyReportSummary(locale, entity.safetyReportSummary)}
+                      </div>
+                      <div className="muted">
+                        {entity.safetyReportSummary.inhibited
+                          ? t("ui.property.safety_blocked", "Action bloquee")
+                          : t("ui.property.safety_not_blocked", "Action autorisee sous surveillance")}
+                      </div>
+                      <div className="property-inline-metrics">
+                        <span>
+                          {t("ui.property.active_zones", "Zones actives")} {entity.safetyReportSummary.activeZoneCount}
+                        </span>
+                        <span>
+                          {t("ui.property.advisories", "Advisories")} {entity.safetyReportSummary.advisoryZoneCount}
+                        </span>
+                        <span data-safety-report-blocks={entity.id}>
+                          {t("ui.property.interlocks", "Interlocks")} {entity.safetyReportSummary.blockingInterlockCount}
+                        </span>
+                      </div>
+                    </article>
+                  ))}
+                </div>
+              ) : (
+                <p className="muted">
+                  {t(
+                    "ui.property.no_safety_reports",
+                    "Aucun rapport safety genere dans cette session."
                   )}
                 </p>
               )}
