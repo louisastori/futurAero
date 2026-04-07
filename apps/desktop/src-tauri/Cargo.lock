@@ -742,6 +742,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "faero-geometry"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "faero-integration"
 version = "0.1.0"
 dependencies = [
@@ -887,6 +895,7 @@ version = "0.1.0"
 dependencies = [
  "faero-ai",
  "faero-core",
+ "faero-geometry",
  "faero-integration",
  "faero-plugin-host",
  "faero-storage",

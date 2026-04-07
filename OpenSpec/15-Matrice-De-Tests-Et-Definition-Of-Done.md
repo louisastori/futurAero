@@ -87,7 +87,8 @@ Ciblent:
 - esquisse sous/sur/juste contrainte,
 - extrusion simple,
 - regeneration apres changement de parametre,
-- calcul masse bornes.
+- calcul masse bornes,
+- aire/perimetre/centroide d'un profil polygonal ferme.
 
 ### `faero-assembly`
 
@@ -177,7 +178,8 @@ Ciblent:
 - couverture testee des boutons du shell desktop: menus, toggles, commandes, scenes viewport et discussion IA,
 - panneaux retractables et rouvrables sans reset de session,
 - colonnes laterales redimensionnables a la souris avec bornes stables,
-- panneau de discussion IA locale avec etats vide, charge, reponse et fallback.
+- panneau de discussion IA locale avec etats vide, charge, reponse et fallback,
+- affichage des metriques d'une piece parametrique regeneree dans le panneau Proprietes.
 
 ## Fixtures officielles MVP
 

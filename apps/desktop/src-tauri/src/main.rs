@@ -10,6 +10,10 @@ use faero_ai::{
     query_runtime_status as query_ai_runtime_status,
 };
 use faero_core::{CoreCommand, ProjectGraph};
+use faero_geometry::{
+    ExtrusionDefinition, MaterialProfile, SketchConstraintState, rectangular_profile,
+    regenerate_extrusion,
+};
 use faero_plugin_host::validate_manifest;
 use faero_types::{
     EntityRecord, ExternalEndpoint, PluginManifest, ProjectDocument, QosProfile, StreamDirection,
@@ -60,6 +64,23 @@ struct EntitySummary {
     name: String,
     revision: String,
     status: String,
+    detail: Option<String>,
+    part_geometry: Option<PartGeometrySummary>,
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct PartGeometrySummary {
+    state: String,
+    width_mm: f64,
+    height_mm: f64,
+    depth_mm: f64,
+    point_count: usize,
+    perimeter_mm: f64,
+    area_mm2: f64,
+    volume_mm3: f64,
+    estimated_mass_grams: f64,
+    material_name: String,
 }
 
 #[derive(Serialize, Clone)]
@@ -259,22 +280,20 @@ impl WorkspaceSession {
             }
             "entity.create.part" => {
                 let index = self.graph.entity_count() + 1;
-                let entity = sample_entity(
-                    "Part",
-                    &format!("ent_part_{index:03}"),
-                    &format!("Part-{index:03}"),
-                    serde_json::json!({
-                        "geometrySource": "desktop_session",
-                        "parameterSet": { "width": 120 + index as i32 }
-                    }),
-                );
+                let (entity, summary) = sample_parametric_part_entity(index)?;
                 self.graph
                     .apply_command(CoreCommand::CreateEntity(entity))
                     .map_err(|error| error.to_string())?;
                 Ok(CommandResult {
                     command_id: command_id.to_string(),
                     status: "applied".to_string(),
-                    message: "piece ajoutee a la session".to_string(),
+                    message: format!(
+                        "piece parametrique regeneree: {:.1} x {:.1} x {:.1} mm | {:.1} g",
+                        summary.width_mm,
+                        summary.height_mm,
+                        summary.depth_mm,
+                        summary.estimated_mass_grams
+                    ),
                 })
             }
             "entity.create.assembly" => {
@@ -566,12 +585,17 @@ fn build_project_snapshot_from_document(
     let entities = document
         .nodes
         .values()
-        .map(|entity| EntitySummary {
-            id: entity.id.clone(),
-            entity_type: entity.entity_type.clone(),
-            name: entity.name.clone(),
-            revision: entity.revision.clone(),
-            status: entity.status.clone(),
+        .map(|entity| {
+            let part_geometry = part_geometry_summary_from_entity(entity);
+            EntitySummary {
+                id: entity.id.clone(),
+                entity_type: entity.entity_type.clone(),
+                name: entity.name.clone(),
+                revision: entity.revision.clone(),
+                status: entity.status.clone(),
+                detail: part_geometry.as_ref().map(format_part_entity_detail),
+                part_geometry,
+            }
         })
         .collect::<Vec<_>>();
 
@@ -720,6 +744,117 @@ fn sample_entity(entity_type: &str, id: &str, name: &str, data: serde_json::Valu
         status: "active".to_string(),
         data,
     }
+}
+
+fn sketch_constraint_state_label(state: SketchConstraintState) -> &'static str {
+    match state {
+        SketchConstraintState::UnderConstrained => "under_constrained",
+        SketchConstraintState::WellConstrained => "well_constrained",
+        SketchConstraintState::OverConstrained => "over_constrained",
+    }
+}
+
+fn sample_parametric_part_entity(
+    index: usize,
+) -> Result<(EntityRecord, PartGeometrySummary), String> {
+    let width_mm = 120.0 + (index as f64 * 12.0);
+    let height_mm = 80.0 + (index as f64 * 6.0);
+    let depth_mm = 10.0 + (index as f64 * 2.0);
+    let profile = rectangular_profile(width_mm, height_mm, 4).map_err(|error| error.to_string())?;
+    let material = MaterialProfile::aluminum_6061();
+    let regeneration = regenerate_extrusion(&profile, &ExtrusionDefinition { depth_mm }, &material)
+        .map_err(|error| error.to_string())?;
+
+    let summary = PartGeometrySummary {
+        state: sketch_constraint_state_label(regeneration.state).to_string(),
+        width_mm,
+        height_mm,
+        depth_mm,
+        point_count: regeneration.point_count,
+        perimeter_mm: regeneration.perimeter_mm,
+        area_mm2: regeneration.area_mm2,
+        volume_mm3: regeneration.volume_mm3,
+        estimated_mass_grams: regeneration.estimated_mass_grams,
+        material_name: material.name.clone(),
+    };
+
+    let entity = sample_entity(
+        "Part",
+        &format!("ent_part_{index:03}"),
+        &format!("Part-{index:03}"),
+        serde_json::json!({
+            "geometrySource": "parametric_sketch_extrude",
+            "parameterSet": {
+                "widthMm": width_mm,
+                "heightMm": height_mm,
+                "depthMm": depth_mm
+            },
+            "sketch": {
+                "profileType": "rectangle",
+                "points": profile.points,
+                "solvedConstraintCount": profile.solved_constraint_count
+            },
+            "extrusion": {
+                "depthMm": depth_mm
+            },
+            "material": {
+                "name": material.name,
+                "densityKgM3": material.density_kg_m3
+            },
+            "summary": {
+                "state": summary.state.clone(),
+                "pointCount": summary.point_count,
+                "perimeterMm": summary.perimeter_mm,
+                "areaMm2": summary.area_mm2,
+                "volumeMm3": summary.volume_mm3,
+                "estimatedMassGrams": summary.estimated_mass_grams,
+                "materialName": summary.material_name.clone()
+            },
+            "centroid": {
+                "xMm": regeneration.centroid_x_mm,
+                "yMm": regeneration.centroid_y_mm
+            }
+        }),
+    );
+
+    Ok((entity, summary))
+}
+
+fn number_from_value(value: &serde_json::Value, key: &str) -> Option<f64> {
+    value.get(key)?.as_f64()
+}
+
+fn string_from_value(value: &serde_json::Value, key: &str) -> Option<String> {
+    Some(value.get(key)?.as_str()?.to_string())
+}
+
+fn part_geometry_summary_from_entity(entity: &EntityRecord) -> Option<PartGeometrySummary> {
+    if entity.entity_type != "Part" {
+        return None;
+    }
+
+    let parameters = entity.data.get("parameterSet")?;
+    let summary = entity.data.get("summary")?;
+
+    Some(PartGeometrySummary {
+        state: string_from_value(summary, "state")?,
+        width_mm: number_from_value(parameters, "widthMm")?,
+        height_mm: number_from_value(parameters, "heightMm")?,
+        depth_mm: number_from_value(parameters, "depthMm")?,
+        point_count: summary.get("pointCount")?.as_u64()? as usize,
+        perimeter_mm: number_from_value(summary, "perimeterMm")?,
+        area_mm2: number_from_value(summary, "areaMm2")?,
+        volume_mm3: number_from_value(summary, "volumeMm3")?,
+        estimated_mass_grams: number_from_value(summary, "estimatedMassGrams")?,
+        material_name: string_from_value(summary, "materialName")?,
+    })
+}
+
+fn format_part_entity_detail(summary: &PartGeometrySummary) -> String {
+    format!(
+        "{:.1} x {:.1} x {:.1} mm | {:.1} g",
+        summary.width_mm, summary.height_mm, summary.depth_mm, summary.estimated_mass_grams
+    )
 }
 
 fn sample_wireless_endpoint_with_stream(index: usize) -> (ExternalEndpoint, TelemetryStream) {
@@ -950,6 +1085,36 @@ mod tests {
         assert_eq!(snapshot.status.stream_count, 1);
         assert_eq!(snapshot.status.plugin_count, 1);
         assert!(snapshot.plugins[0].enabled);
+    }
+
+    #[test]
+    fn created_parametric_part_exposes_geometry_summary_in_snapshot() {
+        let mut session = WorkspaceSession::empty("Session");
+
+        let result = session
+            .execute_command("entity.create.part")
+            .expect("part should be created");
+        let snapshot = session.snapshot();
+        let part = snapshot
+            .entities
+            .first()
+            .expect("part summary should exist");
+        let geometry = part
+            .part_geometry
+            .as_ref()
+            .expect("part geometry summary should exist");
+
+        assert_eq!(result.status, "applied");
+        assert!(result.message.contains("piece parametrique regeneree"));
+        assert_eq!(part.entity_type, "Part");
+        assert_eq!(geometry.state, "well_constrained");
+        assert!(geometry.width_mm > 0.0);
+        assert!(geometry.area_mm2 > 0.0);
+        assert!(
+            part.detail
+                .as_ref()
+                .is_some_and(|detail| detail.contains("mm"))
+        );
     }
 
     #[test]

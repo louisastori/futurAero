@@ -494,6 +494,54 @@ async function executeWorkspaceCommand(commandId, currentSnapshot) {
     return response;
   }
 
+  if (commandId === "entity.create.part") {
+    const index = currentSnapshot.entities.length + 1;
+    const widthMm = 120 + index * 12;
+    const heightMm = 80 + index * 6;
+    const depthMm = 10 + index * 2;
+    const areaMm2 = widthMm * heightMm;
+    const volumeMm3 = areaMm2 * depthMm;
+    const estimatedMassGrams = volumeMm3 * 0.0027;
+
+    return {
+      snapshot: {
+        ...appendFallbackActivity(currentSnapshot, "system", "entity.create.part", `ent_part_${String(index).padStart(3, "0")}`),
+        status: {
+          ...currentSnapshot.status,
+          entityCount: currentSnapshot.entities.length + 1
+        },
+        entities: [
+          ...currentSnapshot.entities,
+          {
+            id: `ent_part_${String(index).padStart(3, "0")}`,
+            entityType: "Part",
+            name: `Part-${String(index).padStart(3, "0")}`,
+            revision: "rev_seed",
+            status: "active",
+            detail: `${widthMm.toFixed(1)} x ${heightMm.toFixed(1)} x ${depthMm.toFixed(1)} mm | ${estimatedMassGrams.toFixed(1)} g`,
+            partGeometry: {
+              state: "well_constrained",
+              widthMm,
+              heightMm,
+              depthMm,
+              pointCount: 4,
+              perimeterMm: (2 * (widthMm + heightMm)),
+              areaMm2,
+              volumeMm3,
+              estimatedMassGrams,
+              materialName: "Aluminum 6061"
+            }
+          }
+        ]
+      },
+      result: {
+        commandId,
+        status: "applied",
+        message: "piece parametrique regeneree dans l apercu web"
+      }
+    };
+  }
+
   return {
     snapshot: appendFallbackActivity(currentSnapshot, "system", "command.simulated", commandId),
     result: {
@@ -573,6 +621,17 @@ function fixtureLabel(fixtures, fixtureId) {
   return currentFixture?.projectName ?? fixtureId;
 }
 
+function formatDecimal(locale, value, maximumFractionDigits = 1) {
+  return new Intl.NumberFormat(locale, {
+    minimumFractionDigits: 0,
+    maximumFractionDigits
+  }).format(value);
+}
+
+function formatParametricPartSummary(locale, partGeometry) {
+  return `${formatDecimal(locale, partGeometry.widthMm)} x ${formatDecimal(locale, partGeometry.heightMm)} x ${formatDecimal(locale, partGeometry.depthMm)} mm | ${formatDecimal(locale, partGeometry.estimatedMassGrams)} g`;
+}
+
 function activityChannelLabel(locale, channel) {
   if (channel === "command") {
     return translate(locale, "ui.activity.command", channel);
@@ -633,6 +692,7 @@ export default function App({ backend = defaultDesktopBackend }) {
   const menus = localizeMenuModel(locale);
   const menu = menus.find((entry) => entry.id === activeMenuId) ?? menus[0];
   const currentStatus = projectSnapshot.status;
+  const parametricParts = projectSnapshot.entities.filter((entity) => entity.partGeometry);
   const fixtureOptions =
     selectedFixtureId && !fixtureProjects.some((fixture) => fixture.id === selectedFixtureId)
       ? [{ id: selectedFixtureId, projectName: currentStatus.projectName }, ...fixtureProjects]
@@ -1067,7 +1127,12 @@ export default function App({ backend = defaultDesktopBackend }) {
                   {projectSnapshot.entities.length > 0 ? (
                     projectSnapshot.entities.map((entity) => (
                       <li key={entity.id} className="tree-row">
-                        <span>{entity.name}</span>
+                        <div className="tree-row-main">
+                          <span>{entity.name}</span>
+                          {entity.detail ? (
+                            <div className="tree-detail">{entity.detail}</div>
+                          ) : null}
+                        </div>
                         <span className="tree-meta">{entity.entityType}</span>
                       </li>
                     ))
@@ -1161,6 +1226,49 @@ export default function App({ backend = defaultDesktopBackend }) {
               <dt>{t("ui.property.fixture", "Fixture")}</dt>
               <dd>{fixtureLabel(fixtureOptions, selectedFixtureId)}</dd>
             </dl>
+
+            <div className="property-section">
+              <div className="subsection-label">
+                {t("ui.property.parametric_parts", "Pieces parametriques")}
+              </div>
+              {parametricParts.length > 0 ? (
+                <div className="property-card-list">
+                  {[...parametricParts].reverse().slice(0, 3).map((entity) => (
+                    <article
+                      key={entity.id}
+                      className="result-card property-card"
+                      data-parametric-part-summary={entity.id}
+                    >
+                      <strong>{entity.name}</strong>
+                      <div className="command-id">
+                        {formatParametricPartSummary(locale, entity.partGeometry)}
+                      </div>
+                      <div className="muted">
+                        {entity.partGeometry.materialName} | {entity.partGeometry.state}
+                      </div>
+                      <div className="property-inline-metrics">
+                        <span>
+                          {t("ui.property.area", "Aire")} {formatDecimal(locale, entity.partGeometry.areaMm2)} mm²
+                        </span>
+                        <span>
+                          {t("ui.property.volume", "Volume")} {formatDecimal(locale, entity.partGeometry.volumeMm3)} mm³
+                        </span>
+                        <span data-parametric-part-mass={entity.id}>
+                          {t("ui.property.mass", "Masse")} {formatDecimal(locale, entity.partGeometry.estimatedMassGrams)} g
+                        </span>
+                      </div>
+                    </article>
+                  ))}
+                </div>
+              ) : (
+                <p className="muted">
+                  {t(
+                    "ui.property.no_parametric_parts",
+                    "Aucune piece parametrique regeneree dans cette session."
+                  )}
+                </p>
+              )}
+            </div>
           </Panel>
         </aside>
 

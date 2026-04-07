@@ -199,16 +199,27 @@ def wait_for_rendered_shell(window, timeout_seconds: int) -> None:
 
 def focus_workspace(window) -> None:
     window.restore()
-    window.set_focus()
+    try:
+        window.set_focus()
+    except Exception:  # pragma: no cover - Windows focus policy is timing dependent
+        time.sleep(0.5)
     rect = window.rectangle()
     workspace_focus_point = (
         rect.left + int(rect.width() * 0.52),
         rect.top + int(rect.height() * 0.30),
     )
-    mouse.click(
-        button="left",
-        coords=workspace_focus_point,
-    )
+    try:
+        window.click_input(
+            coords=(
+                int(rect.width() * 0.52),
+                int(rect.height() * 0.30),
+            )
+        )
+    except Exception:  # pragma: no cover - falls back to absolute click
+        mouse.click(
+            button="left",
+            coords=workspace_focus_point,
+        )
     time.sleep(1.5)
 
 

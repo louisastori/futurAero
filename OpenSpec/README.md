@@ -67,6 +67,7 @@ Le produit vise un usage proche d'un environnement CAD/CAE industriel, avec un f
 - Un panneau de discussion IA locale dans le shell desktop, branche a Ollama local avec contexte projet et fallback local explicite.
 - Un viewport de references aeronautiques reproduisant dans le shell des scenes inspirees de vues moteur, cellule, wireframe, FEA et aero.
 - Un premier noyau code pour geometry, assembly, sim, perception, robotics, safety, commissioning et optimization afin d enlever les crates vides du workspace.
+- Un premier flux CAO parametrique reel `rectangle -> extrusion -> volume -> masse` expose dans le backend desktop et visible dans le panneau Proprietes.
 - Un cadre GitHub explicite pour branch protections, PR, checks requis et releases.
 - Un premier decoupage des outils a programmer.
 - Un workflow GitHub avec remote canonique, PR, checks obligatoires et pipeline GitHub Actions.

@@ -161,7 +161,20 @@ function createMockBackend() {
             entityType: "Part",
             name: `Part-${index.toString().padStart(3, "0")}`,
             revision: "rev_seed",
-            status: "active"
+            status: "active",
+            detail: "132.0 x 86.0 x 12.0 mm | 367.9 g",
+            partGeometry: {
+              state: "well_constrained",
+              widthMm: 132.0,
+              heightMm: 86.0,
+              depthMm: 12.0,
+              pointCount: 4,
+              perimeterMm: 436.0,
+              areaMm2: 11352.0,
+              volumeMm3: 136224.0,
+              estimatedMassGrams: 367.9,
+              materialName: "Aluminum 6061"
+            }
           }
         ];
         snapshot.status.entityCount = snapshot.entities.length;
@@ -417,6 +430,19 @@ describe("App shell buttons", () => {
         document.querySelector("[data-command-feedback]")?.getAttribute("data-command-feedback"),
         "app.settings"
       );
+    });
+  });
+
+  test("creating a part surfaces parametric geometry metrics in properties", async () => {
+    const { user } = await renderApp();
+
+    await user.click(screen.getByRole("button", { name: "Projet" }));
+    await user.click(document.querySelector('[data-command-id="entity.create.part"]'));
+
+    await waitFor(() => {
+      assert.ok(screen.getByText("Pieces parametriques"));
+      assert.ok(document.querySelector('[data-parametric-part-summary="ent_part_002"]'));
+      assert.ok(document.querySelector('[data-parametric-part-mass="ent_part_002"]')?.textContent?.includes("367"));
     });
   });
 

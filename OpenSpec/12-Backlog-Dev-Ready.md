@@ -127,6 +127,7 @@ Criteres:
 - Modules: `faero-geometry`, `faero-core`
 - Dependances: `ST-201`
 - Sortie: piece 3D extrudee a partir d'une esquisse
+- Etat implementation: premier jalon livre dans le shell desktop avec profil rectangle, extrusion, volume et affichage des proprietes calculees
 
 Criteres:
 
@@ -140,6 +141,7 @@ Criteres:
 - Modules: `faero-geometry`, `faero-core`
 - Dependances: `ST-202`
 - Sortie: piece avec materiau et masse coherente
+- Etat implementation: premier jalon livre avec `Aluminum 6061`, masse coherente et centre geometrique expose dans les donnees de piece
 
 Criteres:
 
