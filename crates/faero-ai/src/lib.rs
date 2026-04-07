@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 const DEFAULT_OLLAMA_ENDPOINT: &str = "http://127.0.0.1:11434";
-const DEFAULT_TIMEOUT_SECS: u64 = 45;
+const DEFAULT_TIMEOUT_SECS: u64 = 120;
 const DEFAULT_PREFERRED_MODELS: &[&str] = &["gemma3:27b", "gemma3:12b", "gemma3:4b", "phi3:mini"];
 const GEMMA3_MODEL_PREFIX: &str = "gemma3:";
 const MAX_HISTORY_MESSAGES: usize = 8;
@@ -188,12 +188,7 @@ pub fn chat_with_project(
                         trimmed_message,
                         document,
                         references,
-                        unavailable_runtime_status(
-                            &config,
-                            error.to_string(),
-                            models,
-                            selected_model,
-                        ),
+                        degraded_runtime_status(&config, error.to_string(), models, selected_model),
                     ),
                 }
             } else {
@@ -276,6 +271,31 @@ fn unavailable_runtime_status(
         provider: "ollama".to_string(),
         endpoint: config.endpoint.clone(),
         mode: "fallback-local".to_string(),
+        local_only: true,
+        active_model: selection.active_model,
+        gemma3_models: collect_gemma3_models(&available_models),
+        available_models,
+        warning: combine_warnings(Some(warning), selection.warning),
+    }
+}
+
+fn degraded_runtime_status(
+    config: &AiRuntimeConfig,
+    warning: String,
+    available_models: Vec<String>,
+    requested_model: Option<&str>,
+) -> AiRuntimeStatus {
+    let selection =
+        resolve_model_selection(&available_models, &config.preferred_models, requested_model);
+    AiRuntimeStatus {
+        available: !available_models.is_empty(),
+        provider: "ollama".to_string(),
+        endpoint: config.endpoint.clone(),
+        mode: if available_models.is_empty() {
+            "fallback-local".to_string()
+        } else {
+            "degraded-chat".to_string()
+        },
         local_only: true,
         active_model: selection.active_model,
         gemma3_models: collect_gemma3_models(&available_models),
@@ -569,13 +589,18 @@ fn fallback_response(
     references: Vec<String>,
     runtime: AiRuntimeStatus,
 ) -> AiChatResponse {
+    let source = if runtime.available {
+        "degraded-local".to_string()
+    } else {
+        "fallback-local".to_string()
+    };
     let warnings = runtime.warning.clone().into_iter().collect::<Vec<_>>();
     AiChatResponse {
         answer: build_fallback_answer(locale, message, document, &runtime),
         runtime,
         references,
         warnings,
-        source: "fallback-local".to_string(),
+        source,
     }
 }
 
@@ -596,15 +621,39 @@ fn build_fallback_answer(
 
     match locale {
         "en" => format!(
-            "The local AI runtime did not answer, so I am staying in grounded local-summary mode.\nProject: {project_digest}.\nYour request was: \"{message}\".\nYou can continue asking about the current project, but for live model-backed answers check Ollama on {} and ensure a local model is loaded.",
+            "{}\nProject: {project_digest}.\nYour request was: \"{message}\".\nYou can continue asking about the current project, but for live model-backed answers check Ollama on {} and ensure a local model is loaded.",
+            if runtime.available {
+                format!(
+                    "The local AI runtime is reachable, but model {} did not finish in time or returned an error, so I am temporarily staying in grounded local-summary mode.",
+                    runtime.active_model.as_deref().unwrap_or("unknown")
+                )
+            } else {
+                "The local AI runtime did not answer, so I am staying in grounded local-summary mode.".to_string()
+            },
             runtime.endpoint
         ),
         "es" => format!(
-            "El runtime de IA local no respondio, asi que sigo en modo resumen local guiado por el proyecto.\nProyecto: {project_digest}.\nTu solicitud fue: \"{message}\".\nPuedes seguir preguntando sobre el proyecto actual, pero para respuestas con modelo en vivo revisa Ollama en {} y confirma que haya un modelo local cargado.",
+            "{}\nProyecto: {project_digest}.\nTu solicitud fue: \"{message}\".\nPuedes seguir preguntando sobre el proyecto actual, pero para respuestas con modelo en vivo revisa Ollama en {} y confirma que haya un modelo local cargado.",
+            if runtime.available {
+                format!(
+                    "El runtime de IA local es accesible, pero el modelo {} no termino a tiempo o devolvio un error, asi que sigo temporalmente en modo resumen local guiado por el proyecto.",
+                    runtime.active_model.as_deref().unwrap_or("desconocido")
+                )
+            } else {
+                "El runtime de IA local no respondio, asi que sigo en modo resumen local guiado por el proyecto.".to_string()
+            },
             runtime.endpoint
         ),
         _ => format!(
-            "Le runtime IA local n a pas repondu, donc je reste en mode resume local guide par le projet.\nProjet: {project_digest}.\nTa demande etait: \"{message}\".\nTu peux continuer a poser des questions sur le projet courant, mais pour une vraie reponse modele en direct il faut verifier Ollama sur {} et la presence d un modele local charge.",
+            "{}\nProjet: {project_digest}.\nTa demande etait: \"{message}\".\nTu peux continuer a poser des questions sur le projet courant, mais pour une vraie reponse modele en direct il faut verifier Ollama sur {} et la presence d un modele local charge.",
+            if runtime.available {
+                format!(
+                    "Le runtime IA local est joignable, mais le modele {} n a pas termine a temps ou a renvoye une erreur, donc je passe temporairement en mode resume local guide par le projet.",
+                    runtime.active_model.as_deref().unwrap_or("inconnu")
+                )
+            } else {
+                "Le runtime IA local n a pas repondu, donc je reste en mode resume local guide par le projet.".to_string()
+            },
             runtime.endpoint
         ),
     }
@@ -1262,7 +1311,9 @@ mod tests {
         disconnecting_handle
             .join()
             .expect("disconnecting server thread should finish");
-        assert_eq!(disconnecting_response.source, "fallback-local");
+        assert_eq!(disconnecting_response.source, "degraded-local");
+        assert!(disconnecting_response.runtime.available);
+        assert_eq!(disconnecting_response.runtime.mode, "degraded-chat");
 
         let (invalid_payload_endpoint, invalid_payload_handle) = spawn_mock_ollama_server(vec![
             (
@@ -1294,7 +1345,9 @@ mod tests {
         invalid_payload_handle
             .join()
             .expect("invalid payload server thread should finish");
-        assert_eq!(invalid_payload_response.source, "fallback-local");
+        assert_eq!(invalid_payload_response.source, "degraded-local");
+        assert!(invalid_payload_response.runtime.available);
+        assert_eq!(invalid_payload_response.runtime.mode, "degraded-chat");
     }
 
     #[test]
@@ -1430,7 +1483,9 @@ mod tests {
         .expect("chat failure should fallback");
         failing_handle.join().expect("server thread should finish");
 
-        assert_eq!(failing_response.source, "fallback-local");
+        assert_eq!(failing_response.source, "degraded-local");
+        assert!(failing_response.runtime.available);
+        assert_eq!(failing_response.runtime.mode, "degraded-chat");
         assert!(
             failing_response
                 .warnings

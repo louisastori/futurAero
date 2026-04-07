@@ -220,3 +220,18 @@ Chaque session IA enregistre:
 - Une suggestion appliquee laisse une trace commande/evenement classique.
 - Une reponse peut citer les mesures et objets qui ont servi au raisonnement.
 - Le profil `furnace` peut activer plusieurs passes de raisonnement local sans casser les garde-fous du projet.
+## Timeout et mode degrade pour gros modeles locaux
+
+Pour les variantes lourdes telles que `gemma3:27b`, le runtime local doit:
+
+- garder `gemma3:27b` comme priorite si l utilisateur l a selectionne,
+- accepter un budget de reponse local adapte au cold start et au chargement GPU/CPU,
+- eviter de presenter Ollama comme indisponible quand le endpoint et les tags repondent encore,
+- exposer un mode degrade de chat si le runtime est joignable mais que la generation a depasse la fenetre de reponse ou a renvoye une erreur.
+
+Dans ce mode degrade:
+
+- le panneau IA reste marque comme runtime local joignable,
+- le warning remonte l erreur HTTP ou le timeout,
+- la reponse de secours reste locale et guidee par le projet,
+- un nouvel essai avec un modele plus leger ou un modele deja rechauffe doit pouvoir repartir sans relancer toute l application.
