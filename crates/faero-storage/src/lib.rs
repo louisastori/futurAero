@@ -364,10 +364,10 @@ mod tests {
                 .permissions();
             permissions.set_mode(0o000);
             fs::set_permissions(path, permissions).expect("permissions should update");
-            return UnreadableFileGuard {
+            UnreadableFileGuard {
                 path: path.to_path_buf(),
                 original_mode,
-            };
+            }
         }
 
         #[cfg(windows)]
