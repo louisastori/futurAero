@@ -11,6 +11,11 @@ export {
   translate
 } from "./i18n.mjs";
 export {
+  findMenuCommandByShortcut,
+  shortcutMatchesEvent,
+  shouldHandleShortcutEvent
+} from "./keyboard-shortcuts.mjs";
+export {
   defaultWorkspacePanels,
   getWorkspaceColumnState,
   panelIdFromCommand,

@@ -36,3 +36,6 @@ Invoke-Checked cargo @(
 Invoke-Checked cargo @("test", "--manifest-path", "apps/desktop/src-tauri/Cargo.toml")
 Invoke-Checked npm @("test")
 Invoke-Checked npm @("run", "test:e2e")
+if (-not $env:CI -and $env:FUTUREAERO_SKIP_NATIVE_E2E -ne "1") {
+  Invoke-Checked npm @("run", "test:e2e:native")
+}

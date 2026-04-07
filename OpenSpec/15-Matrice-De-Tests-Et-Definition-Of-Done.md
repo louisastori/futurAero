@@ -588,6 +588,25 @@ Attendu:
 - le backend mock rend les tests deterministes sans dependre du runtime Tauri,
 - les chemins critiques `command surface`, `Parametres` et `chat gemma3` restent verifies en continu dans la CI.
 
+### CT-022 - Pilotage desktop natif Windows de type Cypress local
+
+Etapes:
+
+1. lancer ou reutiliser le shell Tauri `FutureAero`,
+2. attacher la vraie fenetre Windows via `scripts/native_desktop_e2e.py`,
+3. envoyer des raccourcis clavier reels `Ctrl+S`, `Ctrl+Shift+N`, `Ctrl+Shift+S`, `F4` et `Alt+Enter`,
+4. verifier les effets par artefacts `.faero` crees et par captures reelles de la fenetre.
+
+Attendu:
+
+- la suite prend bien le controle de la vraie application desktop et non seulement du navigateur,
+- les raccourcis clavier critiques du shell restent fonctionnels sur la fenetre Tauri,
+- `Ctrl+S` et `Ctrl+Shift+S` creent des sauvegardes testables dans `artifacts/saves`,
+- `Ctrl+Shift+N` cree une session vide sauvegardable,
+- `F4` et `Alt+Enter` provoquent une difference visible verifiee par captures natives,
+- la suite locale est accessible via `npm run test:e2e:native`,
+- la suite est executee par `scripts/test.ps1` hors CI, avec possibilite de la desactiver via `FUTUREAERO_SKIP_NATIVE_E2E=1`.
+
 ## Seuils techniques MVP
 
 - ouverture projet vide: < 2 s sur machine dev cible

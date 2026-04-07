@@ -5,10 +5,12 @@ import {
   defaultWorkspaceDockWidths,
   defaultWorkspacePanels,
   defaultLocale,
+  findMenuCommandByShortcut,
   getWorkspaceColumnState,
   getVisibleSidebarWidth,
   localizeMenuModel,
   panelIdFromCommand,
+  shouldHandleShortcutEvent,
   supportedLocales,
   toggleWorkspacePanel,
   WORKSPACE_RESIZER_WIDTH,
@@ -762,6 +764,28 @@ export default function App({ backend = defaultDesktopBackend }) {
       mounted = false;
     };
   }, []);
+
+  useEffect(() => {
+    async function handleWindowKeydown(event) {
+      if (!shouldHandleShortcutEvent(event)) {
+        return;
+      }
+
+      const shortcutMatch = findMenuCommandByShortcut(menus, event);
+      if (!shortcutMatch) {
+        return;
+      }
+
+      event.preventDefault();
+      setActiveMenuId(shortcutMatch.menuId);
+      await handleCommandExecute(shortcutMatch.commandId);
+    }
+
+    window.addEventListener("keydown", handleWindowKeydown);
+    return () => {
+      window.removeEventListener("keydown", handleWindowKeydown);
+    };
+  }, [aiBusy, fixtureProjects, locale, menus, panelState, projectSnapshot, selectedFixtureId, selectedAiModel]);
 
   async function loadFixtureById(nextFixtureId) {
     if (!nextFixtureId) {

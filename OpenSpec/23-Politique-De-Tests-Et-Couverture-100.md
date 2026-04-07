@@ -70,7 +70,9 @@ En plus de la couverture de code, le projet exige:
 - coverage des modes live/replay/degrade quand applicable,
 - coverage des modes IA `standard` et `furnace`,
 - coverage des transitions de liaison Bluetooth, Wi-Fi ou equivalentes quand presentes,
-- coverage des transitions safety critiques.
+- coverage des transitions safety critiques,
+- coverage navigateur automatise pour le shell web,
+- coverage desktop native locale pour les raccourcis et manipulations critiques de la fenetre Tauri.
 
 ## Regles CI
 
@@ -93,6 +95,8 @@ GitHub est la plateforme de reference pour appliquer cette politique:
 - la gate Rust lue par GitHub et par les scripts locaux provient du meme fichier `config/coverage-gate.json`,
 - le merge vers `main` est bloque si un check requis est rouge,
 - les artefacts et rapports de couverture sont attaches aux runs du pipeline.
+
+La suite `scripts/native_desktop_e2e.py` reste locale a Windows et n est pas imposee dans GitHub Actions tant qu un runner desktop interactif stable n est pas disponible. Elle est executee via `scripts/test.ps1` hors CI par defaut.
 
 ## Regles de PR
 

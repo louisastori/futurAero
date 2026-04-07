@@ -1,10 +1,13 @@
 target/
 coverage/
+coverage.lcov
 dist/
 node_modules/
 .pnpm-store/
 .turbo/
 *.log
+__pycache__/
+*.pyc
 .DS_Store
 Thumbs.db
 examples/**/cache/
