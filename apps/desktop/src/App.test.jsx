@@ -1,7 +1,7 @@
 import React from "react";
 import { afterEach, describe, test } from "vitest";
 import assert from "node:assert/strict";
-import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 import App from "./App.jsx";
@@ -233,6 +233,41 @@ function createMockBackend() {
         }
       };
     },
+    async regenerateLatestPart(payload) {
+      const index = snapshot.entities.findLastIndex((entity) => entity.partGeometry);
+      assert.notEqual(index, -1);
+
+      const areaMm2 = payload.widthMm * payload.heightMm;
+      const volumeMm3 = areaMm2 * payload.depthMm;
+      const estimatedMassGrams = volumeMm3 * 0.0027;
+      const updated = {
+        ...snapshot.entities[index],
+        detail: `${payload.widthMm.toFixed(1)} x ${payload.heightMm.toFixed(1)} x ${payload.depthMm.toFixed(1)} mm | ${estimatedMassGrams.toFixed(1)} g`,
+        partGeometry: {
+          ...snapshot.entities[index].partGeometry,
+          widthMm: payload.widthMm,
+          heightMm: payload.heightMm,
+          depthMm: payload.depthMm,
+          perimeterMm: 2 * (payload.widthMm + payload.heightMm),
+          areaMm2,
+          volumeMm3,
+          estimatedMassGrams
+        }
+      };
+      snapshot.entities = snapshot.entities.map((entity, entityIndex) =>
+        entityIndex === index ? updated : entity
+      );
+      pushActivity("build.regenerate_part", updated.id);
+
+      return {
+        snapshot: clone(snapshot),
+        result: {
+          commandId: "build.regenerate_part",
+          status: "applied",
+          message: `regenerated ${updated.detail}`
+        }
+      };
+    },
     async fetchAiRuntimeStatus() {
       return clone(runtime);
     },
@@ -443,6 +478,31 @@ describe("App shell buttons", () => {
       assert.ok(screen.getByText("Pieces parametriques"));
       assert.ok(document.querySelector('[data-parametric-part-summary="ent_part_002"]'));
       assert.ok(document.querySelector('[data-parametric-part-mass="ent_part_002"]')?.textContent?.includes("367"));
+    });
+  });
+
+  test("parametric editor regenerates the latest part with new dimensions", async () => {
+    const { user } = await renderApp();
+
+    await user.click(screen.getByRole("button", { name: "Projet" }));
+    await user.click(document.querySelector('[data-command-id="entity.create.part"]'));
+
+    const widthInput = screen.getByLabelText("Largeur");
+    const heightInput = screen.getByLabelText("Hauteur");
+    const depthInput = screen.getByLabelText("Profondeur");
+
+    fireEvent.change(widthInput, { target: { value: "200" } });
+    fireEvent.change(heightInput, { target: { value: "90" } });
+    fireEvent.change(depthInput, { target: { value: "20" } });
+    await user.click(document.querySelector('[data-parametric-regenerate="true"]'));
+
+    await waitFor(() => {
+      assert.ok(document.querySelector('[data-parametric-part-summary="ent_part_002"]'));
+      assert.ok(document.querySelector('[data-parametric-part-mass="ent_part_002"]')?.textContent?.includes("972"));
+      assert.equal(
+        document.querySelector("[data-command-feedback]")?.getAttribute("data-command-feedback"),
+        "build.regenerate_part"
+      );
     });
   });
 

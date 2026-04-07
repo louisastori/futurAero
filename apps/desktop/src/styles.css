@@ -125,6 +125,11 @@ button {
   opacity: 0.65;
 }
 
+.shell-input {
+  min-width: 0;
+  width: 100%;
+}
+
 .status-pill {
   padding: 6px 10px;
   border-radius: 999px;
@@ -400,6 +405,30 @@ button {
 
 .property-card {
   gap: 6px;
+}
+
+.property-editor-card {
+  display: grid;
+  gap: 12px;
+  padding: 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.property-editor-grid {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+}
+
+.property-control {
+  min-width: 0;
+}
+
+.property-editor-actions {
+  display: flex;
+  justify-content: flex-end;
 }
 
 .property-inline-metrics {

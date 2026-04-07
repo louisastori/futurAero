@@ -159,6 +159,14 @@ struct WorkspaceBootstrap {
     snapshot: ProjectSnapshot,
 }
 
+#[derive(Clone, Copy, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PartRegenerationInput {
+    width_mm: f64,
+    height_mm: f64,
+    depth_mm: f64,
+}
+
 #[derive(Debug)]
 struct WorkspaceSession {
     fixture_id: String,
@@ -213,6 +221,48 @@ impl WorkspaceSession {
             timestamp,
             target_id,
         });
+    }
+
+    fn latest_parametric_part(&self) -> Option<EntityRecord> {
+        self.graph
+            .document()
+            .nodes
+            .values()
+            .rev()
+            .find(|entity| part_geometry_summary_from_entity(entity).is_some())
+            .cloned()
+    }
+
+    fn regenerate_latest_part(
+        &mut self,
+        width_mm: f64,
+        height_mm: f64,
+        depth_mm: f64,
+    ) -> Result<CommandResult, String> {
+        let latest_part = self
+            .latest_parametric_part()
+            .ok_or_else(|| "aucune piece parametrique a regenerer".to_string())?;
+        let (entity, summary) = build_parametric_part_entity(
+            &latest_part.id,
+            &latest_part.name,
+            width_mm,
+            height_mm,
+            depth_mm,
+        )?;
+
+        self.graph
+            .apply_command(CoreCommand::ReplaceEntity(entity))
+            .map_err(|error| error.to_string())?;
+        self.push_system_activity("part.regenerated", Some(latest_part.id));
+
+        Ok(CommandResult {
+            command_id: "build.regenerate_part".to_string(),
+            status: "applied".to_string(),
+            message: format!(
+                "piece regeneree: {:.1} x {:.1} x {:.1} mm | {:.1} g",
+                summary.width_mm, summary.height_mm, summary.depth_mm, summary.estimated_mass_grams
+            ),
+        })
     }
 
     fn execute_command(&mut self, command_id: &str) -> Result<CommandResult, String> {
@@ -295,6 +345,14 @@ impl WorkspaceSession {
                         summary.estimated_mass_grams
                     ),
                 })
+            }
+            "build.regenerate_part" => {
+                let latest_part = self
+                    .latest_parametric_part()
+                    .ok_or_else(|| "aucune piece parametrique a regenerer".to_string())?;
+                let summary = part_geometry_summary_from_entity(&latest_part)
+                    .ok_or_else(|| "piece parametrique invalide".to_string())?;
+                self.regenerate_latest_part(summary.width_mm, summary.height_mm, summary.depth_mm)
             }
             "entity.create.assembly" => {
                 let index = self.graph.entity_count() + 1;
@@ -754,12 +812,13 @@ fn sketch_constraint_state_label(state: SketchConstraintState) -> &'static str {
     }
 }
 
-fn sample_parametric_part_entity(
-    index: usize,
+fn build_parametric_part_entity(
+    id: &str,
+    name: &str,
+    width_mm: f64,
+    height_mm: f64,
+    depth_mm: f64,
 ) -> Result<(EntityRecord, PartGeometrySummary), String> {
-    let width_mm = 120.0 + (index as f64 * 12.0);
-    let height_mm = 80.0 + (index as f64 * 6.0);
-    let depth_mm = 10.0 + (index as f64 * 2.0);
     let profile = rectangular_profile(width_mm, height_mm, 4).map_err(|error| error.to_string())?;
     let material = MaterialProfile::aluminum_6061();
     let regeneration = regenerate_extrusion(&profile, &ExtrusionDefinition { depth_mm }, &material)
@@ -780,8 +839,8 @@ fn sample_parametric_part_entity(
 
     let entity = sample_entity(
         "Part",
-        &format!("ent_part_{index:03}"),
-        &format!("Part-{index:03}"),
+        id,
+        name,
         serde_json::json!({
             "geometrySource": "parametric_sketch_extrude",
             "parameterSet": {
@@ -818,6 +877,21 @@ fn sample_parametric_part_entity(
     );
 
     Ok((entity, summary))
+}
+
+fn sample_parametric_part_entity(
+    index: usize,
+) -> Result<(EntityRecord, PartGeometrySummary), String> {
+    let width_mm = 120.0 + (index as f64 * 12.0);
+    let height_mm = 80.0 + (index as f64 * 6.0);
+    let depth_mm = 10.0 + (index as f64 * 2.0);
+    build_parametric_part_entity(
+        &format!("ent_part_{index:03}"),
+        &format!("Part-{index:03}"),
+        width_mm,
+        height_mm,
+        depth_mm,
+    )
 }
 
 fn number_from_value(value: &serde_json::Value, key: &str) -> Option<f64> {
@@ -969,6 +1043,20 @@ fn workspace_execute_command(
 }
 
 #[tauri::command]
+fn workspace_regenerate_latest_part(
+    payload: PartRegenerationInput,
+    state: State<'_, SharedWorkspace>,
+) -> Result<CommandResponse, String> {
+    let mut session = lock_workspace(&state)?;
+    let result =
+        session.regenerate_latest_part(payload.width_mm, payload.height_mm, payload.depth_mm)?;
+    Ok(CommandResponse {
+        snapshot: session.snapshot(),
+        result,
+    })
+}
+
+#[tauri::command]
 fn ai_runtime_status() -> AiRuntimeStatus {
     query_ai_runtime_status()
 }
@@ -1010,6 +1098,7 @@ fn main() {
             workspace_bootstrap,
             workspace_load_fixture,
             workspace_execute_command,
+            workspace_regenerate_latest_part,
             ai_runtime_status,
             ai_chat_send_message
         ])
@@ -1115,6 +1204,29 @@ mod tests {
                 .as_ref()
                 .is_some_and(|detail| detail.contains("mm"))
         );
+    }
+
+    #[test]
+    fn regenerate_latest_part_updates_existing_geometry_metrics() {
+        let mut session = WorkspaceSession::empty("Session");
+        session
+            .execute_command("entity.create.part")
+            .expect("part should be created");
+
+        let result = session
+            .regenerate_latest_part(200.0, 90.0, 20.0)
+            .expect("part should regenerate");
+        let snapshot = session.snapshot();
+        let geometry = snapshot.entities[0]
+            .part_geometry
+            .as_ref()
+            .expect("updated geometry should exist");
+
+        assert_eq!(result.command_id, "build.regenerate_part");
+        assert_eq!(geometry.width_mm, 200.0);
+        assert_eq!(geometry.height_mm, 90.0);
+        assert_eq!(geometry.depth_mm, 20.0);
+        assert!(result.message.contains("200.0 x 90.0 x 20.0"));
     }
 
     #[test]

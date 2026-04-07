@@ -12,6 +12,8 @@ use thiserror::Error;
 pub enum CoreError {
     #[error("entity `{0}` already exists")]
     EntityAlreadyExists(String),
+    #[error("entity `{0}` does not exist")]
+    EntityNotFound(String),
     #[error("endpoint `{0}` already exists")]
     EndpointAlreadyExists(String),
     #[error("stream `{0}` already exists")]
@@ -27,6 +29,7 @@ pub enum CoreError {
 #[derive(Debug, Clone)]
 pub enum CoreCommand {
     CreateEntity(EntityRecord),
+    ReplaceEntity(EntityRecord),
     RegisterEndpoint(ExternalEndpoint),
     RegisterStream(TelemetryStream),
     InstallPlugin(PluginManifest),
@@ -133,6 +136,39 @@ impl ProjectGraph {
                     command_id,
                     revision,
                     payload,
+                )
+            }
+            CoreCommand::ReplaceEntity(entity) => {
+                if !self.document.nodes.contains_key(&entity.id) {
+                    return Err(CoreError::EntityNotFound(entity.id));
+                }
+
+                let base_revision = self
+                    .document
+                    .nodes
+                    .get(&entity.id)
+                    .map(|existing| existing.revision.clone());
+                let payload = serialize_payload(&entity);
+                let command_id = self.record_command(
+                    "entity.update",
+                    Some(entity.id.clone()),
+                    base_revision,
+                    payload,
+                );
+                let revision = self.next_revision();
+                let mut next_entity = entity.clone();
+                next_entity.revision = revision.clone();
+                let event_payload = serialize_payload(&next_entity);
+                self.document
+                    .nodes
+                    .insert(next_entity.id.clone(), next_entity.clone());
+
+                self.record_event(
+                    "entity.updated",
+                    Some(next_entity.id),
+                    command_id,
+                    revision,
+                    event_payload,
                 )
             }
             CoreCommand::RegisterEndpoint(endpoint) => {
@@ -430,6 +466,30 @@ mod tests {
     }
 
     #[test]
+    fn replaces_existing_entity_and_advances_revision() {
+        let mut graph = ProjectGraph::new("Demo");
+        graph
+            .apply_command(CoreCommand::CreateEntity(sample_entity()))
+            .expect("entity should be created");
+
+        let mut updated = sample_entity();
+        updated.name = "Bracket-B".to_string();
+        updated.data = serde_json::json!({
+            "geometrySource": "parametric",
+            "parameterSet": { "width": 140 }
+        });
+
+        let event = graph
+            .apply_command(CoreCommand::ReplaceEntity(updated))
+            .expect("entity should update");
+
+        assert_eq!(event.kind, "entity.updated");
+        assert_eq!(graph.document().nodes["ent_part_001"].name, "Bracket-B");
+        assert_eq!(graph.document().nodes["ent_part_001"].revision, "rev_0002");
+        assert_eq!(graph.document().commands.len(), 2);
+    }
+
+    #[test]
     fn stream_requires_existing_endpoint() {
         let mut graph = ProjectGraph::new("Demo");
 
@@ -554,6 +614,17 @@ mod tests {
         assert_eq!(
             duplicate_plugin,
             CoreError::PluginAlreadyInstalled("plg.integration.viewer".to_string())
+        );
+
+        let missing_entity = graph
+            .apply_command(CoreCommand::ReplaceEntity(EntityRecord {
+                id: "missing".to_string(),
+                ..sample_entity()
+            }))
+            .expect_err("missing entity update should fail");
+        assert_eq!(
+            missing_entity,
+            CoreError::EntityNotFound("missing".to_string())
         );
     }
 

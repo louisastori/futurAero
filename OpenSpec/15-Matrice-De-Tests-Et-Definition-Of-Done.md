@@ -180,6 +180,7 @@ Ciblent:
 - colonnes laterales redimensionnables a la souris avec bornes stables,
 - panneau de discussion IA locale avec etats vide, charge, reponse et fallback,
 - affichage des metriques d'une piece parametrique regeneree dans le panneau Proprietes.
+- edition de dimensions `width|height|depth` puis regeneration visible sans recharger la session.
 
 ## Fixtures officielles MVP
 

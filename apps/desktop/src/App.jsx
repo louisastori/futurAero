@@ -552,6 +552,57 @@ async function executeWorkspaceCommand(commandId, currentSnapshot) {
   };
 }
 
+async function regenerateLatestPart(payload, currentSnapshot) {
+  const response = await invokeBackend("workspace_regenerate_latest_part", { payload });
+  if (response) {
+    return response;
+  }
+
+  const latestPart = latestParametricPartFromSnapshot(currentSnapshot);
+  if (!latestPart?.partGeometry) {
+    return {
+      snapshot: appendFallbackActivity(currentSnapshot, "system", "build.regenerate_part", null),
+      result: {
+        commandId: "build.regenerate_part",
+        status: "notice",
+        message: "aucune piece parametrique a regenerer dans l apercu web"
+      }
+    };
+  }
+
+  const areaMm2 = payload.widthMm * payload.heightMm;
+  const volumeMm3 = areaMm2 * payload.depthMm;
+  const estimatedMassGrams = volumeMm3 * 0.0027;
+  const updatedEntity = {
+    ...latestPart,
+    detail: `${payload.widthMm.toFixed(1)} x ${payload.heightMm.toFixed(1)} x ${payload.depthMm.toFixed(1)} mm | ${estimatedMassGrams.toFixed(1)} g`,
+    partGeometry: {
+      ...latestPart.partGeometry,
+      widthMm: payload.widthMm,
+      heightMm: payload.heightMm,
+      depthMm: payload.depthMm,
+      perimeterMm: 2 * (payload.widthMm + payload.heightMm),
+      areaMm2,
+      volumeMm3,
+      estimatedMassGrams
+    }
+  };
+
+  return {
+    snapshot: {
+      ...appendFallbackActivity(currentSnapshot, "system", "build.regenerate_part", latestPart.id),
+      entities: currentSnapshot.entities.map((entity) =>
+        entity.id === latestPart.id ? updatedEntity : entity
+      )
+    },
+    result: {
+      commandId: "build.regenerate_part",
+      status: "applied",
+      message: `piece regeneree dans l apercu web: ${updatedEntity.detail}`
+    }
+  };
+}
+
 async function fetchAiRuntimeStatus() {
   return (await invokeBackend("ai_runtime_status")) ?? FALLBACK_AI_STATUS;
 }
@@ -604,6 +655,7 @@ const defaultDesktopBackend = {
   fetchWorkspaceBootstrap,
   loadWorkspaceFixture,
   executeWorkspaceCommand,
+  regenerateLatestPart,
   fetchAiRuntimeStatus,
   sendAiChatMessage
 };
@@ -630,6 +682,20 @@ function formatDecimal(locale, value, maximumFractionDigits = 1) {
 
 function formatParametricPartSummary(locale, partGeometry) {
   return `${formatDecimal(locale, partGeometry.widthMm)} x ${formatDecimal(locale, partGeometry.heightMm)} x ${formatDecimal(locale, partGeometry.depthMm)} mm | ${formatDecimal(locale, partGeometry.estimatedMassGrams)} g`;
+}
+
+function latestParametricPartFromSnapshot(snapshot) {
+  const parametricParts = snapshot.entities.filter((entity) => entity.partGeometry);
+  return parametricParts[parametricParts.length - 1] ?? null;
+}
+
+function parsePositiveDimension(value) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return null;
+  }
+
+  return parsed;
 }
 
 function activityChannelLabel(locale, channel) {
@@ -685,6 +751,11 @@ export default function App({ backend = defaultDesktopBackend }) {
   const [panelState, setPanelState] = useState(defaultWorkspacePanels);
   const [dockWidths, setDockWidths] = useState(defaultWorkspaceDockWidths);
   const [dragSide, setDragSide] = useState(null);
+  const [partEditor, setPartEditor] = useState({
+    widthMm: "",
+    heightMm: "",
+    depthMm: ""
+  });
   const aiInputRef = useRef(null);
   const workspaceRef = useRef(null);
   const dragStateRef = useRef(null);
@@ -693,6 +764,7 @@ export default function App({ backend = defaultDesktopBackend }) {
   const menu = menus.find((entry) => entry.id === activeMenuId) ?? menus[0];
   const currentStatus = projectSnapshot.status;
   const parametricParts = projectSnapshot.entities.filter((entity) => entity.partGeometry);
+  const latestParametricPart = latestParametricPartFromSnapshot(projectSnapshot);
   const fixtureOptions =
     selectedFixtureId && !fixtureProjects.some((fixture) => fixture.id === selectedFixtureId)
       ? [{ id: selectedFixtureId, projectName: currentStatus.projectName }, ...fixtureProjects]
@@ -749,6 +821,58 @@ export default function App({ backend = defaultDesktopBackend }) {
     }));
   }
 
+  function handlePartEditorChange(field, value) {
+    setPartEditor((previous) => ({
+      ...previous,
+      [field]: value
+    }));
+  }
+
+  async function handleLatestPartRegenerate() {
+    if (!latestParametricPart?.partGeometry) {
+      setCommandResult({
+        commandId: "build.regenerate_part",
+        status: "notice",
+        message: t(
+          "ui.command.regenerate_part_unavailable",
+          "Aucune piece parametrique disponible pour la regeneration."
+        )
+      });
+      return;
+    }
+
+    const widthMm = parsePositiveDimension(partEditor.widthMm);
+    const heightMm = parsePositiveDimension(partEditor.heightMm);
+    const depthMm = parsePositiveDimension(partEditor.depthMm);
+    if (!widthMm || !heightMm || !depthMm) {
+      setCommandResult({
+        commandId: "build.regenerate_part",
+        status: "rejected",
+        message: t(
+          "ui.command.invalid_part_dimensions",
+          "Les dimensions de piece doivent etre strictement positives."
+        )
+      });
+      return;
+    }
+
+    setExecutingCommandId("build.regenerate_part");
+    try {
+      const response = await backend.regenerateLatestPart(
+        {
+          widthMm,
+          heightMm,
+          depthMm
+        },
+        projectSnapshot
+      );
+      setProjectSnapshot(response.snapshot);
+      setCommandResult(response.result);
+    } finally {
+      setExecutingCommandId(null);
+    }
+  }
+
   useEffect(() => {
     if (!dragSide) {
       return undefined;
@@ -799,6 +923,28 @@ export default function App({ backend = defaultDesktopBackend }) {
       return defaultGemma3Model(aiRuntime);
     });
   }, [aiRuntime.activeModel, gemma3Models.join("|")]);
+
+  useEffect(() => {
+    if (!latestParametricPart?.partGeometry) {
+      setPartEditor({
+        widthMm: "",
+        heightMm: "",
+        depthMm: ""
+      });
+      return;
+    }
+
+    setPartEditor({
+      widthMm: String(latestParametricPart.partGeometry.widthMm),
+      heightMm: String(latestParametricPart.partGeometry.heightMm),
+      depthMm: String(latestParametricPart.partGeometry.depthMm)
+    });
+  }, [
+    latestParametricPart?.id,
+    latestParametricPart?.partGeometry?.widthMm,
+    latestParametricPart?.partGeometry?.heightMm,
+    latestParametricPart?.partGeometry?.depthMm
+  ]);
 
   useEffect(() => {
     let mounted = true;
@@ -954,6 +1100,11 @@ export default function App({ backend = defaultDesktopBackend }) {
               "Fermeture indisponible dans cet apercu. Lance le shell Tauri pour fermer la fenetre."
             )
       });
+      return;
+    }
+
+    if (commandId === "build.regenerate_part") {
+      await handleLatestPartRegenerate();
       return;
     }
 
@@ -1233,6 +1384,59 @@ export default function App({ backend = defaultDesktopBackend }) {
               </div>
               {parametricParts.length > 0 ? (
                 <div className="property-card-list">
+                  <div className="property-editor-card">
+                    <div className="subsection-label">
+                      {t("ui.property.parametric_editor", "Edition parametrique")}
+                    </div>
+                    <div className="property-editor-grid">
+                      <label className="control-group property-control">
+                        <span>{t("ui.property.width", "Largeur")}</span>
+                        <input
+                          className="shell-select shell-input"
+                          type="number"
+                          min="0.1"
+                          step="0.1"
+                          value={partEditor.widthMm}
+                          onChange={(event) => handlePartEditorChange("widthMm", event.target.value)}
+                        />
+                      </label>
+                      <label className="control-group property-control">
+                        <span>{t("ui.property.height", "Hauteur")}</span>
+                        <input
+                          className="shell-select shell-input"
+                          type="number"
+                          min="0.1"
+                          step="0.1"
+                          value={partEditor.heightMm}
+                          onChange={(event) => handlePartEditorChange("heightMm", event.target.value)}
+                        />
+                      </label>
+                      <label className="control-group property-control">
+                        <span>{t("ui.property.depth", "Profondeur")}</span>
+                        <input
+                          className="shell-select shell-input"
+                          type="number"
+                          min="0.1"
+                          step="0.1"
+                          value={partEditor.depthMm}
+                          onChange={(event) => handlePartEditorChange("depthMm", event.target.value)}
+                        />
+                      </label>
+                    </div>
+                    <div className="property-editor-actions">
+                      <button
+                        className="run-button"
+                        type="button"
+                        data-parametric-regenerate="true"
+                        disabled={executingCommandId === "build.regenerate_part"}
+                        onClick={handleLatestPartRegenerate}
+                      >
+                        {executingCommandId === "build.regenerate_part"
+                          ? t("ui.command.running", "Execution...")
+                          : t("ui.command.regenerate_part", "Regenerer la piece")}
+                      </button>
+                    </div>
+                  </div>
                   {[...parametricParts].reverse().slice(0, 3).map((entity) => (
                     <article
                       key={entity.id}

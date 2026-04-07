@@ -128,6 +128,7 @@ Criteres:
 - Dependances: `ST-201`
 - Sortie: piece 3D extrudee a partir d'une esquisse
 - Etat implementation: premier jalon livre dans le shell desktop avec profil rectangle, extrusion, volume et affichage des proprietes calculees
+- Etat implementation detail: edition des dimensions et regeneration de la derniere piece parametrique maintenant branchees au backend desktop
 
 Criteres:
 
