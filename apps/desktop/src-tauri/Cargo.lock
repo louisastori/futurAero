@@ -732,6 +732,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "faero-assembly"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "faero-core"
 version = "0.1.0"
 dependencies = [
@@ -894,6 +902,7 @@ name = "futureaero-desktop-shell"
 version = "0.1.0"
 dependencies = [
  "faero-ai",
+ "faero-assembly",
  "faero-core",
  "faero-geometry",
  "faero-integration",

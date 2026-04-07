@@ -9,6 +9,10 @@ use faero_ai::{
     AiChatResponse, AiConversationMessage, AiRuntimeStatus, chat_with_project,
     query_runtime_status as query_ai_runtime_status,
 };
+use faero_assembly::{
+    AssemblySolveReport, AssemblySolveStatus, MateConstraint, MateType, Occurrence, Transform3D,
+    solve_assembly,
+};
 use faero_core::{CoreCommand, ProjectGraph};
 use faero_geometry::{
     ExtrusionDefinition, MaterialProfile, SketchConstraintState, rectangular_profile,
@@ -66,6 +70,7 @@ struct EntitySummary {
     status: String,
     detail: Option<String>,
     part_geometry: Option<PartGeometrySummary>,
+    assembly_summary: Option<AssemblyEntitySummary>,
 }
 
 #[derive(Serialize, Clone)]
@@ -81,6 +86,16 @@ struct PartGeometrySummary {
     volume_mm3: f64,
     estimated_mass_grams: f64,
     material_name: String,
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct AssemblyEntitySummary {
+    status: String,
+    occurrence_count: usize,
+    mate_count: usize,
+    degrees_of_freedom_estimate: usize,
+    warning_count: usize,
 }
 
 #[derive(Serialize, Clone)]
@@ -356,22 +371,37 @@ impl WorkspaceSession {
             }
             "entity.create.assembly" => {
                 let index = self.graph.entity_count() + 1;
-                let entity = sample_entity(
-                    "Assembly",
+                let mut part_ids = self
+                    .graph
+                    .document()
+                    .nodes
+                    .values()
+                    .filter(|entity| entity.entity_type == "Part")
+                    .map(|entity| entity.id.clone())
+                    .collect::<Vec<_>>();
+                while part_ids.len() < 2 {
+                    let part_index = self.graph.entity_count() + 1;
+                    let (part_entity, _) = sample_parametric_part_entity(part_index)?;
+                    part_ids.push(part_entity.id.clone());
+                    self.graph
+                        .apply_command(CoreCommand::CreateEntity(part_entity))
+                        .map_err(|error| error.to_string())?;
+                }
+                let (entity, summary) = build_assembly_entity(
                     &format!("ent_asm_{index:03}"),
                     &format!("Assembly-{index:03}"),
-                    serde_json::json!({
-                        "source": "desktop_session",
-                        "occurrenceIds": []
-                    }),
-                );
+                    &part_ids[..part_ids.len().min(3)],
+                )?;
                 self.graph
                     .apply_command(CoreCommand::CreateEntity(entity))
                     .map_err(|error| error.to_string())?;
                 Ok(CommandResult {
                     command_id: command_id.to_string(),
                     status: "applied".to_string(),
-                    message: "assemblage ajoute a la session".to_string(),
+                    message: format!(
+                        "assemblage ajoute: {} occurrences | {} mates | {}",
+                        summary.occurrence_count, summary.mate_count, summary.status
+                    ),
                 })
             }
             "entity.create.robot_cell" => {
@@ -645,14 +675,19 @@ fn build_project_snapshot_from_document(
         .values()
         .map(|entity| {
             let part_geometry = part_geometry_summary_from_entity(entity);
+            let assembly_summary = assembly_summary_from_entity(entity);
             EntitySummary {
                 id: entity.id.clone(),
                 entity_type: entity.entity_type.clone(),
                 name: entity.name.clone(),
                 revision: entity.revision.clone(),
                 status: entity.status.clone(),
-                detail: part_geometry.as_ref().map(format_part_entity_detail),
+                detail: part_geometry
+                    .as_ref()
+                    .map(format_part_entity_detail)
+                    .or_else(|| assembly_summary.as_ref().map(format_assembly_entity_detail)),
                 part_geometry,
+                assembly_summary,
             }
         })
         .collect::<Vec<_>>();
@@ -894,6 +929,75 @@ fn sample_parametric_part_entity(
     )
 }
 
+fn build_assembly_entity(
+    id: &str,
+    name: &str,
+    part_entity_ids: &[String],
+) -> Result<(EntityRecord, AssemblyEntitySummary), String> {
+    let occurrences = part_entity_ids
+        .iter()
+        .enumerate()
+        .map(|(index, part_id)| Occurrence {
+            id: format!("occ_{:03}", index + 1),
+            part_entity_id: part_id.clone(),
+            transform: Transform3D {
+                x_mm: index as f64 * 80.0,
+                ..Transform3D::default()
+            },
+        })
+        .collect::<Vec<_>>();
+
+    let constraints = occurrences
+        .windows(2)
+        .enumerate()
+        .map(|(index, pair)| MateConstraint {
+            id: format!("mate_{:03}", index + 1),
+            left_occurrence_id: pair[0].id.clone(),
+            right_occurrence_id: pair[1].id.clone(),
+            mate_type: if index == 0 {
+                MateType::Coincident
+            } else {
+                MateType::Offset {
+                    distance_mm: 25.0 * index as f64,
+                }
+            },
+        })
+        .collect::<Vec<_>>();
+
+    let report = solve_assembly(&occurrences, &constraints).map_err(|error| error.to_string())?;
+    let summary = AssemblyEntitySummary {
+        status: assembly_solve_status_label(report.status).to_string(),
+        occurrence_count: report.solved_occurrences.len(),
+        mate_count: report.total_mate_count,
+        degrees_of_freedom_estimate: report.degrees_of_freedom_estimate,
+        warning_count: report.warnings.len(),
+    };
+    let entity = sample_entity(
+        "Assembly",
+        id,
+        name,
+        serde_json::json!({
+            "occurrences": occurrences,
+            "mateConstraints": constraints,
+            "solveReport": assembly_solve_report_json(&report),
+        }),
+    );
+
+    Ok((entity, summary))
+}
+
+fn assembly_solve_report_json(report: &AssemblySolveReport) -> serde_json::Value {
+    serde_json::json!({
+        "status": assembly_solve_status_label(report.status),
+        "occurrenceCount": report.solved_occurrences.len(),
+        "mateCount": report.total_mate_count,
+        "degreesOfFreedomEstimate": report.degrees_of_freedom_estimate,
+        "warningCount": report.warnings.len(),
+        "warnings": report.warnings.clone(),
+        "solvedOccurrences": report.solved_occurrences.clone(),
+    })
+}
+
 fn number_from_value(value: &serde_json::Value, key: &str) -> Option<f64> {
     value.get(key)?.as_f64()
 }
@@ -924,10 +1028,42 @@ fn part_geometry_summary_from_entity(entity: &EntityRecord) -> Option<PartGeomet
     })
 }
 
+fn assembly_solve_status_label(status: AssemblySolveStatus) -> &'static str {
+    match status {
+        AssemblySolveStatus::Solved => "solved",
+        AssemblySolveStatus::Conflicting => "conflicting",
+    }
+}
+
+fn assembly_summary_from_entity(entity: &EntityRecord) -> Option<AssemblyEntitySummary> {
+    if entity.entity_type != "Assembly" {
+        return None;
+    }
+
+    let summary = entity.data.get("solveReport")?;
+    Some(AssemblyEntitySummary {
+        status: string_from_value(summary, "status")?,
+        occurrence_count: summary.get("occurrenceCount")?.as_u64()? as usize,
+        mate_count: summary.get("mateCount")?.as_u64()? as usize,
+        degrees_of_freedom_estimate: summary.get("degreesOfFreedomEstimate")?.as_u64()? as usize,
+        warning_count: summary.get("warningCount")?.as_u64()? as usize,
+    })
+}
+
 fn format_part_entity_detail(summary: &PartGeometrySummary) -> String {
     format!(
         "{:.1} x {:.1} x {:.1} mm | {:.1} g",
         summary.width_mm, summary.height_mm, summary.depth_mm, summary.estimated_mass_grams
+    )
+}
+
+fn format_assembly_entity_detail(summary: &AssemblyEntitySummary) -> String {
+    format!(
+        "{} | {} occ | {} mates | {} ddl",
+        summary.status,
+        summary.occurrence_count,
+        summary.mate_count,
+        summary.degrees_of_freedom_estimate
     )
 }
 
@@ -1227,6 +1363,36 @@ mod tests {
         assert_eq!(geometry.height_mm, 90.0);
         assert_eq!(geometry.depth_mm, 20.0);
         assert!(result.message.contains("200.0 x 90.0 x 20.0"));
+    }
+
+    #[test]
+    fn created_assembly_exposes_occurrence_and_mate_summary() {
+        let mut session = WorkspaceSession::empty("Session");
+
+        let result = session
+            .execute_command("entity.create.assembly")
+            .expect("assembly should be created");
+        let snapshot = session.snapshot();
+        let assembly = snapshot
+            .entities
+            .iter()
+            .find(|entity| entity.entity_type == "Assembly")
+            .expect("assembly summary should exist");
+        let summary = assembly
+            .assembly_summary
+            .as_ref()
+            .expect("assembly details should exist");
+
+        assert_eq!(result.status, "applied");
+        assert_eq!(summary.status, "solved");
+        assert!(summary.occurrence_count >= 2);
+        assert!(summary.mate_count >= 1);
+        assert!(
+            assembly
+                .detail
+                .as_ref()
+                .is_some_and(|detail| detail.contains("occ"))
+        );
     }
 
     #[test]

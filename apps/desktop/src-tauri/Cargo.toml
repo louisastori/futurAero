@@ -8,6 +8,7 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 faero-ai = { path = "../../../crates/faero-ai" }
+faero-assembly = { path = "../../../crates/faero-assembly" }
 faero-core = { path = "../../../crates/faero-core" }
 faero-geometry = { path = "../../../crates/faero-geometry" }
 faero-integration = { path = "../../../crates/faero-integration" }

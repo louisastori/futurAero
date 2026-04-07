@@ -102,6 +102,7 @@ dependencies = [
 name = "faero-assembly"
 version = "0.1.0"
 dependencies = [
+ "serde",
  "thiserror",
 ]
 

@@ -205,6 +205,27 @@ function createMockBackend() {
         ];
         snapshot.status.endpointCount = snapshot.endpoints.length;
         snapshot.status.streamCount = snapshot.streams.length;
+      } else if (commandId === "entity.create.assembly") {
+        const index = snapshot.entities.length + 1;
+        snapshot.entities = [
+          ...snapshot.entities,
+          {
+            id: `ent_asm_${index.toString().padStart(3, "0")}`,
+            entityType: "Assembly",
+            name: `Assembly-${index.toString().padStart(3, "0")}`,
+            revision: "rev_seed",
+            status: "active",
+            detail: "solved | 2 occ | 1 mates | 0 ddl",
+            assemblySummary: {
+              status: "solved",
+              occurrenceCount: 2,
+              mateCount: 1,
+              degreesOfFreedomEstimate: 0,
+              warningCount: 0
+            }
+          }
+        ];
+        snapshot.status.entityCount = snapshot.entities.length;
       } else if (commandId === "plugin.manage") {
         const existing = snapshot.plugins[0];
         if (existing) {

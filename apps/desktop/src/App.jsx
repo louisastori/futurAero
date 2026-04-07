@@ -542,6 +542,42 @@ async function executeWorkspaceCommand(commandId, currentSnapshot) {
     };
   }
 
+  if (commandId === "entity.create.assembly") {
+    const index = currentSnapshot.entities.length + 1;
+    return {
+      snapshot: {
+        ...appendFallbackActivity(currentSnapshot, "system", "entity.create.assembly", `ent_asm_${String(index).padStart(3, "0")}`),
+        status: {
+          ...currentSnapshot.status,
+          entityCount: currentSnapshot.entities.length + 1
+        },
+        entities: [
+          ...currentSnapshot.entities,
+          {
+            id: `ent_asm_${String(index).padStart(3, "0")}`,
+            entityType: "Assembly",
+            name: `Assembly-${String(index).padStart(3, "0")}`,
+            revision: "rev_seed",
+            status: "active",
+            detail: "solved | 2 occ | 1 mates | 0 ddl",
+            assemblySummary: {
+              status: "solved",
+              occurrenceCount: 2,
+              mateCount: 1,
+              degreesOfFreedomEstimate: 0,
+              warningCount: 0
+            }
+          }
+        ]
+      },
+      result: {
+        commandId,
+        status: "applied",
+        message: "assemblage ajoute dans l apercu web"
+      }
+    };
+  }
+
   return {
     snapshot: appendFallbackActivity(currentSnapshot, "system", "command.simulated", commandId),
     result: {
