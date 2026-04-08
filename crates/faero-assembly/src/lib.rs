@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 
 pub use faero_types::{
+    AssemblyJoint as Joint, AssemblyJointType as JointType,
     AssemblyMateConstraint as MateConstraint, AssemblyMateType as MateType,
     AssemblyOccurrence as Occurrence, AssemblySolveReport, AssemblySolveStatus,
     AssemblySolvedOccurrence as SolvedOccurrence, AssemblyTransform as Transform3D,
@@ -19,6 +20,13 @@ pub enum AssemblyError {
     InvalidConstraintGraph,
     #[error("offset mates must use a non-negative distance")]
     NegativeOffset,
+}
+
+pub fn joint_degrees_of_freedom(joint_type: JointType) -> usize {
+    match joint_type {
+        JointType::Fixed => 0,
+        JointType::Revolute | JointType::Prismatic => 1,
+    }
 }
 
 pub fn solve_assembly(
@@ -346,5 +354,12 @@ mod tests {
             ),
             Err(AssemblyError::InvalidConstraintGraph)
         );
+    }
+
+    #[test]
+    fn joint_types_expose_expected_mvp_degrees_of_freedom() {
+        assert_eq!(joint_degrees_of_freedom(JointType::Fixed), 0);
+        assert_eq!(joint_degrees_of_freedom(JointType::Revolute), 1);
+        assert_eq!(joint_degrees_of_freedom(JointType::Prismatic), 1);
     }
 }

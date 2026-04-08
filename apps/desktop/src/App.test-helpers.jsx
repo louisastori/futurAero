@@ -430,12 +430,14 @@ function createMockBackend() {
             name: `Assembly-${index.toString().padStart(3, "0")}`,
             revision: "rev_seed",
             status: "active",
-            detail: "solved | 2 occ | 1 mates | 0 ddl",
+            detail:
+              "solved | 2 occ | 1 mates | 1 joints | revolute joint_001 @ 0.35 [-1.57, 1.57] | 0 ddl",
             data: {
               tags: ["assembly"],
               parameterSet: {
                 occurrenceCount: 2,
                 mateCount: 1,
+                jointCount: 1,
               },
               occurrences: [
                 {
@@ -455,6 +457,18 @@ function createMockBackend() {
                   leftOccurrenceId: "occ_001",
                   rightOccurrenceId: "occ_002",
                   type: "coincident",
+                },
+              ],
+              joints: [
+                {
+                  id: "joint_001",
+                  jointType: "revolute",
+                  sourceOccurrenceId: "occ_001",
+                  targetOccurrenceId: "occ_002",
+                  axis: { x: 0, y: 0, z: 1 },
+                  limits: { min: -1.57, max: 1.57 },
+                  currentPosition: 0.35,
+                  degreesOfFreedom: 1,
                 },
               ],
               solveReport: {
@@ -479,6 +493,8 @@ function createMockBackend() {
               status: "solved",
               occurrenceCount: 2,
               mateCount: 1,
+              jointCount: 1,
+              jointStateSummary: "revolute joint_001 @ 0.35 [-1.57, 1.57]",
               degreesOfFreedomEstimate: 0,
               warningCount: 0,
             },

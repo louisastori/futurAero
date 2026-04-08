@@ -103,6 +103,45 @@ pub struct AssemblyOccurrence {
     pub transform: AssemblyTransform,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AssemblyJointType {
+    Fixed,
+    Revolute,
+    Prismatic,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct AssemblyJointAxis {
+    pub x: f64,
+    pub y: f64,
+    pub z: f64,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AssemblyJointLimits {
+    pub min: f64,
+    pub max: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AssemblyJoint {
+    pub id: String,
+    pub joint_type: AssemblyJointType,
+    pub source_occurrence_id: String,
+    pub target_occurrence_id: String,
+    pub axis: AssemblyJointAxis,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limits: Option<AssemblyJointLimits>,
+    #[serde(default)]
+    pub current_position: f64,
+    #[serde(default)]
+    pub degrees_of_freedom: usize,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum AssemblyMateType {
@@ -145,10 +184,11 @@ pub struct AssemblySolveReport {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", default)]
 pub struct AssemblyParameterSet {
     pub occurrence_count: usize,
     pub mate_count: usize,
+    pub joint_count: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
@@ -160,6 +200,8 @@ pub struct AssemblyData {
     pub parameter_set: AssemblyParameterSet,
     #[serde(default)]
     pub occurrences: Vec<AssemblyOccurrence>,
+    #[serde(default)]
+    pub joints: Vec<AssemblyJoint>,
     #[serde(default)]
     pub mate_constraints: Vec<AssemblyMateConstraint>,
     #[serde(default)]
@@ -676,6 +718,7 @@ mod tests {
             parameter_set: AssemblyParameterSet {
                 occurrence_count: 2,
                 mate_count: 1,
+                joint_count: 1,
             },
             occurrences: vec![
                 AssemblyOccurrence {
@@ -692,6 +735,23 @@ mod tests {
                     },
                 },
             ],
+            joints: vec![AssemblyJoint {
+                id: "joint_001".to_string(),
+                joint_type: AssemblyJointType::Revolute,
+                source_occurrence_id: "occ_001".to_string(),
+                target_occurrence_id: "occ_002".to_string(),
+                axis: AssemblyJointAxis {
+                    x: 0.0,
+                    y: 0.0,
+                    z: 1.0,
+                },
+                limits: Some(AssemblyJointLimits {
+                    min: -1.57,
+                    max: 1.57,
+                }),
+                current_position: 0.25,
+                degrees_of_freedom: 1,
+            }],
             mate_constraints: vec![AssemblyMateConstraint {
                 id: "mate_001".to_string(),
                 left_occurrence_id: "occ_001".to_string(),
@@ -716,9 +776,25 @@ mod tests {
 
         let json = serde_json::to_value(assembly).expect("assembly payload should serialize");
         assert_eq!(json["parameterSet"]["occurrenceCount"], 2);
+        assert_eq!(json["parameterSet"]["jointCount"], 1);
         assert_eq!(json["occurrences"][0]["definitionEntityId"], "ent_part_001");
+        assert_eq!(json["joints"][0]["jointType"], "revolute");
+        assert_eq!(json["joints"][0]["axis"]["z"], 1.0);
         assert_eq!(json["mateConstraints"][0]["mateType"]["type"], "coincident");
         assert_eq!(json["solveReport"]["status"], "solved");
+    }
+
+    #[test]
+    fn assembly_parameter_set_defaults_missing_joint_count() {
+        let json = serde_json::json!({
+            "occurrenceCount": 2,
+            "mateCount": 1
+        });
+
+        let parameter_set: AssemblyParameterSet =
+            serde_json::from_value(json).expect("parameter set should deserialize");
+
+        assert_eq!(parameter_set.joint_count, 0);
     }
 
     #[test]

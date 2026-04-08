@@ -33,7 +33,8 @@ use faero_robotics::{CartesianPose, RobotTarget, validate_sequence};
 use faero_safety::{SafetyInterlock, SafetyStatus, SafetyZone, SafetyZoneKind, evaluate_safety};
 use faero_sim::{SimulationRequest, SimulationStatus, run_simulation};
 use faero_types::{
-    AiSessionLog, AssemblyData, AssemblyMateConstraint, AssemblyMateType, AssemblyOccurrence,
+    AiSessionLog, AssemblyData, AssemblyJoint, AssemblyJointAxis, AssemblyJointLimits,
+    AssemblyJointType, AssemblyMateConstraint, AssemblyMateType, AssemblyOccurrence,
     AssemblySolveStatus, AssemblyTransform, ControlTransition, ControllerState,
     ControllerStateMachine, EntityRecord, ExternalEndpoint, NetworkCaptureDataset,
     PluginContribution, PluginManifest, ProjectDocument, QosProfile, ScheduledSignalChange,
@@ -130,6 +131,8 @@ struct AssemblyEntitySummary {
     status: String,
     occurrence_count: usize,
     mate_count: usize,
+    joint_count: usize,
+    joint_state_summary: Option<String>,
     degrees_of_freedom_estimate: usize,
     warning_count: usize,
 }
@@ -1091,6 +1094,21 @@ impl WorkspaceSession {
                         })
                         .map_err(|error| error.to_string())?;
                 }
+                if assembly_part_ids.len() >= 2 {
+                    self.graph
+                        .apply_command(CoreCommand::CreateAssemblyJoint {
+                            assembly_id: assembly_id.clone(),
+                            joint: sample_assembly_joint(0),
+                        })
+                        .map_err(|error| error.to_string())?;
+                    self.graph
+                        .apply_command(CoreCommand::SetAssemblyJointState {
+                            assembly_id: assembly_id.clone(),
+                            joint_id: "joint_001".to_string(),
+                            current_position: 0.35,
+                        })
+                        .map_err(|error| error.to_string())?;
+                }
                 let assembly = self
                     .graph
                     .document()
@@ -1104,8 +1122,11 @@ impl WorkspaceSession {
                     command_id: command_id.to_string(),
                     status: "applied".to_string(),
                     message: format!(
-                        "assemblage ajoute: {} occurrences | {} mates | {}",
-                        summary.occurrence_count, summary.mate_count, summary.status
+                        "assemblage ajoute: {} occurrences | {} mates | {} joints | {}",
+                        summary.occurrence_count,
+                        summary.mate_count,
+                        summary.joint_count,
+                        summary.status
                     ),
                 })
             }
@@ -2134,6 +2155,30 @@ fn sample_assembly_mate(index: usize) -> AssemblyMateConstraint {
                 distance_mm: 25.0 * index as f64,
             }
         },
+    }
+}
+
+fn sample_assembly_joint(index: usize) -> AssemblyJoint {
+    AssemblyJoint {
+        id: format!("joint_{:03}", index + 1),
+        joint_type: if index.is_multiple_of(2) {
+            AssemblyJointType::Revolute
+        } else {
+            AssemblyJointType::Prismatic
+        },
+        source_occurrence_id: format!("occ_{:03}", index + 1),
+        target_occurrence_id: format!("occ_{:03}", index + 2),
+        axis: AssemblyJointAxis {
+            x: 0.0,
+            y: 0.0,
+            z: 1.0,
+        },
+        limits: Some(AssemblyJointLimits {
+            min: -1.57,
+            max: 1.57,
+        }),
+        current_position: 0.0,
+        degrees_of_freedom: 0,
     }
 }
 
@@ -3177,17 +3222,42 @@ fn assembly_solve_status_label(status: AssemblySolveStatus) -> &'static str {
     }
 }
 
+fn assembly_joint_type_label(joint_type: AssemblyJointType) -> &'static str {
+    match joint_type {
+        AssemblyJointType::Fixed => "fixed",
+        AssemblyJointType::Revolute => "revolute",
+        AssemblyJointType::Prismatic => "prismatic",
+    }
+}
+
+fn assembly_joint_state_summary(assembly: &AssemblyData) -> Option<String> {
+    let joint = assembly.joints.first()?;
+    let limits = joint
+        .limits
+        .map(|limits| format!(" [{:.2}, {:.2}]", limits.min, limits.max))
+        .unwrap_or_default();
+    Some(format!(
+        "{} {} @ {:.2}{}",
+        assembly_joint_type_label(joint.joint_type),
+        joint.id,
+        joint.current_position,
+        limits
+    ))
+}
+
 fn assembly_summary_from_entity(entity: &EntityRecord) -> Option<AssemblyEntitySummary> {
     if entity.entity_type != "Assembly" {
         return None;
     }
 
     let assembly = serde_json::from_value::<AssemblyData>(entity.data.clone()).ok()?;
-    let solve_report = assembly.solve_report?;
+    let solve_report = assembly.solve_report.as_ref()?;
     Some(AssemblyEntitySummary {
         status: assembly_solve_status_label(solve_report.status).to_string(),
         occurrence_count: assembly.occurrences.len(),
         mate_count: assembly.mate_constraints.len(),
+        joint_count: assembly.joints.len(),
+        joint_state_summary: assembly_joint_state_summary(&assembly),
         degrees_of_freedom_estimate: solve_report.degrees_of_freedom_estimate,
         warning_count: solve_report.warnings.len(),
     })
@@ -3494,11 +3564,17 @@ fn format_part_entity_detail(summary: &PartGeometrySummary) -> String {
 }
 
 fn format_assembly_entity_detail(summary: &AssemblyEntitySummary) -> String {
+    let joint_summary = summary
+        .joint_state_summary
+        .as_deref()
+        .unwrap_or("no joint state");
     format!(
-        "{} | {} occ | {} mates | {} ddl",
+        "{} | {} occ | {} mates | {} joints | {} | {} ddl",
         summary.status,
         summary.occurrence_count,
         summary.mate_count,
+        summary.joint_count,
+        joint_summary,
         summary.degrees_of_freedom_estimate
     )
 }
@@ -4211,21 +4287,40 @@ mod tests {
         assert_eq!(summary.status, "solved");
         assert!(summary.occurrence_count >= 2);
         assert!(summary.mate_count >= 1);
+        assert_eq!(summary.joint_count, 1);
+        assert!(
+            summary
+                .joint_state_summary
+                .as_deref()
+                .is_some_and(|value| value.contains("revolute"))
+        );
         assert!(assembly.data["occurrences"].as_array().is_some_and(|items| items.len() >= 2));
+        assert!(assembly.data["joints"].as_array().is_some_and(|items| items.len() == 1));
         assert!(
             assembly.data["mateConstraints"]
                 .as_array()
                 .is_some_and(|items| !items.is_empty())
         );
         assert_eq!(assembly.data["solveReport"]["status"], "solved");
+        assert_eq!(assembly.data["joints"][0]["jointType"], "revolute");
+        assert_eq!(assembly.data["joints"][0]["currentPosition"], 0.35);
         assert!(
             assembly
                 .detail
                 .as_ref()
-                .is_some_and(|detail| detail.contains("occ"))
+                .is_some_and(|detail| detail.contains("joint_001"))
         );
         assert!(snapshot.recent_activity.iter().any(|entry| {
             entry.channel == "command" && entry.kind == "assembly.mate.add"
+        }));
+        assert!(snapshot.recent_activity.iter().any(|entry| {
+            entry.channel == "command" && entry.kind == "joint.create"
+        }));
+        assert!(snapshot.recent_activity.iter().any(|entry| {
+            entry.channel == "command" && entry.kind == "joint.state.set"
+        }));
+        assert!(snapshot.recent_activity.iter().any(|entry| {
+            entry.channel == "event" && entry.kind == "joint.state.changed"
         }));
     }
 

@@ -1,11 +1,12 @@
 use std::collections::BTreeMap;
 
-use faero_assembly::{AssemblyError, solve_assembly};
+use faero_assembly::{AssemblyError, joint_degrees_of_freedom, solve_assembly};
 use faero_types::{
-    AssemblyData, AssemblyMateConstraint, AssemblyMateType, AssemblyOccurrence,
-    AssemblySolveReport, AssemblySolveStatus, AssemblySolvedOccurrence, AssemblyTransform,
-    CommandEnvelope, EntityRecord, EventEnvelope, ExternalEndpoint, PluginManifest,
-    ProjectDocument, SignalValue, TelemetryStream,
+    AssemblyData, AssemblyJoint, AssemblyJointAxis, AssemblyJointLimits, AssemblyJointType,
+    AssemblyMateConstraint, AssemblyMateType, AssemblyOccurrence, AssemblySolveReport,
+    AssemblySolveStatus, AssemblySolvedOccurrence, AssemblyTransform, CommandEnvelope,
+    EntityRecord, EventEnvelope, ExternalEndpoint, PluginManifest, ProjectDocument, SignalValue,
+    TelemetryStream,
 };
 use serde::Serialize;
 use serde_json::Value;
@@ -47,6 +48,18 @@ pub enum CoreError {
     AssemblyMateAlreadyExists(String),
     #[error("assembly mate `{0}` does not exist")]
     AssemblyMateNotFound(String),
+    #[error("assembly joint `{0}` already exists")]
+    AssemblyJointAlreadyExists(String),
+    #[error("assembly joint `{0}` does not exist")]
+    AssemblyJointNotFound(String),
+    #[error("assembly joint must reference two distinct known occurrences")]
+    AssemblyJointInvalidOccurrences,
+    #[error("assembly joint axis must not be the zero vector")]
+    AssemblyJointAxisInvalid,
+    #[error("assembly joint limits are invalid")]
+    AssemblyJointLimitsInvalid,
+    #[error("assembly joint state is invalid: {0}")]
+    AssemblyJointStateInvalid(String),
 }
 
 #[derive(Debug, Clone)]
@@ -80,6 +93,15 @@ pub enum CoreCommand {
     RemoveAssemblyMate {
         assembly_id: String,
         mate_id: String,
+    },
+    CreateAssemblyJoint {
+        assembly_id: String,
+        joint: AssemblyJoint,
+    },
+    SetAssemblyJointState {
+        assembly_id: String,
+        joint_id: String,
+        current_position: f64,
     },
 }
 
@@ -399,6 +421,7 @@ impl ProjectGraph {
                 self.mutate_assembly_entity(
                     &assembly_id,
                     "assembly.occurrence.add",
+                    None,
                     payload,
                     move |assembly| {
                         if assembly
@@ -427,6 +450,7 @@ impl ProjectGraph {
                 self.mutate_assembly_entity(
                     &assembly_id,
                     "assembly.occurrence.transform",
+                    None,
                     payload,
                     move |assembly| {
                         let occurrence = assembly
@@ -461,6 +485,7 @@ impl ProjectGraph {
                 self.mutate_assembly_entity(
                     &assembly_id,
                     "assembly.mate.add",
+                    None,
                     payload,
                     move |assembly| {
                         if assembly
@@ -493,11 +518,15 @@ impl ProjectGraph {
                     },
                 )
             }
-            CoreCommand::RemoveAssemblyMate { assembly_id, mate_id } => {
+            CoreCommand::RemoveAssemblyMate {
+                assembly_id,
+                mate_id,
+            } => {
                 let payload = serde_json::json!({ "mateId": mate_id });
                 self.mutate_assembly_entity(
                     &assembly_id,
                     "assembly.mate.remove",
+                    None,
                     payload,
                     move |assembly| {
                         let before = assembly.mate_constraints.len();
@@ -507,6 +536,78 @@ impl ProjectGraph {
                         if assembly.mate_constraints.len() == before {
                             return Err(CoreError::AssemblyMateNotFound(mate_id.clone()));
                         }
+                        Ok(())
+                    },
+                )
+            }
+            CoreCommand::CreateAssemblyJoint {
+                assembly_id,
+                mut joint,
+            } => {
+                let joint_id = joint.id.clone();
+                let source_occurrence_id = joint.source_occurrence_id.clone();
+                let target_occurrence_id = joint.target_occurrence_id.clone();
+
+                validate_joint_axis(joint.axis)?;
+                validate_joint_state(joint.joint_type, joint.limits, joint.current_position)?;
+                joint.degrees_of_freedom = joint_degrees_of_freedom(joint.joint_type);
+
+                let payload = serialize_payload(&joint);
+                self.mutate_assembly_entity(
+                    &assembly_id,
+                    "joint.create",
+                    Some("joint.state.changed"),
+                    payload,
+                    move |assembly| {
+                        if assembly
+                            .joints
+                            .iter()
+                            .any(|existing| existing.id == joint_id)
+                        {
+                            return Err(CoreError::AssemblyJointAlreadyExists(joint_id.clone()));
+                        }
+                        if source_occurrence_id == target_occurrence_id {
+                            return Err(CoreError::AssemblyJointInvalidOccurrences);
+                        }
+                        if !assembly
+                            .occurrences
+                            .iter()
+                            .any(|occurrence| occurrence.id == source_occurrence_id)
+                            || !assembly
+                                .occurrences
+                                .iter()
+                                .any(|occurrence| occurrence.id == target_occurrence_id)
+                        {
+                            return Err(CoreError::AssemblyJointInvalidOccurrences);
+                        }
+                        assembly.joints.push(joint);
+                        Ok(())
+                    },
+                )
+            }
+            CoreCommand::SetAssemblyJointState {
+                assembly_id,
+                joint_id,
+                current_position,
+            } => {
+                let payload = serde_json::json!({
+                    "jointId": joint_id,
+                    "currentPosition": current_position,
+                });
+                self.mutate_assembly_entity(
+                    &assembly_id,
+                    "joint.state.set",
+                    Some("joint.state.changed"),
+                    payload,
+                    move |assembly| {
+                        let joint = assembly
+                            .joints
+                            .iter_mut()
+                            .find(|entry| entry.id == joint_id)
+                            .ok_or_else(|| CoreError::AssemblyJointNotFound(joint_id.clone()))?;
+                        validate_joint_state(joint.joint_type, joint.limits, current_position)?;
+                        joint.current_position = current_position;
+                        joint.degrees_of_freedom = joint_degrees_of_freedom(joint.joint_type);
                         Ok(())
                     },
                 )
@@ -572,6 +673,7 @@ impl ProjectGraph {
         &mut self,
         assembly_id: &str,
         command_kind: &str,
+        event_kind_override: Option<&str>,
         payload: Value,
         mutate: F,
     ) -> Result<EventEnvelope, CoreError>
@@ -592,11 +694,12 @@ impl ProjectGraph {
         mutate(&mut assembly)?;
         assembly.parameter_set.occurrence_count = assembly.occurrences.len();
         assembly.parameter_set.mate_count = assembly.mate_constraints.len();
+        assembly.parameter_set.joint_count = assembly.joints.len();
         let solve_report = compute_assembly_solve_report(&assembly)?;
-        let event_kind = match solve_report.status {
+        let event_kind = event_kind_override.unwrap_or(match solve_report.status {
             AssemblySolveStatus::Solved => "assembly.solved",
             AssemblySolveStatus::Conflicting => "assembly.unsolved",
-        };
+        });
         assembly.solve_report = Some(solve_report);
 
         let command_id = self.record_command(
@@ -643,7 +746,59 @@ fn deserialize_assembly_data(entity: &EntityRecord) -> Result<AssemblyData, Core
         .map_err(|error| CoreError::AssemblyPayloadInvalid(format!("{}: {error}", entity.id)))
 }
 
-fn compute_assembly_solve_report(assembly: &AssemblyData) -> Result<AssemblySolveReport, CoreError> {
+fn validate_joint_axis(axis: AssemblyJointAxis) -> Result<(), CoreError> {
+    if [axis.x, axis.y, axis.z]
+        .into_iter()
+        .all(|component| component.abs() <= f64::EPSILON)
+    {
+        return Err(CoreError::AssemblyJointAxisInvalid);
+    }
+
+    Ok(())
+}
+
+fn validate_joint_state(
+    joint_type: AssemblyJointType,
+    limits: Option<AssemblyJointLimits>,
+    current_position: f64,
+) -> Result<(), CoreError> {
+    if !current_position.is_finite() {
+        return Err(CoreError::AssemblyJointStateInvalid(
+            "current position must be finite".to_string(),
+        ));
+    }
+
+    if let Some(limits) = limits {
+        if !limits.min.is_finite() || !limits.max.is_finite() || limits.min > limits.max {
+            return Err(CoreError::AssemblyJointLimitsInvalid);
+        }
+        if joint_type == AssemblyJointType::Fixed
+            && (limits.min.abs() > f64::EPSILON || limits.max.abs() > f64::EPSILON)
+        {
+            return Err(CoreError::AssemblyJointLimitsInvalid);
+        }
+    }
+
+    if joint_type == AssemblyJointType::Fixed && current_position.abs() > f64::EPSILON {
+        return Err(CoreError::AssemblyJointStateInvalid(
+            "fixed joints must stay at position 0".to_string(),
+        ));
+    }
+
+    if let Some(limits) = limits
+        && (current_position < limits.min || current_position > limits.max)
+    {
+        return Err(CoreError::AssemblyJointStateInvalid(
+            "current position must stay within joint limits".to_string(),
+        ));
+    }
+
+    Ok(())
+}
+
+fn compute_assembly_solve_report(
+    assembly: &AssemblyData,
+) -> Result<AssemblySolveReport, CoreError> {
     match solve_assembly(&assembly.occurrences, &assembly.mate_constraints) {
         Ok(report) => Ok(report),
         Err(AssemblyError::NotEnoughOccurrences) => Ok(AssemblySolveReport {
@@ -668,7 +823,8 @@ fn compute_assembly_solve_report(assembly: &AssemblyData) -> Result<AssemblySolv
 #[cfg(test)]
 mod tests {
     use faero_types::{
-        Addressing, AssemblyData, AssemblyMateConstraint, AssemblyMateType, AssemblyOccurrence,
+        Addressing, AssemblyData, AssemblyJoint, AssemblyJointAxis, AssemblyJointLimits,
+        AssemblyJointType, AssemblyMateConstraint, AssemblyMateType, AssemblyOccurrence,
         AssemblyTransform, ConnectionMode, EndpointType, LinkMetrics, PluginContribution,
         QosProfile, SignalValue, StreamDirection, TimingProfile, TransportProfile,
     };
@@ -822,6 +978,26 @@ mod tests {
             left_occurrence_id: left.to_string(),
             right_occurrence_id: right.to_string(),
             mate_type: AssemblyMateType::Coincident,
+        }
+    }
+
+    fn sample_joint(id: &str, joint_type: AssemblyJointType) -> AssemblyJoint {
+        AssemblyJoint {
+            id: id.to_string(),
+            joint_type,
+            source_occurrence_id: "occ_001".to_string(),
+            target_occurrence_id: "occ_002".to_string(),
+            axis: AssemblyJointAxis {
+                x: 0.0,
+                y: 0.0,
+                z: 1.0,
+            },
+            limits: Some(AssemblyJointLimits {
+                min: -1.57,
+                max: 1.57,
+            }),
+            current_position: 0.0,
+            degrees_of_freedom: 0,
         }
     }
 
@@ -1103,17 +1279,13 @@ mod tests {
         assert_eq!(graph.document().commands[3].kind, "assembly.occurrence.add");
         assert_eq!(graph.document().commands[5].kind, "assembly.mate.add");
 
-        let assembly: AssemblyData = serde_json::from_value(
-            graph.document().nodes["ent_asm_001"].data.clone(),
-        )
-        .expect("assembly payload should deserialize");
+        let assembly: AssemblyData =
+            serde_json::from_value(graph.document().nodes["ent_asm_001"].data.clone())
+                .expect("assembly payload should deserialize");
         assert_eq!(assembly.occurrences.len(), 2);
         assert_eq!(assembly.mate_constraints.len(), 1);
         assert_eq!(
-            assembly
-                .solve_report
-                .as_ref()
-                .map(|report| report.status),
+            assembly.solve_report.as_ref().map(|report| report.status),
             Some(AssemblySolveStatus::Solved)
         );
     }
@@ -1165,6 +1337,152 @@ mod tests {
         assert_eq!(
             missing_mate,
             CoreError::AssemblyMateNotFound("mate_missing".to_string())
+        );
+    }
+
+    #[test]
+    fn joint_commands_persist_state_and_record_auditable_activity() {
+        let mut graph = ProjectGraph::new("Demo");
+        graph
+            .apply_command(CoreCommand::CreateEntity(sample_entity_with_id(
+                "ent_part_001",
+                "Part-A",
+            )))
+            .expect("part a should exist");
+        graph
+            .apply_command(CoreCommand::CreateEntity(sample_entity_with_id(
+                "ent_part_002",
+                "Part-B",
+            )))
+            .expect("part b should exist");
+        graph
+            .apply_command(CoreCommand::CreateEntity(sample_assembly_entity()))
+            .expect("assembly should exist");
+        graph
+            .apply_command(CoreCommand::AddAssemblyOccurrence {
+                assembly_id: "ent_asm_001".to_string(),
+                occurrence: sample_occurrence("occ_001", "ent_part_001", 0.0),
+            })
+            .expect("first occurrence should be added");
+        graph
+            .apply_command(CoreCommand::AddAssemblyOccurrence {
+                assembly_id: "ent_asm_001".to_string(),
+                occurrence: sample_occurrence("occ_002", "ent_part_002", 80.0),
+            })
+            .expect("second occurrence should be added");
+
+        let created = graph
+            .apply_command(CoreCommand::CreateAssemblyJoint {
+                assembly_id: "ent_asm_001".to_string(),
+                joint: sample_joint("joint_001", AssemblyJointType::Revolute),
+            })
+            .expect("joint should be created");
+        let updated = graph
+            .apply_command(CoreCommand::SetAssemblyJointState {
+                assembly_id: "ent_asm_001".to_string(),
+                joint_id: "joint_001".to_string(),
+                current_position: 0.5,
+            })
+            .expect("joint state should update");
+
+        assert_eq!(created.kind, "joint.state.changed");
+        assert_eq!(updated.kind, "joint.state.changed");
+
+        let command_kinds = graph
+            .document()
+            .commands
+            .iter()
+            .map(|entry| entry.kind.as_str())
+            .collect::<Vec<_>>();
+        assert!(command_kinds.contains(&"joint.create"));
+        assert!(command_kinds.contains(&"joint.state.set"));
+
+        let assembly: AssemblyData =
+            serde_json::from_value(graph.document().nodes["ent_asm_001"].data.clone())
+                .expect("assembly payload should deserialize");
+        assert_eq!(assembly.parameter_set.joint_count, 1);
+        assert_eq!(assembly.joints.len(), 1);
+        assert_eq!(assembly.joints[0].degrees_of_freedom, 1);
+        assert_eq!(assembly.joints[0].current_position, 0.5);
+    }
+
+    #[test]
+    fn joint_commands_reject_invalid_limits_and_state() {
+        let mut graph = ProjectGraph::new("Demo");
+        graph
+            .apply_command(CoreCommand::CreateEntity(sample_entity_with_id(
+                "ent_part_001",
+                "Part-A",
+            )))
+            .expect("part a should exist");
+        graph
+            .apply_command(CoreCommand::CreateEntity(sample_entity_with_id(
+                "ent_part_002",
+                "Part-B",
+            )))
+            .expect("part b should exist");
+        graph
+            .apply_command(CoreCommand::CreateEntity(sample_assembly_entity()))
+            .expect("assembly should exist");
+        graph
+            .apply_command(CoreCommand::AddAssemblyOccurrence {
+                assembly_id: "ent_asm_001".to_string(),
+                occurrence: sample_occurrence("occ_001", "ent_part_001", 0.0),
+            })
+            .expect("first occurrence should be added");
+        graph
+            .apply_command(CoreCommand::AddAssemblyOccurrence {
+                assembly_id: "ent_asm_001".to_string(),
+                occurrence: sample_occurrence("occ_002", "ent_part_002", 80.0),
+            })
+            .expect("second occurrence should be added");
+
+        let mut invalid_occurrence_joint =
+            sample_joint("joint_missing", AssemblyJointType::Revolute);
+        invalid_occurrence_joint.target_occurrence_id = "missing".to_string();
+        let invalid_occurrences = graph
+            .apply_command(CoreCommand::CreateAssemblyJoint {
+                assembly_id: "ent_asm_001".to_string(),
+                joint: invalid_occurrence_joint,
+            })
+            .expect_err("missing occurrence should fail");
+        assert_eq!(
+            invalid_occurrences,
+            CoreError::AssemblyJointInvalidOccurrences
+        );
+
+        let mut invalid_limits_joint = sample_joint("joint_invalid", AssemblyJointType::Prismatic);
+        invalid_limits_joint.limits = Some(AssemblyJointLimits { min: 2.0, max: 1.0 });
+        let invalid_limits = graph
+            .apply_command(CoreCommand::CreateAssemblyJoint {
+                assembly_id: "ent_asm_001".to_string(),
+                joint: invalid_limits_joint,
+            })
+            .expect_err("invalid limits should fail");
+        assert_eq!(invalid_limits, CoreError::AssemblyJointLimitsInvalid);
+
+        let mut fixed_joint = sample_joint("joint_fixed", AssemblyJointType::Fixed);
+        fixed_joint.limits = Some(AssemblyJointLimits { min: 0.0, max: 0.0 });
+        let created = graph
+            .apply_command(CoreCommand::CreateAssemblyJoint {
+                assembly_id: "ent_asm_001".to_string(),
+                joint: fixed_joint,
+            })
+            .expect("fixed joint should be created");
+        assert_eq!(created.kind, "joint.state.changed");
+
+        let invalid_state = graph
+            .apply_command(CoreCommand::SetAssemblyJointState {
+                assembly_id: "ent_asm_001".to_string(),
+                joint_id: "joint_fixed".to_string(),
+                current_position: 0.1,
+            })
+            .expect_err("fixed joints should reject non-zero state");
+        assert_eq!(
+            invalid_state,
+            CoreError::AssemblyJointStateInvalid(
+                "fixed joints must stay at position 0".to_string(),
+            )
         );
     }
 }
