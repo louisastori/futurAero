@@ -37,8 +37,14 @@ pub enum CoreCommand {
     RegisterEndpoint(ExternalEndpoint),
     RegisterStream(TelemetryStream),
     InstallPlugin(PluginManifest),
-    SetPluginEnabled { plugin_id: String, enabled: bool },
-    SetSignalValue { entity_id: String, value: SignalValue },
+    SetPluginEnabled {
+        plugin_id: String,
+        enabled: bool,
+    },
+    SetSignalValue {
+        entity_id: String,
+        value: SignalValue,
+    },
 }
 
 #[derive(Debug, Clone)]

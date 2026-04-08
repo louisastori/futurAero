@@ -605,7 +605,10 @@ mod tests {
 
         let json = serde_json::to_value(machine).expect("controller machine should serialize");
         assert_eq!(json["initialStateId"], "idle");
-        assert_eq!(json["transitions"][0]["conditions"][0]["comparator"], "equal");
+        assert_eq!(
+            json["transitions"][0]["conditions"][0]["comparator"],
+            "equal"
+        );
         assert_eq!(json["transitions"][0]["assignments"][0]["value"], false);
     }
 

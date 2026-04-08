@@ -52,7 +52,28 @@ function createSnapshot({
         entityType: "Part",
         name: "Bracket-001",
         revision: "rev_a",
-        status: "active"
+        status: "active",
+        detail: "120.0 x 80.0 x 10.0 mm | 259.2 g",
+        data: {
+          tags: ["seed", "parametric"],
+          parameterSet: {
+            widthMm: 120,
+            heightMm: 80,
+            depthMm: 10
+          }
+        },
+        partGeometry: {
+          state: "well_constrained",
+          widthMm: 120,
+          heightMm: 80,
+          depthMm: 10,
+          pointCount: 4,
+          perimeterMm: 400,
+          areaMm2: 9600,
+          volumeMm3: 96000,
+          estimatedMassGrams: 259.2,
+          materialName: "Aluminum 6061"
+        }
       }
     ],
     endpoints: [
@@ -178,6 +199,14 @@ function createMockBackend() {
             revision: "rev_seed",
             status: "active",
             detail: "132.0 x 86.0 x 12.0 mm | 367.9 g",
+            data: {
+              tags: ["part", "parametric"],
+              parameterSet: {
+                widthMm: 132.0,
+                heightMm: 86.0,
+                depthMm: 12.0
+              }
+            },
             partGeometry: {
               state: "well_constrained",
               widthMm: 132.0,
@@ -231,6 +260,13 @@ function createMockBackend() {
             revision: "rev_seed",
             status: "active",
             detail: "solved | 2 occ | 1 mates | 0 ddl",
+            data: {
+              tags: ["assembly"],
+              parameterSet: {
+                occurrenceCount: 2,
+                mateCount: 1
+              }
+            },
             assemblySummary: {
               status: "solved",
               occurrenceCount: 2,
@@ -251,13 +287,22 @@ function createMockBackend() {
             name: `RobotCell-${index.toString().padStart(3, "0")}`,
             revision: "rev_seed",
             status: "active",
-            detail: "3 pts | 896 mm | 3491 ms",
+            detail: "3 pts | 4 sig | 3491 ms",
+            data: {
+              tags: ["robotics", "simulation", "mvp"],
+              parameterSet: {
+                tcpPayloadKg: 8,
+                estimatedCycleTimeMs: 3491
+              }
+            },
             robotCellSummary: {
               targetCount: 3,
               pathLengthMm: 896,
               maxSegmentMm: 470,
               estimatedCycleTimeMs: 3491,
               safetyZoneCount: 2,
+              signalCount: 4,
+              controllerTransitionCount: 3,
               warningCount: 0
             }
           }
@@ -274,13 +319,22 @@ function createMockBackend() {
               name: "RobotCell-001",
               revision: "rev_seed",
               status: "active",
-              detail: "3 pts | 896 mm | 3491 ms",
+              detail: "3 pts | 4 sig | 3491 ms",
+              data: {
+                tags: ["robotics", "simulation", "mvp"],
+                parameterSet: {
+                  tcpPayloadKg: 8,
+                  estimatedCycleTimeMs: 3491
+                }
+              },
               robotCellSummary: {
                 targetCount: 3,
                 pathLengthMm: 896,
                 maxSegmentMm: 470,
                 estimatedCycleTimeMs: 3491,
                 safetyZoneCount: 2,
+                signalCount: 4,
+                controllerTransitionCount: 3,
                 warningCount: 0
               }
             }
@@ -295,13 +349,24 @@ function createMockBackend() {
             name: `SimulationRun-${index.toString().padStart(3, "0")}`,
             revision: "rev_seed",
             status: "active",
-            detail: "completed | 3497 ms | 0 coll",
+            detail: "completed | 3497 ms | 0 coll | 0 contact",
+            data: {
+              tags: ["simulation", "artifact", "mvp"],
+              parameterSet: {
+                seed: 308,
+                stepCount: 12
+              }
+            },
             simulationRunSummary: {
               status: "completed",
               collisionCount: 0,
               cycleTimeMs: 3497,
               maxTrackingErrorMm: 0.27,
               energyEstimateJ: 74.82,
+              blockedSequenceDetected: false,
+              contactCount: 0,
+              signalSampleCount: 4,
+              controllerStateSampleCount: 3,
               timelineSampleCount: 12
             }
           }
@@ -318,13 +383,22 @@ function createMockBackend() {
               name: "RobotCell-001",
               revision: "rev_seed",
               status: "active",
-              detail: "3 pts | 896 mm | 3491 ms",
+              detail: "3 pts | 4 sig | 3491 ms",
+              data: {
+                tags: ["robotics", "simulation", "mvp"],
+                parameterSet: {
+                  tcpPayloadKg: 8,
+                  estimatedCycleTimeMs: 3491
+                }
+              },
               robotCellSummary: {
                 targetCount: 3,
                 pathLengthMm: 896,
                 maxSegmentMm: 470,
                 estimatedCycleTimeMs: 3491,
                 safetyZoneCount: 2,
+                signalCount: 4,
+                controllerTransitionCount: 3,
                 warningCount: 0
               }
             }
@@ -340,6 +414,12 @@ function createMockBackend() {
             revision: "rev_seed",
             status: "active",
             detail: "warning | 1 active | 0 block",
+            data: {
+              tags: ["safety", "analysis"],
+              parameterSet: {
+                attemptedAction: "robot.move"
+              }
+            },
             safetyReportSummary: {
               status: "warning",
               inhibited: false,
@@ -388,6 +468,14 @@ function createMockBackend() {
       const updated = {
         ...snapshot.entities[index],
         detail: `${payload.widthMm.toFixed(1)} x ${payload.heightMm.toFixed(1)} x ${payload.depthMm.toFixed(1)} mm | ${estimatedMassGrams.toFixed(1)} g`,
+        data: {
+          ...(snapshot.entities[index].data ?? {}),
+          parameterSet: {
+            widthMm: payload.widthMm,
+            heightMm: payload.heightMm,
+            depthMm: payload.depthMm
+          }
+        },
         partGeometry: {
           ...snapshot.entities[index].partGeometry,
           widthMm: payload.widthMm,
@@ -413,6 +501,58 @@ function createMockBackend() {
         }
       };
     },
+    async updateEntityProperties(payload) {
+      const entityIndex = snapshot.entities.findIndex((entity) => entity.id === payload.entityId);
+      assert.notEqual(entityIndex, -1);
+
+      const current = snapshot.entities[entityIndex];
+      let next = {
+        ...current,
+        name: payload.name,
+        data: {
+          ...(current.data ?? {}),
+          tags: payload.tags,
+          parameterSet: payload.parameters
+        }
+      };
+
+      if (next.partGeometry) {
+        const widthMm = Number(payload.parameters.widthMm);
+        const heightMm = Number(payload.parameters.heightMm);
+        const depthMm = Number(payload.parameters.depthMm);
+        const areaMm2 = widthMm * heightMm;
+        const volumeMm3 = areaMm2 * depthMm;
+        const estimatedMassGrams = volumeMm3 * 0.0027;
+        next = {
+          ...next,
+          detail: `${widthMm.toFixed(1)} x ${heightMm.toFixed(1)} x ${depthMm.toFixed(1)} mm | ${estimatedMassGrams.toFixed(1)} g`,
+          partGeometry: {
+            ...next.partGeometry,
+            widthMm,
+            heightMm,
+            depthMm,
+            perimeterMm: 2 * (widthMm + heightMm),
+            areaMm2,
+            volumeMm3,
+            estimatedMassGrams
+          }
+        };
+      }
+
+      snapshot.entities = snapshot.entities.map((entity, index) =>
+        index === entityIndex ? next : entity
+      );
+      pushActivity("entity.properties.updated", payload.entityId);
+
+      return {
+        snapshot: clone(snapshot),
+        result: {
+          commandId: "entity.properties.update",
+          status: "applied",
+          message: `updated ${payload.entityId}`
+        }
+      };
+    },
     async fetchAiRuntimeStatus() {
       return clone(runtime);
     },
@@ -425,6 +565,21 @@ function createMockBackend() {
           activeModel: selectedModel ?? runtime.activeModel
         },
         references: [`project:${currentSnapshot.details.projectId}`],
+        structured: {
+          summary: `Analyse structuree pour ${currentSnapshot.status.projectName}`,
+          contextRefs: [
+            {
+              entityId: currentSnapshot.entities[0]?.id ?? null,
+              role: "source",
+              path: "simulationRunSummary.collisionCount"
+            }
+          ],
+          confidence: 0.82,
+          riskLevel: "medium",
+          limitations: ["Mock backend structure la reponse localement."],
+          proposedCommands: [],
+          explanation: [`Historique recu: ${history.length}`]
+        },
         warnings: [],
         source: "mock-backend"
       };
@@ -582,6 +737,7 @@ describe("App shell buttons", () => {
     await waitFor(() => {
       assert.ok(screen.getByText("Montre moi le projet courant"));
       assert.ok(screen.getByText(/\[fr\] Montre moi le projet courant/));
+      assert.ok(document.querySelector('[data-ai-structured="true"]'));
     });
   });
 
@@ -648,6 +804,45 @@ describe("App shell buttons", () => {
         document.querySelector("[data-command-feedback]")?.getAttribute("data-command-feedback"),
         "build.regenerate_part"
       );
+    });
+  });
+
+  test("generic inspector edits the selected entity name, tags and parameters", async () => {
+    const { user } = await renderApp();
+
+    await user.click(screen.getByRole("button", { name: "Projet" }));
+    await user.click(document.querySelector('[data-command-id="entity.create.part"]'));
+
+    await waitFor(() => {
+      assert.ok(document.querySelector('[data-entity-select="ent_part_002"]'));
+    });
+
+    await user.click(document.querySelector('[data-entity-select="ent_part_002"]'));
+
+    const nameInput = screen.getByLabelText("Nom");
+    const tagsInput = screen.getByLabelText("Tags");
+    const widthInput = screen.getByLabelText("widthMm");
+    const heightInput = screen.getByLabelText("heightMm");
+    const depthInput = screen.getByLabelText("depthMm");
+
+    fireEvent.change(nameInput, { target: { value: "Part-Edited-002" } });
+    fireEvent.change(tagsInput, { target: { value: "edited, qa" } });
+    fireEvent.change(widthInput, { target: { value: "210" } });
+    fireEvent.change(heightInput, { target: { value: "95" } });
+    fireEvent.change(depthInput, { target: { value: "18" } });
+    await user.click(document.querySelector('[data-entity-save="ent_part_002"]'));
+
+    await waitFor(() => {
+      assert.equal(
+        document.querySelector('[data-entity-inspector="ent_part_002"] strong')?.textContent,
+        "Part-Edited-002"
+      );
+      assert.ok(document.querySelector('[data-parametric-part-summary="ent_part_002"]'));
+      assert.equal(
+        document.querySelector("[data-command-feedback]")?.getAttribute("data-command-feedback"),
+        "entity.properties.update"
+      );
+      assert.ok(screen.getAllByText("Part-Edited-002").length >= 2);
     });
   });
 

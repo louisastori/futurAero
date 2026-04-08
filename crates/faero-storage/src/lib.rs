@@ -8,6 +8,7 @@ use faero_types::{
     CommandEnvelope, EntityRecord, EventEnvelope, ExternalEndpoint, GraphEdge, OpenSpecDocument,
     PluginManifest, ProjectDocument, ProjectMetadata, TelemetryStream,
 };
+use serde_json::Value;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -33,6 +34,9 @@ pub fn save_project(
     fs::create_dir_all(root.join("plugins/manifests"))?;
     fs::create_dir_all(root.join("plugins/state"))?;
     fs::create_dir_all(root.join("openspec/docs"))?;
+    fs::create_dir_all(root.join("simulations/runs"))?;
+    fs::create_dir_all(root.join("ai/sessions"))?;
+    fs::create_dir_all(root.join("ai/suggestions"))?;
     fs::create_dir_all(root.join("events"))?;
 
     write_project_metadata_yaml(root.join("project.yaml"), &document.metadata)?;
@@ -71,6 +75,8 @@ pub fn save_project(
         root.join("plugins/state/plugins.json"),
         &document.plugin_states,
     )?;
+    write_simulation_run_artifacts(root, &document.nodes)?;
+    write_ai_artifacts(root, &document.nodes)?;
     write_command_envelopes(root.join("events/commands.jsonl"), &document.commands)?;
     write_event_envelopes(root.join("events/events.jsonl"), &document.events)?;
 
@@ -149,6 +155,11 @@ fn write_text_file(path: PathBuf, payload: &str) -> Result<(), StorageError> {
     ensure_parent_dir(&path)?;
     fs::write(path, payload)?;
     Ok(())
+}
+
+fn write_json_value(path: PathBuf, value: &Value) -> Result<(), StorageError> {
+    let payload = serde_json::to_string_pretty(value)?;
+    write_text_file(path, &payload)
 }
 
 fn write_jsonl_file(path: PathBuf, payloads: &[String]) -> Result<(), StorageError> {
@@ -262,6 +273,148 @@ fn write_command_envelopes(
     for command in commands {
         payloads.push(serde_json::to_string(command).expect("command envelope should serialize"));
     }
+    write_jsonl_file(path, &payloads)
+}
+
+fn write_simulation_run_artifacts(
+    root: &Path,
+    nodes: &BTreeMap<String, EntityRecord>,
+) -> Result<(), StorageError> {
+    for node in nodes
+        .values()
+        .filter(|node| node.entity_type == "SimulationRun")
+    {
+        let run_root = root.join("simulations/runs").join(&node.id);
+        fs::create_dir_all(&run_root)?;
+
+        let manifest = serde_json::json!({
+            "id": node.id,
+            "name": node.name,
+            "summaryRef": format!("simulations/runs/{}/summary.json", node.id),
+            "metricsRef": format!("simulations/runs/{}/metrics.json", node.id),
+            "timelineRef": format!("simulations/runs/{}/timeline.jsonl", node.id),
+            "signalsRef": format!("simulations/runs/{}/signals.jsonl", node.id),
+            "controllerRef": format!("simulations/runs/{}/controller.jsonl", node.id),
+            "contactsRef": format!("simulations/runs/{}/contacts.jsonl", node.id),
+            "jobRef": format!("simulations/runs/{}/job.json", node.id),
+        });
+        write_json_value(
+            root.join("simulations/runs")
+                .join(format!("{}.json", node.id)),
+            &manifest,
+        )?;
+
+        if let Some(summary) = node.data.get("summary") {
+            write_json_value(run_root.join("summary.json"), summary)?;
+        }
+        let metrics = serde_json::json!({
+            "seed": node
+                .data
+                .get("scenario")
+                .and_then(|scenario| scenario.get("seed"))
+                .cloned()
+                .unwrap_or(Value::Null),
+            "engineVersion": node
+                .data
+                .get("scenario")
+                .and_then(|scenario| scenario.get("engineVersion"))
+                .cloned()
+                .unwrap_or(Value::Null),
+            "cycleTimeMs": node
+                .data
+                .get("summary")
+                .and_then(|summary| summary.get("cycleTimeMs"))
+                .cloned()
+                .unwrap_or(Value::Null),
+            "collisionCount": node
+                .data
+                .get("summary")
+                .and_then(|summary| summary.get("collisionCount"))
+                .cloned()
+                .unwrap_or(Value::Null),
+            "blockedSequenceDetected": node
+                .data
+                .get("summary")
+                .and_then(|summary| summary.get("blockedSequenceDetected"))
+                .cloned()
+                .unwrap_or(Value::Null),
+            "energyEstimateJ": node
+                .data
+                .get("summary")
+                .and_then(|summary| summary.get("energyEstimateJ"))
+                .cloned()
+                .unwrap_or(Value::Null),
+        });
+        write_json_value(run_root.join("metrics.json"), &metrics)?;
+        write_jsonl_array_artifact(
+            run_root.join("timeline.jsonl"),
+            node.data.get("timelineSamples"),
+        )?;
+        write_jsonl_array_artifact(
+            run_root.join("signals.jsonl"),
+            node.data.get("signalSamples"),
+        )?;
+        write_jsonl_array_artifact(
+            run_root.join("controller.jsonl"),
+            node.data.get("controllerStateSamples"),
+        )?;
+        write_jsonl_array_artifact(run_root.join("contacts.jsonl"), node.data.get("contacts"))?;
+        if let Some(job) = node.data.get("job") {
+            write_json_value(run_root.join("job.json"), job)?;
+        }
+    }
+
+    Ok(())
+}
+
+fn write_ai_artifacts(
+    root: &Path,
+    nodes: &BTreeMap<String, EntityRecord>,
+) -> Result<(), StorageError> {
+    for node in nodes
+        .values()
+        .filter(|node| node.entity_type == "AiSession")
+    {
+        write_json_value(
+            root.join("ai/sessions").join(format!("{}.json", node.id)),
+            &serde_json::json!({
+                "id": node.id,
+                "name": node.name,
+                "status": node.status,
+                "data": node.data.clone(),
+            }),
+        )?;
+    }
+    for node in nodes
+        .values()
+        .filter(|node| node.entity_type == "AiSuggestion")
+    {
+        write_json_value(
+            root.join("ai/suggestions")
+                .join(format!("{}.json", node.id)),
+            &serde_json::json!({
+                "id": node.id,
+                "name": node.name,
+                "status": node.status,
+                "data": node.data.clone(),
+            }),
+        )?;
+    }
+
+    Ok(())
+}
+
+fn write_jsonl_array_artifact(path: PathBuf, value: Option<&Value>) -> Result<(), StorageError> {
+    let payloads = value
+        .and_then(|value| value.as_array())
+        .map(|entries| {
+            entries
+                .iter()
+                .map(serde_json::to_string)
+                .collect::<Result<Vec<_>, _>>()
+        })
+        .transpose()?
+        .unwrap_or_default();
     write_jsonl_file(path, &payloads)
 }
 
@@ -616,6 +769,129 @@ mod tests {
         document
     }
 
+    fn sample_document_with_simulation_and_ai() -> ProjectDocument {
+        let mut document = sample_document();
+        document.nodes.insert(
+            "ent_run_001".to_string(),
+            EntityRecord {
+                id: "ent_run_001".to_string(),
+                entity_type: "SimulationRun".to_string(),
+                name: "SimulationRun-001".to_string(),
+                revision: "rev_0003".to_string(),
+                status: "completed".to_string(),
+                data: serde_json::json!({
+                    "scenario": {
+                        "name": "Cellule Demo",
+                        "seed": 42,
+                        "engineVersion": "faero-sim@0.2.0"
+                    },
+                    "summary": {
+                        "status": "warning",
+                        "collisionCount": 1,
+                        "cycleTimeMs": 3655,
+                        "maxTrackingErrorMm": 0.54,
+                        "energyEstimateJ": 75.32,
+                        "blockedSequenceDetected": true,
+                        "blockedStateId": "wait_clear"
+                    },
+                    "job": {
+                        "jobId": "job_run_001",
+                        "progress": 1.0,
+                        "phase": "completed"
+                    },
+                    "timelineSamples": [
+                        {
+                            "stepIndex": 0,
+                            "timestampMs": 320,
+                            "trackingErrorMm": 0.21,
+                            "speedScale": 0.82
+                        }
+                    ],
+                    "signalSamples": [
+                        {
+                            "stepIndex": 0,
+                            "timestampMs": 0,
+                            "signalId": "sig_cycle_start",
+                            "value": true,
+                            "reason": "initial_value"
+                        }
+                    ],
+                    "controllerStateSamples": [
+                        {
+                            "stepIndex": 0,
+                            "timestampMs": 0,
+                            "stateId": "wait_clear",
+                            "stateName": "Wait Clear",
+                            "reason": "sequence_blocked"
+                        }
+                    ],
+                    "contacts": [
+                        {
+                            "stepIndex": 4,
+                            "timestampMs": 1460,
+                            "pairId": "pair_fixture",
+                            "leftEntityId": "ent_tool_001",
+                            "rightEntityId": "ent_fixture_001",
+                            "overlapMm": 0.63,
+                            "severity": "collision"
+                        }
+                    ]
+                }),
+            },
+        );
+        document.nodes.insert(
+            "ent_ai_session_001".to_string(),
+            EntityRecord {
+                id: "ent_ai_session_001".to_string(),
+                entity_type: "AiSession".to_string(),
+                name: "AI Session".to_string(),
+                revision: "rev_0004".to_string(),
+                status: "active".to_string(),
+                data: serde_json::json!({
+                    "sessionId": "ai_session_001",
+                    "userIntent": "explain collision",
+                    "mode": "explain",
+                    "modelInfo": "gemma3:27b",
+                    "contextRefs": [
+                        {
+                            "entityId": "ent_run_001",
+                            "role": "source",
+                            "path": "summary.collisionCount"
+                        }
+                    ],
+                    "createdSuggestionIds": ["ent_ai_suggestion_001"],
+                    "acceptedSuggestionIds": []
+                }),
+            },
+        );
+        document.nodes.insert(
+            "ent_ai_suggestion_001".to_string(),
+            EntityRecord {
+                id: "ent_ai_suggestion_001".to_string(),
+                entity_type: "AiSuggestion".to_string(),
+                name: "AI Suggestion".to_string(),
+                revision: "rev_0005".to_string(),
+                status: "draft".to_string(),
+                data: serde_json::json!({
+                    "summary": "Collision detectee sur la pince",
+                    "contextRefs": [
+                        {
+                            "entityId": "ent_run_001",
+                            "role": "source",
+                            "path": "contacts[0]"
+                        }
+                    ],
+                    "confidence": 0.82,
+                    "riskLevel": "high",
+                    "limitations": ["Aucun replay perception"],
+                    "proposedCommands": [],
+                    "explanation": ["La collision apparait a mi-cycle."]
+                }),
+            },
+        );
+        document
+    }
+
     #[test]
     fn saves_and_loads_project_document_round_trip() {
         let dir = tempdir().expect("tempdir should be available");
@@ -641,6 +917,70 @@ mod tests {
                 .content
                 .contains("## Intent")
         );
+    }
+
+    #[test]
+    fn save_project_writes_simulation_and_ai_artifact_files() {
+        let dir = tempdir().expect("tempdir should be available");
+        let project_root = dir.path().join("artifacted.faero");
+        let document = sample_document_with_simulation_and_ai();
+
+        save_project(&project_root, &document).expect("project should save with artifacts");
+
+        assert!(
+            project_root
+                .join("simulations/runs/ent_run_001.json")
+                .exists()
+        );
+        assert!(
+            project_root
+                .join("simulations/runs/ent_run_001/summary.json")
+                .exists()
+        );
+        assert!(
+            project_root
+                .join("simulations/runs/ent_run_001/metrics.json")
+                .exists()
+        );
+        assert!(
+            project_root
+                .join("simulations/runs/ent_run_001/timeline.jsonl")
+                .exists()
+        );
+        assert!(
+            project_root
+                .join("simulations/runs/ent_run_001/signals.jsonl")
+                .exists()
+        );
+        assert!(
+            project_root
+                .join("simulations/runs/ent_run_001/controller.jsonl")
+                .exists()
+        );
+        assert!(
+            project_root
+                .join("simulations/runs/ent_run_001/contacts.jsonl")
+                .exists()
+        );
+        assert!(
+            project_root
+                .join("ai/sessions/ent_ai_session_001.json")
+                .exists()
+        );
+        assert!(
+            project_root
+                .join("ai/suggestions/ent_ai_suggestion_001.json")
+                .exists()
+        );
+
+        let metrics =
+            fs::read_to_string(project_root.join("simulations/runs/ent_run_001/metrics.json"))
+                .expect("metrics artifact should read");
+        assert!(metrics.contains("\"engineVersion\": \"faero-sim@0.2.0\""));
+        let suggestion =
+            fs::read_to_string(project_root.join("ai/suggestions/ent_ai_suggestion_001.json"))
+                .expect("ai suggestion artifact should read");
+        assert!(suggestion.contains("\"riskLevel\": \"high\""));
     }
 
     #[test]

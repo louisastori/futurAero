@@ -531,6 +531,14 @@ async function executeWorkspaceCommand(commandId, currentSnapshot) {
             revision: "rev_seed",
             status: "active",
             detail: `${widthMm.toFixed(1)} x ${heightMm.toFixed(1)} x ${depthMm.toFixed(1)} mm | ${estimatedMassGrams.toFixed(1)} g`,
+            data: {
+              tags: ["part", "parametric"],
+              parameterSet: {
+                widthMm,
+                heightMm,
+                depthMm
+              }
+            },
             partGeometry: {
               state: "well_constrained",
               widthMm,
@@ -572,6 +580,13 @@ async function executeWorkspaceCommand(commandId, currentSnapshot) {
             revision: "rev_seed",
             status: "active",
             detail: "solved | 2 occ | 1 mates | 0 ddl",
+            data: {
+              tags: ["assembly"],
+              parameterSet: {
+                occurrenceCount: 2,
+                mateCount: 1
+              }
+            },
             assemblySummary: {
               status: "solved",
               occurrenceCount: 2,
@@ -607,13 +622,22 @@ async function executeWorkspaceCommand(commandId, currentSnapshot) {
             name: `RobotCell-${String(index).padStart(3, "0")}`,
             revision: "rev_seed",
             status: "active",
-            detail: "3 pts | 896 mm | 3491 ms",
+            detail: "3 pts | 4 sig | 3491 ms",
+            data: {
+              tags: ["robotics", "simulation", "mvp"],
+              parameterSet: {
+                tcpPayloadKg: 8,
+                estimatedCycleTimeMs: 3491
+              }
+            },
             robotCellSummary: {
               targetCount: 3,
               pathLengthMm: 896,
               maxSegmentMm: 470,
               estimatedCycleTimeMs: 3491,
               safetyZoneCount: 2,
+              signalCount: 4,
+              controllerTransitionCount: 3,
               warningCount: 0
             }
           }
@@ -637,13 +661,22 @@ async function executeWorkspaceCommand(commandId, currentSnapshot) {
         name: "RobotCell-001",
         revision: "rev_seed",
         status: "active",
-        detail: "3 pts | 896 mm | 3491 ms",
+        detail: "3 pts | 4 sig | 3491 ms",
+        data: {
+          tags: ["robotics", "simulation", "mvp"],
+          parameterSet: {
+            tcpPayloadKg: 8,
+            estimatedCycleTimeMs: 3491
+          }
+        },
         robotCellSummary: {
           targetCount: 3,
           pathLengthMm: 896,
           maxSegmentMm: 470,
           estimatedCycleTimeMs: 3491,
           safetyZoneCount: 2,
+          signalCount: 4,
+          controllerTransitionCount: 3,
           warningCount: 0
         }
       });
@@ -665,13 +698,24 @@ async function executeWorkspaceCommand(commandId, currentSnapshot) {
             name: `SimulationRun-${String(runIndex).padStart(3, "0")}`,
             revision: "rev_seed",
             status: "active",
-            detail: "completed | 3497 ms | 0 coll",
+            detail: "completed | 3497 ms | 0 coll | 0 contact",
+            data: {
+              tags: ["simulation", "artifact", "mvp"],
+              parameterSet: {
+                seed: 308,
+                stepCount: 12
+              }
+            },
             simulationRunSummary: {
               status: "completed",
               collisionCount: 0,
               cycleTimeMs: 3497,
               maxTrackingErrorMm: 0.27,
               energyEstimateJ: 74.82,
+              blockedSequenceDetected: false,
+              contactCount: 0,
+              signalSampleCount: 4,
+              controllerStateSampleCount: 3,
               timelineSampleCount: 12
             }
           }
@@ -694,13 +738,22 @@ async function executeWorkspaceCommand(commandId, currentSnapshot) {
         name: "RobotCell-001",
         revision: "rev_seed",
         status: "active",
-        detail: "3 pts | 896 mm | 3491 ms",
+        detail: "3 pts | 4 sig | 3491 ms",
+        data: {
+          tags: ["robotics", "simulation", "mvp"],
+          parameterSet: {
+            tcpPayloadKg: 8,
+            estimatedCycleTimeMs: 3491
+          }
+        },
         robotCellSummary: {
           targetCount: 3,
           pathLengthMm: 896,
           maxSegmentMm: 470,
           estimatedCycleTimeMs: 3491,
           safetyZoneCount: 2,
+          signalCount: 4,
+          controllerTransitionCount: 3,
           warningCount: 0
         }
       });
@@ -723,6 +776,12 @@ async function executeWorkspaceCommand(commandId, currentSnapshot) {
             revision: "rev_seed",
             status: "active",
             detail: "warning | 1 active | 0 block",
+            data: {
+              tags: ["safety", "analysis"],
+              parameterSet: {
+                attemptedAction: "robot.move"
+              }
+            },
             safetyReportSummary: {
               status: "warning",
               inhibited: false,
@@ -775,6 +834,14 @@ async function regenerateLatestPart(payload, currentSnapshot) {
   const updatedEntity = {
     ...latestPart,
     detail: `${payload.widthMm.toFixed(1)} x ${payload.heightMm.toFixed(1)} x ${payload.depthMm.toFixed(1)} mm | ${estimatedMassGrams.toFixed(1)} g`,
+    data: {
+      ...(latestPart.data ?? {}),
+      parameterSet: {
+        widthMm: payload.widthMm,
+        heightMm: payload.heightMm,
+        depthMm: payload.depthMm
+      }
+    },
     partGeometry: {
       ...latestPart.partGeometry,
       widthMm: payload.widthMm,
@@ -831,6 +898,45 @@ function buildFallbackAiAnswer(locale, snapshot, message) {
   return `Le panneau IA locale tourne en mode fallback d apercu web. Projet courant: ${summary}. Ta question etait: "${message}". Lance le shell Tauri avec Ollama disponible sur http://127.0.0.1:11434 pour obtenir une vraie discussion locale avec modele.`;
 }
 
+function buildFallbackStructuredExplain(snapshot, message) {
+  const latestSimulationRun = latestSimulationRunFromSnapshot(snapshot);
+  const latestSafetyReport = latestSafetyReportFromSnapshot(snapshot);
+  const contextRefs = [
+    { entityId: null, role: "source", path: "metadata.projectId" },
+    ...(latestSimulationRun
+      ? [{ entityId: latestSimulationRun.id, role: "source", path: "simulationRunSummary.collisionCount" }]
+      : []),
+    ...(latestSafetyReport
+      ? [{ entityId: latestSafetyReport.id, role: "source", path: "safetyReportSummary.blockingInterlockCount" }]
+      : [])
+  ].slice(0, 4);
+
+  return {
+    summary: latestSimulationRun
+      ? `Le dernier run ${latestSimulationRun.name} reste la source principale pour expliquer la demande.`
+      : `Le projet ${snapshot.status.projectName} ne contient pas encore de run exploitable pour expliquer "${message}".`,
+    contextRefs,
+    confidence: latestSimulationRun || latestSafetyReport ? 0.76 : 0.52,
+    riskLevel:
+      latestSimulationRun?.simulationRunSummary?.collisionCount > 0 ||
+      latestSafetyReport?.safetyReportSummary?.blockingInterlockCount > 0
+        ? "high"
+        : latestSimulationRun?.simulationRunSummary?.blockedSequenceDetected
+          ? "medium"
+          : "low",
+    limitations: latestSimulationRun || latestSafetyReport
+      ? ["Le fallback web n utilise pas le modele local, seulement le snapshot charge."]
+      : ["Aucun artefact de simulation ou de safety n est encore disponible dans cet apercu."],
+    proposedCommands: [],
+    explanation: latestSimulationRun
+      ? [
+          `Le run retenu expose ${latestSimulationRun.simulationRunSummary?.collisionCount ?? 0} collision(s) et ${latestSimulationRun.simulationRunSummary?.timelineSampleCount ?? 0} echantillon(s) de timeline.`,
+          `La demande etait: "${message}".`
+        ]
+      : [`La demande etait: "${message}".`]
+  };
+}
+
 async function sendAiChatMessage(message, locale, history, selectedModel, snapshot) {
   const response = await invokeBackend("ai_chat_send_message", {
     message,
@@ -846,8 +952,88 @@ async function sendAiChatMessage(message, locale, history, selectedModel, snapsh
     answer: buildFallbackAiAnswer(locale, snapshot, message),
     runtime: FALLBACK_AI_STATUS,
     references: buildFallbackAiReferences(snapshot),
+    structured: buildFallbackStructuredExplain(snapshot, message),
     warnings: [FALLBACK_AI_STATUS.warning],
     source: "web-preview"
+  };
+}
+
+async function updateEntityProperties(payload, currentSnapshot) {
+  const response = await invokeBackend("workspace_update_entity_properties", { payload });
+  if (response) {
+    return response;
+  }
+
+  const index = currentSnapshot.entities.findIndex((entity) => entity.id === payload.entityId);
+  if (index === -1) {
+    return {
+      snapshot: currentSnapshot,
+      result: {
+        commandId: "entity.properties.update",
+        status: "rejected",
+        message: "entite introuvable dans l apercu web"
+      }
+    };
+  }
+
+  const currentEntity = currentSnapshot.entities[index];
+  const nextData = {
+    ...(currentEntity.data ?? {}),
+    tags: payload.tags,
+    parameterSet: payload.parameters
+  };
+  let nextEntity = {
+    ...currentEntity,
+    name: payload.name,
+    data: nextData
+  };
+
+  if (nextEntity.partGeometry) {
+    const widthMm = Number(payload.parameters.widthMm ?? nextEntity.partGeometry.widthMm);
+    const heightMm = Number(payload.parameters.heightMm ?? nextEntity.partGeometry.heightMm);
+    const depthMm = Number(payload.parameters.depthMm ?? nextEntity.partGeometry.depthMm);
+    const areaMm2 = widthMm * heightMm;
+    const volumeMm3 = areaMm2 * depthMm;
+    const estimatedMassGrams = volumeMm3 * 0.0027;
+    nextEntity = {
+      ...nextEntity,
+      detail: `${widthMm.toFixed(1)} x ${heightMm.toFixed(1)} x ${depthMm.toFixed(1)} mm | ${estimatedMassGrams.toFixed(1)} g`,
+      partGeometry: {
+        ...nextEntity.partGeometry,
+        widthMm,
+        heightMm,
+        depthMm,
+        perimeterMm: 2 * (widthMm + heightMm),
+        areaMm2,
+        volumeMm3,
+        estimatedMassGrams
+      }
+    };
+  }
+
+  if (nextEntity.entityType === "Signal") {
+    nextEntity = {
+      ...nextEntity,
+      detail: `${nextData.signalId ?? "signal"} | ${String(payload.parameters.currentValue ?? nextData.currentValue ?? "false")}`,
+      data: {
+        ...nextData,
+        currentValue: payload.parameters.currentValue ?? nextData.currentValue ?? false
+      }
+    };
+  }
+
+  return {
+    snapshot: {
+      ...appendFallbackActivity(currentSnapshot, "system", "entity.properties.updated", payload.entityId),
+      entities: currentSnapshot.entities.map((entity, entityIndex) =>
+        entityIndex === index ? nextEntity : entity
+      )
+    },
+    result: {
+      commandId: "entity.properties.update",
+      status: "applied",
+      message: `proprietes mises a jour pour ${payload.entityId}`
+    }
   };
 }
 
@@ -856,6 +1042,7 @@ const defaultDesktopBackend = {
   loadWorkspaceFixture,
   executeWorkspaceCommand,
   regenerateLatestPart,
+  updateEntityProperties,
   fetchAiRuntimeStatus,
   sendAiChatMessage
 };
@@ -914,6 +1101,44 @@ function formatSafetyReportSummary(locale, safetyReportSummary) {
 function latestSafetyReportFromSnapshot(snapshot) {
   const safetyReports = snapshot.entities.filter((entity) => entity.safetyReportSummary);
   return safetyReports[safetyReports.length - 1] ?? null;
+}
+
+function isScalarInspectorValue(value) {
+  return typeof value === "string" || typeof value === "number" || typeof value === "boolean";
+}
+
+function inspectorParameterEntries(entity) {
+  const parameterSet = entity?.data?.parameterSet;
+  if (!parameterSet || typeof parameterSet !== "object" || Array.isArray(parameterSet)) {
+    return [];
+  }
+
+  return Object.entries(parameterSet).filter(([, value]) => isScalarInspectorValue(value));
+}
+
+function buildInspectorDraft(entity) {
+  return {
+    name: entity?.name ?? "",
+    tags: Array.isArray(entity?.data?.tags) ? entity.data.tags.join(", ") : "",
+    parameters: Object.fromEntries(inspectorParameterEntries(entity))
+  };
+}
+
+function coerceInspectorParameterValue(rawValue, originalValue) {
+  if (typeof originalValue === "number") {
+    const parsed = Number(rawValue);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+
+  if (typeof originalValue === "boolean") {
+    return Boolean(rawValue);
+  }
+
+  return String(rawValue ?? "").trim();
+}
+
+function formatStructuredConfidence(value) {
+  return `${Math.round(Number(value ?? 0) * 100)}%`;
 }
 
 function parsePositiveDimension(value) {
@@ -978,6 +1203,10 @@ export default function App({ backend = defaultDesktopBackend }) {
   const [panelState, setPanelState] = useState(defaultWorkspacePanels);
   const [dockWidths, setDockWidths] = useState(defaultWorkspaceDockWidths);
   const [dragSide, setDragSide] = useState(null);
+  const [selectedEntityId, setSelectedEntityId] = useState(null);
+  const [inspectorDraft, setInspectorDraft] = useState(buildInspectorDraft(null));
+  const [inspectorBusy, setInspectorBusy] = useState(false);
+  const [inspectorError, setInspectorError] = useState("");
   const [partEditor, setPartEditor] = useState({
     widthMm: "",
     heightMm: "",
@@ -999,6 +1228,10 @@ export default function App({ backend = defaultDesktopBackend }) {
   const latestSimulationRun = latestSimulationRunFromSnapshot(projectSnapshot);
   const safetyReports = projectSnapshot.entities.filter((entity) => entity.safetyReportSummary);
   const latestSafetyReport = latestSafetyReportFromSnapshot(projectSnapshot);
+  const selectedEntity =
+    projectSnapshot.entities.find((entity) => entity.id === selectedEntityId) ??
+    projectSnapshot.entities[projectSnapshot.entities.length - 1] ??
+    null;
   const fixtureOptions =
     selectedFixtureId && !fixtureProjects.some((fixture) => fixture.id === selectedFixtureId)
       ? [{ id: selectedFixtureId, projectName: currentStatus.projectName }, ...fixtureProjects]
@@ -1060,6 +1293,89 @@ export default function App({ backend = defaultDesktopBackend }) {
       ...previous,
       [field]: value
     }));
+  }
+
+  function handleEntitySelect(entityId) {
+    setSelectedEntityId(entityId);
+    setInspectorError("");
+  }
+
+  function handleInspectorChange(field, value) {
+    setInspectorDraft((previous) => ({
+      ...previous,
+      [field]: value
+    }));
+  }
+
+  function handleInspectorParameterChange(key, value) {
+    setInspectorDraft((previous) => ({
+      ...previous,
+      parameters: {
+        ...previous.parameters,
+        [key]: value
+      }
+    }));
+  }
+
+  async function handleInspectorSubmit() {
+    if (!selectedEntity) {
+      return;
+    }
+
+    const nextName = inspectorDraft.name.trim();
+    if (!nextName) {
+      setInspectorError(
+        t("ui.property.invalid_name", "Le nom de l entite doit rester non vide.")
+      );
+      return;
+    }
+
+    const nextParameters = {};
+    for (const [key, originalValue] of inspectorParameterEntries(selectedEntity)) {
+      const coercedValue = coerceInspectorParameterValue(
+        inspectorDraft.parameters[key],
+        originalValue
+      );
+      if (coercedValue === null) {
+        setInspectorError(
+          t(
+            "ui.property.invalid_parameter",
+            `Le parametre ${key} contient une valeur invalide.`
+          )
+        );
+        return;
+      }
+      nextParameters[key] = coercedValue;
+    }
+
+    setInspectorBusy(true);
+    setInspectorError("");
+    try {
+      const response = await backend.updateEntityProperties(
+        {
+          entityId: selectedEntity.id,
+          name: nextName,
+          tags: inspectorDraft.tags
+            .split(",")
+            .map((entry) => entry.trim())
+            .filter(Boolean),
+          parameters: nextParameters
+        },
+        projectSnapshot
+      );
+      setProjectSnapshot(response.snapshot);
+      setCommandResult(response.result);
+      setSelectedEntityId(selectedEntity.id);
+    } catch {
+      setInspectorError(
+        t(
+          "ui.property.update_failed",
+          "La mise a jour des proprietes a echoue sans crasher l interface."
+        )
+      );
+    } finally {
+      setInspectorBusy(false);
+    }
   }
 
   async function handleLatestPartRegenerate() {
@@ -1157,6 +1473,20 @@ export default function App({ backend = defaultDesktopBackend }) {
       return defaultGemma3Model(aiRuntime);
     });
   }, [aiRuntime.activeModel, gemma3Models.join("|")]);
+
+  useEffect(() => {
+    const entityIds = projectSnapshot.entities.map((entity) => entity.id);
+    if (entityIds.includes(selectedEntityId)) {
+      return;
+    }
+
+    setSelectedEntityId(entityIds[entityIds.length - 1] ?? null);
+  }, [projectSnapshot.entities.map((entity) => entity.id).join("|"), selectedEntityId]);
+
+  useEffect(() => {
+    setInspectorDraft(buildInspectorDraft(selectedEntity));
+    setInspectorError("");
+  }, [selectedEntity?.id, selectedEntity?.revision]);
 
   useEffect(() => {
     if (!latestParametricPart?.partGeometry) {
@@ -1373,6 +1703,7 @@ export default function App({ backend = defaultDesktopBackend }) {
       role: "user",
       content: trimmedMessage,
       references: [],
+      structured: null,
       warnings: [],
       source: "user"
     };
@@ -1396,6 +1727,7 @@ export default function App({ backend = defaultDesktopBackend }) {
           role: "assistant",
           content: response.answer,
           references: response.references ?? [],
+          structured: response.structured ?? null,
           warnings: response.warnings ?? [],
           source: response.source
         }
@@ -1407,6 +1739,7 @@ export default function App({ backend = defaultDesktopBackend }) {
           role: "assistant",
           content: t("ui.ai.error", "Le runtime IA local a renvoye une erreur."),
           references: [],
+          structured: null,
           warnings: [],
           source: "error"
         }
@@ -1512,13 +1845,21 @@ export default function App({ backend = defaultDesktopBackend }) {
                   {projectSnapshot.entities.length > 0 ? (
                     projectSnapshot.entities.map((entity) => (
                       <li key={entity.id} className="tree-row">
-                        <div className="tree-row-main">
-                          <span>{entity.name}</span>
-                          {entity.detail ? (
-                            <div className="tree-detail">{entity.detail}</div>
-                          ) : null}
-                        </div>
-                        <span className="tree-meta">{entity.entityType}</span>
+                        <button
+                          className="tree-row-button"
+                          type="button"
+                          data-entity-select={entity.id}
+                          data-entity-selected={selectedEntity?.id === entity.id ? "true" : "false"}
+                          onClick={() => handleEntitySelect(entity.id)}
+                        >
+                          <div className="tree-row-main">
+                            <span>{entity.name}</span>
+                            {entity.detail ? (
+                              <div className="tree-detail">{entity.detail}</div>
+                            ) : null}
+                          </div>
+                          <span className="tree-meta">{entity.entityType}</span>
+                        </button>
                       </li>
                     ))
                   ) : (
@@ -1632,6 +1973,113 @@ export default function App({ backend = defaultDesktopBackend }) {
               <dt>{t("ui.property.fixture", "Fixture")}</dt>
               <dd>{fixtureLabel(fixtureOptions, selectedFixtureId)}</dd>
             </dl>
+
+            <div className="property-section">
+              <div className="subsection-label">
+                {t("ui.property.generic_inspector", "Inspecteur generique")}
+              </div>
+              {selectedEntity ? (
+                <div
+                  className="property-card-list"
+                  data-entity-inspector={selectedEntity.id}
+                >
+                  <article className="result-card property-card">
+                    <strong>{selectedEntity.name}</strong>
+                    <div className="command-id">
+                      {selectedEntity.entityType} | {selectedEntity.status}
+                    </div>
+                    <div className="muted">
+                      {t("ui.property.revision", "Revision")} {selectedEntity.revision}
+                    </div>
+                    <div className="property-editor-grid">
+                      <label className="control-group property-control">
+                        <span>{t("ui.property.entity_name", "Nom")}</span>
+                        <input
+                          className="shell-select shell-input"
+                          aria-label={t("ui.property.entity_name", "Nom")}
+                          data-entity-name-input={selectedEntity.id}
+                          value={inspectorDraft.name}
+                          onChange={(event) => handleInspectorChange("name", event.target.value)}
+                        />
+                      </label>
+                      <label className="control-group property-control">
+                        <span>{t("ui.property.entity_tags", "Tags")}</span>
+                        <input
+                          className="shell-select shell-input"
+                          aria-label={t("ui.property.entity_tags", "Tags")}
+                          data-entity-tags-input={selectedEntity.id}
+                          value={inspectorDraft.tags}
+                          onChange={(event) => handleInspectorChange("tags", event.target.value)}
+                        />
+                      </label>
+                    </div>
+
+                    {inspectorParameterEntries(selectedEntity).length > 0 ? (
+                      <div className="property-editor-grid">
+                        {inspectorParameterEntries(selectedEntity).map(([key, value]) => (
+                          <label key={key} className="control-group property-control">
+                            <span>{key}</span>
+                            {typeof value === "boolean" ? (
+                              <input
+                                type="checkbox"
+                                aria-label={key}
+                                data-entity-parameter={key}
+                                checked={Boolean(inspectorDraft.parameters[key])}
+                                onChange={(event) =>
+                                  handleInspectorParameterChange(key, event.target.checked)
+                                }
+                              />
+                            ) : (
+                              <input
+                                className="shell-select shell-input"
+                                type={typeof value === "number" ? "number" : "text"}
+                                step={typeof value === "number" ? "any" : undefined}
+                                aria-label={key}
+                                data-entity-parameter={key}
+                                value={inspectorDraft.parameters[key] ?? ""}
+                                onChange={(event) =>
+                                  handleInspectorParameterChange(key, event.target.value)
+                                }
+                              />
+                            )}
+                          </label>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="muted">
+                        {t(
+                          "ui.property.no_generic_parameters",
+                          "Aucun parametre scalaire editable pour l entite selectionnee."
+                        )}
+                      </p>
+                    )}
+
+                    {inspectorError ? <div className="muted">{inspectorError}</div> : null}
+
+                    <div className="property-editor-actions">
+                      <button
+                        className="run-button"
+                        type="button"
+                        data-entity-save={selectedEntity.id}
+                        disabled={inspectorBusy}
+                        onClick={handleInspectorSubmit}
+                      >
+                        {inspectorBusy
+                          ? t("ui.command.running", "Execution...")
+                          : t("ui.property.apply", "Appliquer")}
+                      </button>
+                    </div>
+                  </article>
+                </div>
+              ) : (
+                <p className="muted">
+                  {t(
+                    "ui.property.no_entity_selected",
+                    "Selectionne une entite dans l explorateur pour afficher ses proprietes."
+                  )}
+                </p>
+              )}
+            </div>
 
             <div className="property-section">
               <div className="subsection-label">
@@ -2079,6 +2527,31 @@ export default function App({ backend = defaultDesktopBackend }) {
                         <span className="command-id">{entry.source}</span>
                       </div>
                       <div className="assistant-message-body">{entry.content}</div>
+                      {entry.structured ? (
+                        <div className="result-card" data-ai-structured="true">
+                          <strong>{entry.structured.summary}</strong>
+                          <div className="command-id">
+                            {entry.structured.riskLevel} | {formatStructuredConfidence(entry.structured.confidence)}
+                          </div>
+                          {entry.structured.explanation?.map((line) => (
+                            <div key={line} className="muted">
+                              {line}
+                            </div>
+                          ))}
+                          {entry.structured.contextRefs?.length > 0 ? (
+                            <div className="assistant-message-tags">
+                              {entry.structured.contextRefs.map((reference, referenceIndex) => (
+                                <span
+                                  key={`${reference.entityId ?? "project"}-${reference.path}-${referenceIndex}`}
+                                  className="assistant-tag"
+                                >
+                                  {(reference.entityId ?? "project")} | {reference.path}
+                                </span>
+                              ))}
+                            </div>
+                          ) : null}
+                        </div>
+                      ) : null}
                       {entry.references?.length > 0 ? (
                         <div className="assistant-message-tags">
                           {entry.references.map((reference) => (

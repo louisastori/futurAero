@@ -161,7 +161,8 @@ pub fn run_simulation(request: &SimulationRequest) -> Result<SimulationSummary, 
             change_cursor += 1;
         }
 
-        if let (Some(controller), Some(state)) = (request.controller.as_ref(), current_state.clone())
+        if let (Some(controller), Some(state)) =
+            (request.controller.as_ref(), current_state.clone())
         {
             if let Some(transition) = controller
                 .transitions
@@ -334,7 +335,11 @@ fn signal_condition_matches(
     let Some(current_value) = signal_values.get(&condition.signal_id) else {
         return false;
     };
-    match (&condition.comparator, current_value, &condition.expected_value) {
+    match (
+        &condition.comparator,
+        current_value,
+        &condition.expected_value,
+    ) {
         (SignalComparator::Equal, left, right) => left == right,
         (SignalComparator::NotEqual, left, right) => left != right,
         (SignalComparator::GreaterThan, SignalValue::Scalar(left), SignalValue::Scalar(right)) => {
@@ -391,8 +396,7 @@ fn build_contacts(
     (0..collision_count)
         .map(|index| {
             let pair = &pairs[index as usize % pairs.len()];
-            let step_index = (((index + 1) * request.step_count)
-                / (collision_count + 1))
+            let step_index = (((index + 1) * request.step_count) / (collision_count + 1))
                 .min(request.step_count.saturating_sub(1));
             let timestamp_ms = step_timestamp_ms(step_index, request.step_count, cycle_time_ms);
             SimulationContact {
@@ -402,7 +406,9 @@ fn build_contacts(
                 left_entity_id: pair.left_entity_id.clone(),
                 right_entity_id: pair.right_entity_id.clone(),
                 overlap_mm: round_two_decimals(
-                    pair.base_clearance_mm + (request.seed % 7) as f64 * 0.11 + f64::from(index) * 0.07,
+                    pair.base_clearance_mm
+                        + (request.seed % 7) as f64 * 0.11
+                        + f64::from(index) * 0.07,
                 ),
                 severity: "collision".to_string(),
             }
@@ -497,7 +503,10 @@ mod tests {
         assert_eq!(first.cycle_time_ms, 3_655);
         assert_eq!(first.max_tracking_error_mm, 0.54);
         assert_eq!(first.timeline_samples.len(), 10);
-        assert_eq!(first.progress_samples.last().map(|sample| sample.progress), Some(1.0));
+        assert_eq!(
+            first.progress_samples.last().map(|sample| sample.progress),
+            Some(1.0)
+        );
     }
 
     #[test]

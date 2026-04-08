@@ -1,6 +1,8 @@
 use std::{env, time::Duration};
 
-use faero_types::{ExternalEndpoint, ProjectDocument};
+use faero_types::{
+    AiContextReference, AiRiskLevel, AiStructuredExplain, ExternalEndpoint, ProjectDocument,
+};
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -33,12 +35,13 @@ pub struct AiConversationMessage {
     pub content: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct AiChatResponse {
     pub answer: String,
     pub runtime: AiRuntimeStatus,
     pub references: Vec<String>,
+    pub structured: Option<AiStructuredExplain>,
     pub warnings: Vec<String>,
     pub source: String,
 }
@@ -159,6 +162,7 @@ pub fn chat_with_project(
     let config = AiRuntimeConfig::from_env();
     let client = build_http_client(config.timeout_secs);
     let references = collect_context_references(document);
+    let structured = Some(build_structured_explain(document, trimmed_message));
 
     let response = match fetch_model_names(&client, &config) {
         Ok(models) => {
@@ -179,6 +183,7 @@ pub fn chat_with_project(
                             answer,
                             runtime,
                             references,
+                            structured: structured.clone(),
                             warnings,
                             source: "ollama-local".to_string(),
                         }
@@ -188,6 +193,7 @@ pub fn chat_with_project(
                         trimmed_message,
                         document,
                         references,
+                        structured.clone(),
                         degraded_runtime_status(&config, error.to_string(), models, selected_model),
                     ),
                 }
@@ -197,6 +203,7 @@ pub fn chat_with_project(
                     trimmed_message,
                     document,
                     references,
+                    structured.clone(),
                     unavailable_runtime_status(
                         &config,
                         "no preferred local model found".to_string(),
@@ -211,6 +218,7 @@ pub fn chat_with_project(
             trimmed_message,
             document,
             references,
+            structured,
             unavailable_runtime_status(&config, error.to_string(), Vec::new(), selected_model),
         ),
     };
@@ -582,11 +590,278 @@ fn collect_context_references(document: &ProjectDocument) -> Vec<String> {
         .collect()
 }
 
+fn build_structured_explain(document: &ProjectDocument, message: &str) -> AiStructuredExplain {
+    let latest_run = latest_entity_by_type(document, "SimulationRun");
+    let latest_safety = latest_entity_by_type(document, "SafetyReport");
+    let latest_robot_cell = latest_entity_by_type(document, "RobotCell");
+    let asks_about_safety = contains_any_keyword(message, &["safety", "bloc", "interlock"]);
+    let asks_about_collision = contains_any_keyword(message, &["collision", "contact"]);
+
+    let mut context_refs = vec![AiContextReference {
+        entity_id: None,
+        role: "source".to_string(),
+        path: "metadata.projectId".to_string(),
+    }];
+    let mut limitations = Vec::new();
+    let mut explanation = Vec::new();
+    let mut summary = format!(
+        "Le projet {} contient {} entites exploitables.",
+        document.metadata.name,
+        document.nodes.len()
+    );
+    let mut confidence = 0.58;
+    let mut risk_level = AiRiskLevel::Low;
+
+    if (asks_about_safety || !asks_about_collision) && latest_safety.is_some() {
+        let report = latest_safety.expect("checked above");
+        let blocked = report
+            .data
+            .get("summary")
+            .and_then(|summary| summary.get("inhibited"))
+            .and_then(|value| value.as_bool())
+            .unwrap_or(false);
+        let status = report
+            .data
+            .get("summary")
+            .and_then(|summary| summary.get("status"))
+            .and_then(|value| value.as_str())
+            .unwrap_or("unknown");
+        let blocking_interlocks = report
+            .data
+            .get("summary")
+            .and_then(|summary| summary.get("blockingInterlockCount"))
+            .and_then(|value| value.as_u64())
+            .unwrap_or(0);
+        let active_zones = report
+            .data
+            .get("summary")
+            .and_then(|summary| summary.get("activeZoneCount"))
+            .and_then(|value| value.as_u64())
+            .unwrap_or(0);
+
+        context_refs.push(AiContextReference {
+            entity_id: Some(report.id.clone()),
+            role: "source".to_string(),
+            path: "summary.status".to_string(),
+        });
+        context_refs.push(AiContextReference {
+            entity_id: Some(report.id.clone()),
+            role: "source".to_string(),
+            path: "summary.blockingInterlockCount".to_string(),
+        });
+        summary = if blocked {
+            format!(
+                "Le dernier rapport safety bloque l action avec {} interlock(s) sur {}.",
+                blocking_interlocks, report.name
+            )
+        } else {
+            format!(
+                "Le dernier rapport safety reste {} avec {} zone(s) active(s) sur {}.",
+                status, active_zones, report.name
+            )
+        };
+        explanation.push(format!(
+            "Le rapport {} expose {} zone(s) active(s) et {} interlock(s) bloquant(s).",
+            report.id, active_zones, blocking_interlocks
+        ));
+        if let Some(causes) = report
+            .data
+            .get("summary")
+            .and_then(|summary| summary.get("causeZoneIds"))
+            .and_then(|value| value.as_array())
+        {
+            let cause_ids = causes
+                .iter()
+                .filter_map(|value| value.as_str())
+                .collect::<Vec<_>>();
+            if !cause_ids.is_empty() {
+                explanation.push(format!(
+                    "Les causes explicites du blocage sont: {}.",
+                    cause_ids.join(", ")
+                ));
+            }
+        }
+        confidence = if blocked { 0.9 } else { 0.78 };
+        risk_level = if blocked {
+            AiRiskLevel::High
+        } else {
+            AiRiskLevel::Medium
+        };
+    } else if let Some(run) = latest_run {
+        let collision_count = run
+            .data
+            .get("summary")
+            .and_then(|summary| summary.get("collisionCount"))
+            .and_then(|value| value.as_u64())
+            .unwrap_or(0);
+        let blocked = run
+            .data
+            .get("summary")
+            .and_then(|summary| summary.get("blockedSequenceDetected"))
+            .and_then(|value| value.as_bool())
+            .unwrap_or(false);
+        let blocked_state = run
+            .data
+            .get("summary")
+            .and_then(|summary| summary.get("blockedStateId"))
+            .and_then(|value| value.as_str())
+            .map(str::to_string);
+        let cycle_time_ms = run
+            .data
+            .get("summary")
+            .and_then(|summary| summary.get("cycleTimeMs"))
+            .and_then(|value| value.as_u64())
+            .unwrap_or(0);
+
+        context_refs.push(AiContextReference {
+            entity_id: Some(run.id.clone()),
+            role: "source".to_string(),
+            path: "summary.collisionCount".to_string(),
+        });
+        context_refs.push(AiContextReference {
+            entity_id: Some(run.id.clone()),
+            role: "source".to_string(),
+            path: "summary.blockedSequenceDetected".to_string(),
+        });
+        if run
+            .data
+            .get("contacts")
+            .and_then(|value| value.as_array())
+            .is_some_and(|contacts| !contacts.is_empty())
+        {
+            context_refs.push(AiContextReference {
+                entity_id: Some(run.id.clone()),
+                role: "source".to_string(),
+                path: "contacts[0]".to_string(),
+            });
+        }
+
+        summary = if collision_count > 0 {
+            format!(
+                "Le dernier run detecte {} collision(s) sur {}.",
+                collision_count, run.name
+            )
+        } else if blocked {
+            format!(
+                "Le dernier run se termine sans collision mais avec une sequence bloquee sur {}.",
+                run.name
+            )
+        } else {
+            format!(
+                "Le dernier run {} termine sans collision en {} ms.",
+                run.name, cycle_time_ms
+            )
+        };
+        explanation.push(format!(
+            "Le run {} garde un temps de cycle de {} ms.",
+            run.id, cycle_time_ms
+        ));
+        if let Some(contact) = run
+            .data
+            .get("contacts")
+            .and_then(|value| value.as_array())
+            .and_then(|contacts| contacts.first())
+        {
+            let left = contact
+                .get("leftEntityId")
+                .and_then(|value| value.as_str())
+                .unwrap_or("left");
+            let right = contact
+                .get("rightEntityId")
+                .and_then(|value| value.as_str())
+                .unwrap_or("right");
+            let timestamp_ms = contact
+                .get("timestampMs")
+                .and_then(|value| value.as_u64())
+                .unwrap_or(0);
+            explanation.push(format!(
+                "Le premier contact critique apparait entre {} et {} a t={} ms.",
+                left, right, timestamp_ms
+            ));
+        }
+        if let Some(blocked_state) = blocked_state {
+            explanation.push(format!(
+                "La machine a etats reste bloquee dans l etat `{}`.",
+                blocked_state
+            ));
+        }
+        confidence = if collision_count > 0 || blocked {
+            0.86
+        } else {
+            0.74
+        };
+        risk_level = if collision_count > 0 {
+            AiRiskLevel::High
+        } else if blocked {
+            AiRiskLevel::Medium
+        } else {
+            AiRiskLevel::Low
+        };
+    } else {
+        limitations.push(
+            "Le modele n a trouve ni run de simulation ni rapport safety persiste.".to_string(),
+        );
+    }
+
+    if latest_run.is_none() {
+        limitations.push("Aucun run de simulation disponible dans le graphe courant.".to_string());
+    }
+    if latest_safety.is_none() {
+        limitations.push("Aucun rapport safety disponible dans le graphe courant.".to_string());
+    }
+    if let Some(robot_cell) = latest_robot_cell {
+        context_refs.push(AiContextReference {
+            entity_id: Some(robot_cell.id.clone()),
+            role: "context".to_string(),
+            path: "sequenceValidation.estimatedCycleTimeMs".to_string(),
+        });
+    }
+    if explanation.is_empty() {
+        explanation.push(format!(
+            "La demande \"{}\" a ete analysee a partir du graphe projet courant.",
+            message.trim()
+        ));
+    }
+    if limitations.is_empty() {
+        limitations.push("Le raisonnement est borne aux artefacts locaux disponibles.".to_string());
+    }
+
+    AiStructuredExplain {
+        summary,
+        context_refs: context_refs
+            .into_iter()
+            .take(MAX_CONTEXT_REFERENCES)
+            .collect(),
+        confidence,
+        risk_level,
+        limitations,
+        proposed_commands: Vec::new(),
+        explanation,
+    }
+}
+
+fn latest_entity_by_type<'a>(
+    document: &'a ProjectDocument,
+    entity_type: &str,
+) -> Option<&'a faero_types::EntityRecord> {
+    document
+        .nodes
+        .values()
+        .filter(|entity| entity.entity_type == entity_type)
+        .max_by(|left, right| left.id.cmp(&right.id))
+}
+
+fn contains_any_keyword(message: &str, keywords: &[&str]) -> bool {
+    let lower = message.to_ascii_lowercase();
+    keywords.iter().any(|keyword| lower.contains(keyword))
+}
+
 fn fallback_response(
     locale: &str,
     message: &str,
     document: &ProjectDocument,
     references: Vec<String>,
+    structured: Option<AiStructuredExplain>,
     runtime: AiRuntimeStatus,
 ) -> AiChatResponse {
     let source = if runtime.available {
@@ -599,6 +874,7 @@ fn fallback_response(
         answer: build_fallback_answer(locale, message, document, &runtime),
         runtime,
         references,
+        structured,
         warnings,
         source,
     }
