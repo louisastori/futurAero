@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use faero_types::{
     CommandEnvelope, EntityRecord, EventEnvelope, ExternalEndpoint, PluginManifest,
-    ProjectDocument, TelemetryStream,
+    ProjectDocument, SignalValue, TelemetryStream,
 };
 use serde::Serialize;
 use serde_json::Value;
@@ -24,6 +24,10 @@ pub enum CoreError {
     PluginAlreadyInstalled(String),
     #[error("plugin `{0}` is not installed")]
     PluginNotInstalled(String),
+    #[error("signal entity `{0}` does not exist")]
+    SignalEntityNotFound(String),
+    #[error("entity `{0}` is not a signal")]
+    EntityIsNotSignal(String),
 }
 
 #[derive(Debug, Clone)]
@@ -34,6 +38,7 @@ pub enum CoreCommand {
     RegisterStream(TelemetryStream),
     InstallPlugin(PluginManifest),
     SetPluginEnabled { plugin_id: String, enabled: bool },
+    SetSignalValue { entity_id: String, value: SignalValue },
 }
 
 #[derive(Debug, Clone)]
@@ -288,6 +293,47 @@ impl ProjectGraph {
                     payload,
                 )
             }
+            CoreCommand::SetSignalValue { entity_id, value } => {
+                let Some(existing) = self.document.nodes.get(&entity_id).cloned() else {
+                    return Err(CoreError::SignalEntityNotFound(entity_id));
+                };
+                if existing.entity_type != "Signal" {
+                    return Err(CoreError::EntityIsNotSignal(existing.id));
+                }
+
+                let mut next_entity = existing.clone();
+                if let Some(data) = next_entity.data.as_object_mut() {
+                    data.insert("currentValue".to_string(), serialize_payload(&value));
+                } else {
+                    next_entity.data = serde_json::json!({
+                        "currentValue": value
+                    });
+                }
+                let payload = serde_json::json!({
+                    "entityId": entity_id,
+                    "value": value
+                });
+                let command_id = self.record_command(
+                    "signal.value.set",
+                    Some(next_entity.id.clone()),
+                    Some(existing.revision),
+                    payload,
+                );
+                let revision = self.next_revision();
+                next_entity.revision = revision.clone();
+                let event_payload = serialize_payload(&next_entity);
+                self.document
+                    .nodes
+                    .insert(next_entity.id.clone(), next_entity.clone());
+
+                self.record_event(
+                    "signal.value.updated",
+                    Some(next_entity.id),
+                    command_id,
+                    revision,
+                    event_payload,
+                )
+            }
         }
     }
 
@@ -363,8 +409,8 @@ fn serialize_payload<T: Serialize>(value: &T) -> Value {
 #[cfg(test)]
 mod tests {
     use faero_types::{
-        Addressing, ConnectionMode, EndpointType, LinkMetrics, QosProfile, StreamDirection,
-        TimingProfile, TransportProfile,
+        Addressing, ConnectionMode, EndpointType, LinkMetrics, QosProfile, SignalValue,
+        StreamDirection, TimingProfile, TransportProfile,
     };
 
     use super::*;
@@ -452,6 +498,23 @@ mod tests {
         }
     }
 
+    fn sample_signal() -> EntityRecord {
+        EntityRecord {
+            id: "ent_sig_001".to_string(),
+            entity_type: "Signal".to_string(),
+            name: "CycleStart".to_string(),
+            revision: "rev_seed".to_string(),
+            status: "active".to_string(),
+            data: serde_json::json!({
+                "signalId": "sig_cycle_start",
+                "kind": "boolean",
+                "initialValue": false,
+                "currentValue": false,
+                "tags": ["control", "mvp"]
+            }),
+        }
+    }
+
     #[test]
     fn creates_entity_and_records_command_event() {
         let mut graph = ProjectGraph::new("Demo");
@@ -463,6 +526,27 @@ mod tests {
         assert_eq!(event.kind, "entity.created");
         assert_eq!(graph.document().commands.len(), 1);
         assert_eq!(graph.document().events.len(), 1);
+    }
+
+    #[test]
+    fn sets_signal_values_through_a_core_command() {
+        let mut graph = ProjectGraph::new("Demo");
+        graph
+            .apply_command(CoreCommand::CreateEntity(sample_signal()))
+            .expect("signal should be created");
+
+        let event = graph
+            .apply_command(CoreCommand::SetSignalValue {
+                entity_id: "ent_sig_001".to_string(),
+                value: SignalValue::Bool(true),
+            })
+            .expect("signal value should update");
+
+        assert_eq!(event.kind, "signal.value.updated");
+        assert_eq!(
+            graph.document().nodes["ent_sig_001"].data["currentValue"],
+            serde_json::json!(true)
+        );
     }
 
     #[test]

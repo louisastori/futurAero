@@ -265,6 +265,202 @@ pub struct PluginManifest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SignalKind {
+    Boolean,
+    Scalar,
+    Text,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(untagged)]
+pub enum SignalValue {
+    Bool(bool),
+    Scalar(f64),
+    Text(String),
+}
+
+impl Default for SignalValue {
+    fn default() -> Self {
+        Self::Bool(false)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SignalDefinition {
+    pub id: String,
+    pub name: String,
+    pub kind: SignalKind,
+    pub initial_value: SignalValue,
+    pub unit: Option<String>,
+    pub tags: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SignalComparator {
+    Equal,
+    NotEqual,
+    GreaterThan,
+    GreaterThanOrEqual,
+    LessThan,
+    LessThanOrEqual,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SignalCondition {
+    pub signal_id: String,
+    pub comparator: SignalComparator,
+    pub expected_value: SignalValue,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SignalAssignment {
+    pub signal_id: String,
+    pub value: SignalValue,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ControllerState {
+    pub id: String,
+    pub name: String,
+    pub terminal: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ControlTransition {
+    pub id: String,
+    pub from_state_id: String,
+    pub to_state_id: String,
+    pub conditions: Vec<SignalCondition>,
+    pub assignments: Vec<SignalAssignment>,
+    pub description: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ControllerStateMachine {
+    pub id: String,
+    pub name: String,
+    pub initial_state_id: String,
+    pub states: Vec<ControllerState>,
+    pub transitions: Vec<ControlTransition>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ScheduledSignalChange {
+    pub step_index: u32,
+    pub signal_id: String,
+    pub value: SignalValue,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SignalSample {
+    pub step_index: u32,
+    pub timestamp_ms: u32,
+    pub signal_id: String,
+    pub value: SignalValue,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ControllerStateSample {
+    pub step_index: u32,
+    pub timestamp_ms: u32,
+    pub state_id: String,
+    pub state_name: String,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SimulationContactPair {
+    pub id: String,
+    pub left_entity_id: String,
+    pub right_entity_id: String,
+    pub base_clearance_mm: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SimulationContact {
+    pub step_index: u32,
+    pub timestamp_ms: u32,
+    pub pair_id: String,
+    pub left_entity_id: String,
+    pub right_entity_id: String,
+    pub overlap_mm: f64,
+    pub severity: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SimulationProgressSample {
+    pub phase: String,
+    pub progress: f32,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AiContextReference {
+    pub entity_id: Option<String>,
+    pub role: String,
+    pub path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AiRiskLevel {
+    Low,
+    Medium,
+    High,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AiProposedCommand {
+    pub kind: String,
+    pub target_id: Option<String>,
+    pub payload: Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AiStructuredExplain {
+    pub summary: String,
+    pub context_refs: Vec<AiContextReference>,
+    pub confidence: f64,
+    pub risk_level: AiRiskLevel,
+    pub limitations: Vec<String>,
+    pub proposed_commands: Vec<AiProposedCommand>,
+    pub explanation: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AiSessionLog {
+    pub session_id: String,
+    pub user_intent: String,
+    pub mode: String,
+    pub model_info: String,
+    pub context_refs: Vec<AiContextReference>,
+    pub prompt_hash: String,
+    pub response_hash: String,
+    pub created_suggestion_ids: Vec<String>,
+    pub accepted_suggestion_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct OpenSpecDocument {
     pub id: String,
@@ -370,5 +566,73 @@ mod tests {
         assert_eq!(json["bodyFormat"], "markdown");
         assert_eq!(json["entityRefs"][0], "ent_cell_001");
         assert_eq!(json["updatedAt"], "2026-04-08T08:00:00Z");
+    }
+
+    #[test]
+    fn signal_control_types_serialize_with_expected_shapes() {
+        let machine = ControllerStateMachine {
+            id: "ctrl_pick".to_string(),
+            name: "Pick Controller".to_string(),
+            initial_state_id: "idle".to_string(),
+            states: vec![
+                ControllerState {
+                    id: "idle".to_string(),
+                    name: "Idle".to_string(),
+                    terminal: false,
+                },
+                ControllerState {
+                    id: "done".to_string(),
+                    name: "Done".to_string(),
+                    terminal: true,
+                },
+            ],
+            transitions: vec![ControlTransition {
+                id: "tr_start".to_string(),
+                from_state_id: "idle".to_string(),
+                to_state_id: "done".to_string(),
+                conditions: vec![SignalCondition {
+                    signal_id: "sig_cycle_start".to_string(),
+                    comparator: SignalComparator::Equal,
+                    expected_value: SignalValue::Bool(true),
+                }],
+                assignments: vec![SignalAssignment {
+                    signal_id: "sig_part_present".to_string(),
+                    value: SignalValue::Bool(false),
+                }],
+                description: Some("complete pick cycle".to_string()),
+            }],
+        };
+
+        let json = serde_json::to_value(machine).expect("controller machine should serialize");
+        assert_eq!(json["initialStateId"], "idle");
+        assert_eq!(json["transitions"][0]["conditions"][0]["comparator"], "equal");
+        assert_eq!(json["transitions"][0]["assignments"][0]["value"], false);
+    }
+
+    #[test]
+    fn ai_structured_explain_serializes_with_required_fields() {
+        let explain = AiStructuredExplain {
+            summary: "Collision detectee sur la pince".to_string(),
+            context_refs: vec![AiContextReference {
+                entity_id: Some("ent_run_001".to_string()),
+                role: "source".to_string(),
+                path: "summary.collisionCount".to_string(),
+            }],
+            confidence: 0.82,
+            risk_level: AiRiskLevel::High,
+            limitations: vec!["Aucun replay perception disponible.".to_string()],
+            proposed_commands: vec![AiProposedCommand {
+                kind: "simulation.run.start".to_string(),
+                target_id: Some("ent_run_001".to_string()),
+                payload: serde_json::json!({ "seed": 123 }),
+            }],
+            explanation: vec!["La collision survient a mi-cycle.".to_string()],
+        };
+
+        let json = serde_json::to_value(explain).expect("structured explain should serialize");
+        assert_eq!(json["confidence"], 0.82);
+        assert_eq!(json["riskLevel"], "high");
+        assert_eq!(json["contextRefs"][0]["path"], "summary.collisionCount");
+        assert_eq!(json["proposedCommands"][0]["kind"], "simulation.run.start");
     }
 }
