@@ -2,7 +2,7 @@
 
 Statut: stable
 
-Source promue depuis: `OpenSpec/changes/init-mvp-futureaero/specs/system/spec.md`
+Source promue depuis: `OpenSpec/archive/completed/2026-04/init-mvp-futureaero/specs/system/spec.md`
 
 Cette spec canonique capture les exigences systeme minimales stabilisees. Les details longs, le rationnel et la traceabilite complementaire restent dans [../reference/README.md](../reference/README.md).
 

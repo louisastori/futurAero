@@ -2,7 +2,7 @@
 
 Statut: stable
 
-Source promue depuis: `OpenSpec/specs/reference/22-Spec-Plugin-SDK.md`, `OpenSpec/specs/reference/26-Spec-GitHub-PR-Et-Releases.md`, `OpenSpec/specs/reference/12-Backlog-Dev-Ready.md`
+Source promue depuis: `OpenSpec/specs/reference/22-Spec-Plugin-SDK.md`, `OpenSpec/archive/completed/2026-04/chore-github-pr-et-releases/specs/system/spec.md`, `OpenSpec/specs/reference/12-Backlog-Dev-Ready.md`
 
 Cette spec canonique capture les exigences stables du Plugin SDK, de l audit des manifests et du workflow de promotion/versionnement associe.
 
@@ -29,5 +29,5 @@ Cette spec canonique capture les exigences stables du Plugin SDK, de l audit des
 ## Supporting References
 
 - [22-Spec-Plugin-SDK.md](../reference/22-Spec-Plugin-SDK.md)
-- [26-Spec-GitHub-PR-Et-Releases.md](../reference/26-Spec-GitHub-PR-Et-Releases.md)
+- [chore-github-pr-et-releases/spec.md](../../archive/completed/2026-04/chore-github-pr-et-releases/specs/system/spec.md)
 - [12-Backlog-Dev-Ready.md](../reference/12-Backlog-Dev-Ready.md)
