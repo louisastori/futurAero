@@ -86,6 +86,86 @@ pub struct GraphEdge {
     pub created_at: String,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct AssemblyTransform {
+    pub x_mm: f64,
+    pub y_mm: f64,
+    pub z_mm: f64,
+    pub yaw_deg: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AssemblyOccurrence {
+    pub id: String,
+    pub definition_entity_id: String,
+    pub transform: AssemblyTransform,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum AssemblyMateType {
+    Coincident,
+    Offset { distance_mm: f64 },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AssemblyMateConstraint {
+    pub id: String,
+    pub left_occurrence_id: String,
+    pub right_occurrence_id: String,
+    pub mate_type: AssemblyMateType,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AssemblySolveStatus {
+    Solved,
+    Conflicting,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AssemblySolvedOccurrence {
+    pub occurrence_id: String,
+    pub transform: AssemblyTransform,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AssemblySolveReport {
+    pub status: AssemblySolveStatus,
+    pub constrained_occurrence_count: usize,
+    pub total_mate_count: usize,
+    pub degrees_of_freedom_estimate: usize,
+    pub solved_occurrences: Vec<AssemblySolvedOccurrence>,
+    pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct AssemblyParameterSet {
+    pub occurrence_count: usize,
+    pub mate_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct AssemblyData {
+    #[serde(default)]
+    pub tags: Vec<String>,
+    #[serde(default)]
+    pub parameter_set: AssemblyParameterSet,
+    #[serde(default)]
+    pub occurrences: Vec<AssemblyOccurrence>,
+    #[serde(default)]
+    pub mate_constraints: Vec<AssemblyMateConstraint>,
+    #[serde(default)]
+    pub solve_report: Option<AssemblySolveReport>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ConnectionMode {
@@ -587,6 +667,58 @@ mod tests {
         let json = serde_json::to_value(endpoint).expect("endpoint should serialize");
         assert_eq!(json["transportProfile"]["transportKind"], "wifi");
         assert_eq!(json["mode"], "live");
+    }
+
+    #[test]
+    fn assembly_payload_serializes_with_camel_case_fields() {
+        let assembly = AssemblyData {
+            tags: vec!["assembly".to_string()],
+            parameter_set: AssemblyParameterSet {
+                occurrence_count: 2,
+                mate_count: 1,
+            },
+            occurrences: vec![
+                AssemblyOccurrence {
+                    id: "occ_001".to_string(),
+                    definition_entity_id: "ent_part_001".to_string(),
+                    transform: AssemblyTransform::default(),
+                },
+                AssemblyOccurrence {
+                    id: "occ_002".to_string(),
+                    definition_entity_id: "ent_part_002".to_string(),
+                    transform: AssemblyTransform {
+                        x_mm: 80.0,
+                        ..AssemblyTransform::default()
+                    },
+                },
+            ],
+            mate_constraints: vec![AssemblyMateConstraint {
+                id: "mate_001".to_string(),
+                left_occurrence_id: "occ_001".to_string(),
+                right_occurrence_id: "occ_002".to_string(),
+                mate_type: AssemblyMateType::Coincident,
+            }],
+            solve_report: Some(AssemblySolveReport {
+                status: AssemblySolveStatus::Solved,
+                constrained_occurrence_count: 2,
+                total_mate_count: 1,
+                degrees_of_freedom_estimate: 0,
+                solved_occurrences: vec![AssemblySolvedOccurrence {
+                    occurrence_id: "occ_002".to_string(),
+                    transform: AssemblyTransform {
+                        x_mm: 80.0,
+                        ..AssemblyTransform::default()
+                    },
+                }],
+                warnings: Vec::new(),
+            }),
+        };
+
+        let json = serde_json::to_value(assembly).expect("assembly payload should serialize");
+        assert_eq!(json["parameterSet"]["occurrenceCount"], 2);
+        assert_eq!(json["occurrences"][0]["definitionEntityId"], "ent_part_001");
+        assert_eq!(json["mateConstraints"][0]["mateType"]["type"], "coincident");
+        assert_eq!(json["solveReport"]["status"], "solved");
     }
 
     #[test]

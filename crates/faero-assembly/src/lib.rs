@@ -1,67 +1,13 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 
-use serde::{Deserialize, Serialize};
+pub use faero_types::{
+    AssemblyMateConstraint as MateConstraint, AssemblyMateType as MateType,
+    AssemblyOccurrence as Occurrence, AssemblySolveReport, AssemblySolveStatus,
+    AssemblySolvedOccurrence as SolvedOccurrence, AssemblyTransform as Transform3D,
+};
 use thiserror::Error;
 
 const TRANSFORM_EPSILON: f64 = 1e-6;
-
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
-pub struct Transform3D {
-    pub x_mm: f64,
-    pub y_mm: f64,
-    pub z_mm: f64,
-    pub yaw_deg: f64,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Occurrence {
-    pub id: String,
-    pub part_entity_id: String,
-    pub transform: Transform3D,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum MateType {
-    Coincident,
-    Offset { distance_mm: f64 },
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct MateConstraint {
-    pub id: String,
-    pub left_occurrence_id: String,
-    pub right_occurrence_id: String,
-    pub mate_type: MateType,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum AssemblySolveStatus {
-    Solved,
-    Conflicting,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SolvedOccurrence {
-    pub occurrence_id: String,
-    pub transform: Transform3D,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AssemblySolveReport {
-    pub status: AssemblySolveStatus,
-    pub constrained_occurrence_count: usize,
-    pub total_mate_count: usize,
-    pub degrees_of_freedom_estimate: usize,
-    pub solved_occurrences: Vec<SolvedOccurrence>,
-    pub warnings: Vec<String>,
-}
 
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum AssemblyError {
@@ -88,7 +34,7 @@ pub fn solve_assembly(
         .iter()
         .map(|occurrence| {
             if occurrence.id.is_empty()
-                || occurrence.part_entity_id.is_empty()
+                || occurrence.definition_entity_id.is_empty()
                 || !known_ids.insert(occurrence.id.as_str())
             {
                 return Err(AssemblyError::InvalidOccurrenceSet);
@@ -245,17 +191,17 @@ mod tests {
         vec![
             Occurrence {
                 id: "occ_a".to_string(),
-                part_entity_id: "ent_part_001".to_string(),
+                definition_entity_id: "ent_part_001".to_string(),
                 transform: Transform3D::default(),
             },
             Occurrence {
                 id: "occ_b".to_string(),
-                part_entity_id: "ent_part_002".to_string(),
+                definition_entity_id: "ent_part_002".to_string(),
                 transform: Transform3D::default(),
             },
             Occurrence {
                 id: "occ_c".to_string(),
-                part_entity_id: "ent_part_003".to_string(),
+                definition_entity_id: "ent_part_003".to_string(),
                 transform: Transform3D::default(),
             },
         ]
@@ -314,7 +260,7 @@ mod tests {
             solve_assembly(
                 &[Occurrence {
                     id: "occ_a".to_string(),
-                    part_entity_id: "ent_part_001".to_string(),
+                    definition_entity_id: "ent_part_001".to_string(),
                     transform: Transform3D::default(),
                 }],
                 &[],
@@ -326,12 +272,12 @@ mod tests {
                 &[
                     Occurrence {
                         id: "occ_a".to_string(),
-                        part_entity_id: "ent_part_001".to_string(),
+                        definition_entity_id: "ent_part_001".to_string(),
                         transform: Transform3D::default(),
                     },
                     Occurrence {
                         id: "occ_a".to_string(),
-                        part_entity_id: "ent_part_002".to_string(),
+                        definition_entity_id: "ent_part_002".to_string(),
                         transform: Transform3D::default(),
                     },
                 ],

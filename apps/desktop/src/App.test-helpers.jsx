@@ -437,6 +437,43 @@ function createMockBackend() {
                 occurrenceCount: 2,
                 mateCount: 1,
               },
+              occurrences: [
+                {
+                  id: "occ_001",
+                  definitionEntityId: "ent_part_001",
+                  transform: { xMm: 0, yMm: 0, zMm: 0, yawDeg: 0 },
+                },
+                {
+                  id: "occ_002",
+                  definitionEntityId: "ent_part_002",
+                  transform: { xMm: 80, yMm: 0, zMm: 0, yawDeg: 0 },
+                },
+              ],
+              mateConstraints: [
+                {
+                  id: "mate_001",
+                  leftOccurrenceId: "occ_001",
+                  rightOccurrenceId: "occ_002",
+                  type: "coincident",
+                },
+              ],
+              solveReport: {
+                status: "solved",
+                constrainedOccurrenceCount: 2,
+                totalMateCount: 1,
+                degreesOfFreedomEstimate: 0,
+                solvedOccurrences: [
+                  {
+                    occurrenceId: "occ_001",
+                    transform: { xMm: 0, yMm: 0, zMm: 0, yawDeg: 0 },
+                  },
+                  {
+                    occurrenceId: "occ_002",
+                    transform: { xMm: 0, yMm: 0, zMm: 0, yawDeg: 0 },
+                  },
+                ],
+                warnings: [],
+              },
             },
             assemblySummary: {
               status: "solved",

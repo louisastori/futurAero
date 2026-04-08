@@ -1,6 +1,9 @@
 use std::collections::BTreeMap;
 
+use faero_assembly::{AssemblyError, solve_assembly};
 use faero_types::{
+    AssemblyData, AssemblyMateConstraint, AssemblyMateType, AssemblyOccurrence,
+    AssemblySolveReport, AssemblySolveStatus, AssemblySolvedOccurrence, AssemblyTransform,
     CommandEnvelope, EntityRecord, EventEnvelope, ExternalEndpoint, PluginManifest,
     ProjectDocument, SignalValue, TelemetryStream,
 };
@@ -28,6 +31,22 @@ pub enum CoreError {
     SignalEntityNotFound(String),
     #[error("entity `{0}` is not a signal")]
     EntityIsNotSignal(String),
+    #[error("entity `{0}` is not an assembly")]
+    EntityIsNotAssembly(String),
+    #[error("assembly payload is invalid: {0}")]
+    AssemblyPayloadInvalid(String),
+    #[error("assembly definition `{0}` does not exist")]
+    AssemblyDefinitionNotFound(String),
+    #[error("assembly definition `{0}` must be a Part or Assembly")]
+    AssemblyDefinitionUnsupported(String),
+    #[error("assembly occurrence `{0}` already exists")]
+    AssemblyOccurrenceAlreadyExists(String),
+    #[error("assembly occurrence `{0}` does not exist")]
+    AssemblyOccurrenceNotFound(String),
+    #[error("assembly mate `{0}` already exists")]
+    AssemblyMateAlreadyExists(String),
+    #[error("assembly mate `{0}` does not exist")]
+    AssemblyMateNotFound(String),
 }
 
 #[derive(Debug, Clone)]
@@ -44,6 +63,23 @@ pub enum CoreCommand {
     SetSignalValue {
         entity_id: String,
         value: SignalValue,
+    },
+    AddAssemblyOccurrence {
+        assembly_id: String,
+        occurrence: AssemblyOccurrence,
+    },
+    TransformAssemblyOccurrence {
+        assembly_id: String,
+        occurrence_id: String,
+        transform: AssemblyTransform,
+    },
+    AddAssemblyMate {
+        assembly_id: String,
+        mate: AssemblyMateConstraint,
+    },
+    RemoveAssemblyMate {
+        assembly_id: String,
+        mate_id: String,
     },
 }
 
@@ -340,6 +376,141 @@ impl ProjectGraph {
                     event_payload,
                 )
             }
+            CoreCommand::AddAssemblyOccurrence {
+                assembly_id,
+                occurrence,
+            } => {
+                let definition = self
+                    .document
+                    .nodes
+                    .get(&occurrence.definition_entity_id)
+                    .ok_or_else(|| {
+                        CoreError::AssemblyDefinitionNotFound(
+                            occurrence.definition_entity_id.clone(),
+                        )
+                    })?;
+                if !matches!(definition.entity_type.as_str(), "Part" | "Assembly") {
+                    return Err(CoreError::AssemblyDefinitionUnsupported(
+                        occurrence.definition_entity_id,
+                    ));
+                }
+                let occurrence_id = occurrence.id.clone();
+                let payload = serialize_payload(&occurrence);
+                self.mutate_assembly_entity(
+                    &assembly_id,
+                    "assembly.occurrence.add",
+                    payload,
+                    move |assembly| {
+                        if assembly
+                            .occurrences
+                            .iter()
+                            .any(|existing| existing.id == occurrence_id)
+                        {
+                            return Err(CoreError::AssemblyOccurrenceAlreadyExists(
+                                occurrence_id.clone(),
+                            ));
+                        }
+                        assembly.occurrences.push(occurrence);
+                        Ok(())
+                    },
+                )
+            }
+            CoreCommand::TransformAssemblyOccurrence {
+                assembly_id,
+                occurrence_id,
+                transform,
+            } => {
+                let payload = serde_json::json!({
+                    "occurrenceId": occurrence_id,
+                    "transform": transform,
+                });
+                self.mutate_assembly_entity(
+                    &assembly_id,
+                    "assembly.occurrence.transform",
+                    payload,
+                    move |assembly| {
+                        let occurrence = assembly
+                            .occurrences
+                            .iter_mut()
+                            .find(|entry| entry.id == occurrence_id)
+                            .ok_or_else(|| {
+                                CoreError::AssemblyOccurrenceNotFound(occurrence_id.clone())
+                            })?;
+                        occurrence.transform = transform;
+                        Ok(())
+                    },
+                )
+            }
+            CoreCommand::AddAssemblyMate { assembly_id, mate } => {
+                let mate_id = mate.id.clone();
+                let left_occurrence_id = mate.left_occurrence_id.clone();
+                let right_occurrence_id = mate.right_occurrence_id.clone();
+                if left_occurrence_id == right_occurrence_id {
+                    return Err(CoreError::AssemblyPayloadInvalid(
+                        "mate constraints must target two distinct occurrences".to_string(),
+                    ));
+                }
+                if let AssemblyMateType::Offset { distance_mm } = mate.mate_type
+                    && distance_mm < 0.0
+                {
+                    return Err(CoreError::AssemblyPayloadInvalid(
+                        "offset mates must use a non-negative distance".to_string(),
+                    ));
+                }
+                let payload = serialize_payload(&mate);
+                self.mutate_assembly_entity(
+                    &assembly_id,
+                    "assembly.mate.add",
+                    payload,
+                    move |assembly| {
+                        if assembly
+                            .mate_constraints
+                            .iter()
+                            .any(|existing| existing.id == mate_id)
+                        {
+                            return Err(CoreError::AssemblyMateAlreadyExists(mate_id.clone()));
+                        }
+                        if !assembly
+                            .occurrences
+                            .iter()
+                            .any(|occurrence| occurrence.id == left_occurrence_id)
+                        {
+                            return Err(CoreError::AssemblyOccurrenceNotFound(
+                                left_occurrence_id.clone(),
+                            ));
+                        }
+                        if !assembly
+                            .occurrences
+                            .iter()
+                            .any(|occurrence| occurrence.id == right_occurrence_id)
+                        {
+                            return Err(CoreError::AssemblyOccurrenceNotFound(
+                                right_occurrence_id.clone(),
+                            ));
+                        }
+                        assembly.mate_constraints.push(mate);
+                        Ok(())
+                    },
+                )
+            }
+            CoreCommand::RemoveAssemblyMate { assembly_id, mate_id } => {
+                let payload = serde_json::json!({ "mateId": mate_id });
+                self.mutate_assembly_entity(
+                    &assembly_id,
+                    "assembly.mate.remove",
+                    payload,
+                    move |assembly| {
+                        let before = assembly.mate_constraints.len();
+                        assembly
+                            .mate_constraints
+                            .retain(|constraint| constraint.id != mate_id);
+                        if assembly.mate_constraints.len() == before {
+                            return Err(CoreError::AssemblyMateNotFound(mate_id.clone()));
+                        }
+                        Ok(())
+                    },
+                )
+            }
         }
     }
 
@@ -396,6 +567,61 @@ impl ProjectGraph {
         self.document.metadata.updated_at = "2026-04-06T00:00:01Z".to_string();
         revision
     }
+
+    fn mutate_assembly_entity<F>(
+        &mut self,
+        assembly_id: &str,
+        command_kind: &str,
+        payload: Value,
+        mutate: F,
+    ) -> Result<EventEnvelope, CoreError>
+    where
+        F: FnOnce(&mut AssemblyData) -> Result<(), CoreError>,
+    {
+        let existing = self
+            .document
+            .nodes
+            .get(assembly_id)
+            .cloned()
+            .ok_or_else(|| CoreError::EntityNotFound(assembly_id.to_string()))?;
+        if existing.entity_type != "Assembly" {
+            return Err(CoreError::EntityIsNotAssembly(existing.id));
+        }
+
+        let mut assembly = deserialize_assembly_data(&existing)?;
+        mutate(&mut assembly)?;
+        assembly.parameter_set.occurrence_count = assembly.occurrences.len();
+        assembly.parameter_set.mate_count = assembly.mate_constraints.len();
+        let solve_report = compute_assembly_solve_report(&assembly)?;
+        let event_kind = match solve_report.status {
+            AssemblySolveStatus::Solved => "assembly.solved",
+            AssemblySolveStatus::Conflicting => "assembly.unsolved",
+        };
+        assembly.solve_report = Some(solve_report);
+
+        let command_id = self.record_command(
+            command_kind,
+            Some(existing.id.clone()),
+            Some(existing.revision.clone()),
+            payload,
+        );
+        let revision = self.next_revision();
+        let mut next_entity = existing.clone();
+        next_entity.revision = revision.clone();
+        next_entity.data = serialize_payload(&assembly);
+        let event_payload = next_entity.data.clone();
+        self.document
+            .nodes
+            .insert(next_entity.id.clone(), next_entity.clone());
+
+        self.record_event(
+            event_kind,
+            Some(next_entity.id),
+            command_id,
+            revision,
+            event_payload,
+        )
+    }
 }
 
 fn next_counter<'a>(ids: impl Iterator<Item = &'a str>, prefix: &str) -> usize {
@@ -412,11 +638,39 @@ fn serialize_payload<T: Serialize>(value: &T) -> Value {
     serde_json::to_value(value).expect("core payload should always serialize")
 }
 
+fn deserialize_assembly_data(entity: &EntityRecord) -> Result<AssemblyData, CoreError> {
+    serde_json::from_value(entity.data.clone())
+        .map_err(|error| CoreError::AssemblyPayloadInvalid(format!("{}: {error}", entity.id)))
+}
+
+fn compute_assembly_solve_report(assembly: &AssemblyData) -> Result<AssemblySolveReport, CoreError> {
+    match solve_assembly(&assembly.occurrences, &assembly.mate_constraints) {
+        Ok(report) => Ok(report),
+        Err(AssemblyError::NotEnoughOccurrences) => Ok(AssemblySolveReport {
+            status: AssemblySolveStatus::Conflicting,
+            constrained_occurrence_count: 0,
+            total_mate_count: assembly.mate_constraints.len(),
+            degrees_of_freedom_estimate: 0,
+            solved_occurrences: assembly
+                .occurrences
+                .iter()
+                .map(|occurrence| AssemblySolvedOccurrence {
+                    occurrence_id: occurrence.id.clone(),
+                    transform: occurrence.transform,
+                })
+                .collect(),
+            warnings: vec!["assembly requires at least two occurrences to solve".to_string()],
+        }),
+        Err(error) => Err(CoreError::AssemblyPayloadInvalid(error.to_string())),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use faero_types::{
-        Addressing, ConnectionMode, EndpointType, LinkMetrics, PluginContribution, QosProfile,
-        SignalValue, StreamDirection, TimingProfile, TransportProfile,
+        Addressing, AssemblyData, AssemblyMateConstraint, AssemblyMateType, AssemblyOccurrence,
+        AssemblyTransform, ConnectionMode, EndpointType, LinkMetrics, PluginContribution,
+        QosProfile, SignalValue, StreamDirection, TimingProfile, TransportProfile,
     };
 
     use super::*;
@@ -525,6 +779,49 @@ mod tests {
                 "currentValue": false,
                 "tags": ["control", "mvp"]
             }),
+        }
+    }
+
+    fn sample_entity_with_id(id: &str, name: &str) -> EntityRecord {
+        EntityRecord {
+            id: id.to_string(),
+            name: name.to_string(),
+            ..sample_entity()
+        }
+    }
+
+    fn sample_assembly_entity() -> EntityRecord {
+        EntityRecord {
+            id: "ent_asm_001".to_string(),
+            entity_type: "Assembly".to_string(),
+            name: "Assembly-001".to_string(),
+            revision: "rev_seed".to_string(),
+            status: "active".to_string(),
+            data: serde_json::to_value(AssemblyData {
+                tags: vec!["assembly".to_string()],
+                ..AssemblyData::default()
+            })
+            .expect("assembly payload should serialize"),
+        }
+    }
+
+    fn sample_occurrence(id: &str, definition_entity_id: &str, x_mm: f64) -> AssemblyOccurrence {
+        AssemblyOccurrence {
+            id: id.to_string(),
+            definition_entity_id: definition_entity_id.to_string(),
+            transform: AssemblyTransform {
+                x_mm,
+                ..AssemblyTransform::default()
+            },
+        }
+    }
+
+    fn sample_mate(id: &str, left: &str, right: &str) -> AssemblyMateConstraint {
+        AssemblyMateConstraint {
+            id: id.to_string(),
+            left_occurrence_id: left.to_string(),
+            right_occurrence_id: right.to_string(),
+            mate_type: AssemblyMateType::Coincident,
         }
     }
 
@@ -759,6 +1056,115 @@ mod tests {
         assert_eq!(
             graph.plugin_state().get("plg.integration.viewer"),
             Some(&false)
+        );
+    }
+
+    #[test]
+    fn assembly_commands_persist_occurrences_mates_and_emit_solve_status() {
+        let mut graph = ProjectGraph::new("Demo");
+        graph
+            .apply_command(CoreCommand::CreateEntity(sample_entity_with_id(
+                "ent_part_001",
+                "Part-A",
+            )))
+            .expect("part a should exist");
+        graph
+            .apply_command(CoreCommand::CreateEntity(sample_entity_with_id(
+                "ent_part_002",
+                "Part-B",
+            )))
+            .expect("part b should exist");
+        graph
+            .apply_command(CoreCommand::CreateEntity(sample_assembly_entity()))
+            .expect("assembly should exist");
+
+        let first = graph
+            .apply_command(CoreCommand::AddAssemblyOccurrence {
+                assembly_id: "ent_asm_001".to_string(),
+                occurrence: sample_occurrence("occ_001", "ent_part_001", 0.0),
+            })
+            .expect("first occurrence should be added");
+        let second = graph
+            .apply_command(CoreCommand::AddAssemblyOccurrence {
+                assembly_id: "ent_asm_001".to_string(),
+                occurrence: sample_occurrence("occ_002", "ent_part_002", 80.0),
+            })
+            .expect("second occurrence should be added");
+        let solved = graph
+            .apply_command(CoreCommand::AddAssemblyMate {
+                assembly_id: "ent_asm_001".to_string(),
+                mate: sample_mate("mate_001", "occ_001", "occ_002"),
+            })
+            .expect("mate should solve the assembly");
+
+        assert_eq!(first.kind, "assembly.unsolved");
+        assert_eq!(second.kind, "assembly.unsolved");
+        assert_eq!(solved.kind, "assembly.solved");
+        assert_eq!(graph.document().commands[3].kind, "assembly.occurrence.add");
+        assert_eq!(graph.document().commands[5].kind, "assembly.mate.add");
+
+        let assembly: AssemblyData = serde_json::from_value(
+            graph.document().nodes["ent_asm_001"].data.clone(),
+        )
+        .expect("assembly payload should deserialize");
+        assert_eq!(assembly.occurrences.len(), 2);
+        assert_eq!(assembly.mate_constraints.len(), 1);
+        assert_eq!(
+            assembly
+                .solve_report
+                .as_ref()
+                .map(|report| report.status),
+            Some(AssemblySolveStatus::Solved)
+        );
+    }
+
+    #[test]
+    fn assembly_commands_reject_invalid_references_and_duplicates() {
+        let mut graph = ProjectGraph::new("Demo");
+        graph
+            .apply_command(CoreCommand::CreateEntity(sample_entity()))
+            .expect("part should exist");
+        graph
+            .apply_command(CoreCommand::CreateEntity(sample_assembly_entity()))
+            .expect("assembly should exist");
+        graph
+            .apply_command(CoreCommand::AddAssemblyOccurrence {
+                assembly_id: "ent_asm_001".to_string(),
+                occurrence: sample_occurrence("occ_001", "ent_part_001", 0.0),
+            })
+            .expect("occurrence should be added");
+
+        let duplicate = graph
+            .apply_command(CoreCommand::AddAssemblyOccurrence {
+                assembly_id: "ent_asm_001".to_string(),
+                occurrence: sample_occurrence("occ_001", "ent_part_001", 10.0),
+            })
+            .expect_err("duplicate occurrence should fail");
+        assert_eq!(
+            duplicate,
+            CoreError::AssemblyOccurrenceAlreadyExists("occ_001".to_string())
+        );
+
+        let missing_definition = graph
+            .apply_command(CoreCommand::AddAssemblyOccurrence {
+                assembly_id: "ent_asm_001".to_string(),
+                occurrence: sample_occurrence("occ_002", "missing", 10.0),
+            })
+            .expect_err("missing definition should fail");
+        assert_eq!(
+            missing_definition,
+            CoreError::AssemblyDefinitionNotFound("missing".to_string())
+        );
+
+        let missing_mate = graph
+            .apply_command(CoreCommand::RemoveAssemblyMate {
+                assembly_id: "ent_asm_001".to_string(),
+                mate_id: "mate_missing".to_string(),
+            })
+            .expect_err("missing mate should fail");
+        assert_eq!(
+            missing_mate,
+            CoreError::AssemblyMateNotFound("mate_missing".to_string())
         );
     }
 }

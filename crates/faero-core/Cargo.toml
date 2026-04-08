@@ -7,6 +7,7 @@ authors.workspace = true
 repository.workspace = true
 
 [dependencies]
+faero-assembly = { path = "../faero-assembly" }
 faero-types = { path = "../faero-types" }
 serde.workspace = true
 serde_json.workspace = true

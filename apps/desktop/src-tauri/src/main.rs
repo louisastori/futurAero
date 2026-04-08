@@ -14,10 +14,6 @@ use faero_ai::{
 use faero_commissioning::{
     AsBuiltMeasurement, CommissioningCapture, compare_as_built, start_commissioning_session,
 };
-use faero_assembly::{
-    AssemblySolveReport, AssemblySolveStatus, MateConstraint, MateType, Occurrence, Transform3D,
-    solve_assembly,
-};
 use faero_core::{CoreCommand, ProjectGraph};
 use faero_geometry::{
     ExtrusionDefinition, MaterialProfile, SketchConstraintState, rectangular_profile,
@@ -37,11 +33,12 @@ use faero_robotics::{CartesianPose, RobotTarget, validate_sequence};
 use faero_safety::{SafetyInterlock, SafetyStatus, SafetyZone, SafetyZoneKind, evaluate_safety};
 use faero_sim::{SimulationRequest, SimulationStatus, run_simulation};
 use faero_types::{
-    AiSessionLog, ControlTransition, ControllerState, ControllerStateMachine, EntityRecord,
-    ExternalEndpoint, NetworkCaptureDataset, PluginContribution, PluginManifest, ProjectDocument,
-    QosProfile, ScheduledSignalChange, SignalAssignment, SignalComparator, SignalCondition,
-    SignalDefinition, SignalKind, SignalValue, SimulationContactPair, StreamDirection,
-    TelemetryStream, TimingProfile,
+    AiSessionLog, AssemblyData, AssemblyMateConstraint, AssemblyMateType, AssemblyOccurrence,
+    AssemblySolveStatus, AssemblyTransform, ControlTransition, ControllerState,
+    ControllerStateMachine, EntityRecord, ExternalEndpoint, NetworkCaptureDataset,
+    PluginContribution, PluginManifest, ProjectDocument, QosProfile, ScheduledSignalChange,
+    SignalAssignment, SignalComparator, SignalCondition, SignalDefinition, SignalKind,
+    SignalValue, SimulationContactPair, StreamDirection, TelemetryStream, TimingProfile,
 };
 use serde::Serialize;
 use tauri::{
@@ -1068,14 +1065,41 @@ impl WorkspaceSession {
                         .apply_command(CoreCommand::CreateEntity(part_entity))
                         .map_err(|error| error.to_string())?;
                 }
-                let (entity, summary) = build_assembly_entity(
-                    &format!("ent_asm_{index:03}"),
-                    &format!("Assembly-{index:03}"),
-                    &part_ids[..part_ids.len().min(3)],
-                )?;
+                let assembly_id = format!("ent_asm_{index:03}");
+                let entity =
+                    build_empty_assembly_entity(&assembly_id, &format!("Assembly-{index:03}"))?;
                 self.graph
                     .apply_command(CoreCommand::CreateEntity(entity))
                     .map_err(|error| error.to_string())?;
+                let assembly_part_ids = part_ids[..part_ids.len().min(3)].to_vec();
+                for (occurrence_index, part_id) in assembly_part_ids.iter().enumerate() {
+                    self.graph
+                        .apply_command(CoreCommand::AddAssemblyOccurrence {
+                            assembly_id: assembly_id.clone(),
+                            occurrence: sample_assembly_occurrence(part_id, occurrence_index),
+                        })
+                        .map_err(|error| error.to_string())?;
+                }
+                for (mate_index, pair) in (0..assembly_part_ids.len().saturating_sub(1))
+                    .map(|index| (index, (&assembly_part_ids[index], &assembly_part_ids[index + 1])))
+                {
+                    let _ = pair;
+                    self.graph
+                        .apply_command(CoreCommand::AddAssemblyMate {
+                            assembly_id: assembly_id.clone(),
+                            mate: sample_assembly_mate(mate_index),
+                        })
+                        .map_err(|error| error.to_string())?;
+                }
+                let assembly = self
+                    .graph
+                    .document()
+                    .nodes
+                    .get(&assembly_id)
+                    .cloned()
+                    .ok_or_else(|| "assembly entity missing after creation".to_string())?;
+                let summary = assembly_summary_from_entity(&assembly)
+                    .ok_or_else(|| "assembly summary missing after creation".to_string())?;
                 Ok(CommandResult {
                     command_id: command_id.to_string(),
                     status: "applied".to_string(),
@@ -2078,78 +2102,39 @@ fn sample_parametric_part_entity(
     )
 }
 
-fn build_assembly_entity(
-    id: &str,
-    name: &str,
-    part_entity_ids: &[String],
-) -> Result<(EntityRecord, AssemblyEntitySummary), String> {
-    let occurrences = part_entity_ids
-        .iter()
-        .enumerate()
-        .map(|(index, part_id)| Occurrence {
-            id: format!("occ_{:03}", index + 1),
-            part_entity_id: part_id.clone(),
-            transform: Transform3D {
-                x_mm: index as f64 * 80.0,
-                ..Transform3D::default()
-            },
-        })
-        .collect::<Vec<_>>();
-
-    let constraints = occurrences
-        .windows(2)
-        .enumerate()
-        .map(|(index, pair)| MateConstraint {
-            id: format!("mate_{:03}", index + 1),
-            left_occurrence_id: pair[0].id.clone(),
-            right_occurrence_id: pair[1].id.clone(),
-            mate_type: if index == 0 {
-                MateType::Coincident
-            } else {
-                MateType::Offset {
-                    distance_mm: 25.0 * index as f64,
-                }
-            },
-        })
-        .collect::<Vec<_>>();
-
-    let report = solve_assembly(&occurrences, &constraints).map_err(|error| error.to_string())?;
-    let summary = AssemblyEntitySummary {
-        status: assembly_solve_status_label(report.status).to_string(),
-        occurrence_count: report.solved_occurrences.len(),
-        mate_count: report.total_mate_count,
-        degrees_of_freedom_estimate: report.degrees_of_freedom_estimate,
-        warning_count: report.warnings.len(),
-    };
-    let entity = sample_entity(
-        "Assembly",
-        id,
-        name,
-        serde_json::json!({
-            "tags": ["assembly"],
-            "parameterSet": {
-                "occurrenceCount": occurrences.len(),
-                "mateCount": constraints.len()
-            },
-            "occurrences": occurrences,
-            "mateConstraints": constraints,
-            "solveReport": assembly_solve_report_json(&report),
-        }),
-    );
-
-    Ok((entity, summary))
+fn build_empty_assembly_entity(id: &str, name: &str) -> Result<EntityRecord, String> {
+    let payload = serde_json::to_value(AssemblyData {
+        tags: vec!["assembly".to_string()],
+        ..AssemblyData::default()
+    })
+    .map_err(|error| error.to_string())?;
+    Ok(sample_entity("Assembly", id, name, payload))
 }
 
-fn assembly_solve_report_json(report: &AssemblySolveReport) -> serde_json::Value {
-    serde_json::json!({
-        "status": assembly_solve_status_label(report.status),
-        "occurrenceCount": report.solved_occurrences.len(),
-        "mateCount": report.total_mate_count,
-        "degreesOfFreedomEstimate": report.degrees_of_freedom_estimate,
-        "warningCount": report.warnings.len(),
-        "warnings": report.warnings.clone(),
-        "solvedOccurrences": report.solved_occurrences.clone(),
-    })
+fn sample_assembly_occurrence(part_id: &str, index: usize) -> AssemblyOccurrence {
+    AssemblyOccurrence {
+        id: format!("occ_{:03}", index + 1),
+        definition_entity_id: part_id.to_string(),
+        transform: AssemblyTransform {
+            x_mm: index as f64 * 80.0,
+            ..AssemblyTransform::default()
+        },
+    }
+}
+
+fn sample_assembly_mate(index: usize) -> AssemblyMateConstraint {
+    AssemblyMateConstraint {
+        id: format!("mate_{:03}", index + 1),
+        left_occurrence_id: format!("occ_{:03}", index + 1),
+        right_occurrence_id: format!("occ_{:03}", index + 2),
+        mate_type: if index == 0 {
+            AssemblyMateType::Coincident
+        } else {
+            AssemblyMateType::Offset {
+                distance_mm: 25.0 * index as f64,
+            }
+        },
+    }
 }
 
 fn sample_robot_targets() -> Vec<RobotTarget> {
@@ -3197,13 +3182,14 @@ fn assembly_summary_from_entity(entity: &EntityRecord) -> Option<AssemblyEntityS
         return None;
     }
 
-    let summary = entity.data.get("solveReport")?;
+    let assembly = serde_json::from_value::<AssemblyData>(entity.data.clone()).ok()?;
+    let solve_report = assembly.solve_report?;
     Some(AssemblyEntitySummary {
-        status: string_from_value(summary, "status")?,
-        occurrence_count: summary.get("occurrenceCount")?.as_u64()? as usize,
-        mate_count: summary.get("mateCount")?.as_u64()? as usize,
-        degrees_of_freedom_estimate: summary.get("degreesOfFreedomEstimate")?.as_u64()? as usize,
-        warning_count: summary.get("warningCount")?.as_u64()? as usize,
+        status: assembly_solve_status_label(solve_report.status).to_string(),
+        occurrence_count: assembly.occurrences.len(),
+        mate_count: assembly.mate_constraints.len(),
+        degrees_of_freedom_estimate: solve_report.degrees_of_freedom_estimate,
+        warning_count: solve_report.warnings.len(),
     })
 }
 
@@ -4225,12 +4211,22 @@ mod tests {
         assert_eq!(summary.status, "solved");
         assert!(summary.occurrence_count >= 2);
         assert!(summary.mate_count >= 1);
+        assert!(assembly.data["occurrences"].as_array().is_some_and(|items| items.len() >= 2));
+        assert!(
+            assembly.data["mateConstraints"]
+                .as_array()
+                .is_some_and(|items| !items.is_empty())
+        );
+        assert_eq!(assembly.data["solveReport"]["status"], "solved");
         assert!(
             assembly
                 .detail
                 .as_ref()
                 .is_some_and(|detail| detail.contains("occ"))
         );
+        assert!(snapshot.recent_activity.iter().any(|entry| {
+            entry.channel == "command" && entry.kind == "assembly.mate.add"
+        }));
     }
 
     #[test]

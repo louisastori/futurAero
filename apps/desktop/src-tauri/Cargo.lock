@@ -735,7 +735,7 @@ dependencies = [
 name = "faero-assembly"
 version = "0.1.0"
 dependencies = [
- "serde",
+ "faero-types",
  "thiserror 2.0.18",
 ]
 
@@ -750,6 +750,7 @@ dependencies = [
 name = "faero-core"
 version = "0.1.0"
 dependencies = [
+ "faero-assembly",
  "faero-types",
  "serde",
  "serde_json",
