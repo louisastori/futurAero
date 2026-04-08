@@ -415,8 +415,8 @@ fn serialize_payload<T: Serialize>(value: &T) -> Value {
 #[cfg(test)]
 mod tests {
     use faero_types::{
-        Addressing, ConnectionMode, EndpointType, LinkMetrics, QosProfile, SignalValue,
-        StreamDirection, TimingProfile, TransportProfile,
+        Addressing, ConnectionMode, EndpointType, LinkMetrics, PluginContribution, QosProfile,
+        SignalValue, StreamDirection, TimingProfile, TransportProfile,
     };
 
     use super::*;
@@ -493,13 +493,20 @@ mod tests {
             id: "ent_plugin_001".to_string(),
             plugin_id: "plg.integration.viewer".to_string(),
             version: "0.1.0".to_string(),
+            release_channel: "stable".to_string(),
             capabilities: vec!["panel".to_string()],
             permissions: vec![
                 "project.read".to_string(),
                 "integration.observe".to_string(),
             ],
+            contributions: vec![PluginContribution {
+                kind: "panel".to_string(),
+                target: "workspace.right".to_string(),
+                title: "Integration Viewer".to_string(),
+            }],
             entrypoints: vec!["plugins/integration-viewer/index.js".to_string()],
             compatibility: vec!["faero-core@0.1".to_string()],
+            signature: Some("sha256:demo".to_string()),
             status: "installed".to_string(),
         }
     }

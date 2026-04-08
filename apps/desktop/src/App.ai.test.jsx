@@ -3,8 +3,13 @@ import { describe, test } from "vitest";
 import { assert, renderApp, screen, waitFor } from "./App.test-helpers.jsx";
 
 describe("App local AI flows", () => {
-  test("gemma3 selector defaults to 27b and sends the chosen variant to the backend", async () => {
+  test("AI profile and gemma3 selector are sent to the backend", async () => {
     const { user, backend } = await renderApp();
+
+    const profileSelector = screen.getByLabelText("Profil IA");
+    assert.equal(profileSelector.value, "balanced");
+    await user.selectOptions(profileSelector, "furnace");
+    assert.equal(profileSelector.value, "furnace");
 
     const selector = screen.getByLabelText("Modele Gemma3");
     assert.equal(selector.value, "gemma3:27b");
@@ -20,8 +25,11 @@ describe("App local AI flows", () => {
 
     await waitFor(() => {
       assert.equal(backend.getLastSelectedModel(), "gemma3:12b");
+      assert.equal(backend.getLastSelectedProfile(), "furnace");
       assert.ok(
-        screen.getByText(/\[fr\] Compare les variantes gemma3 :: gemma3:12b/),
+        screen.getByText(
+          /\[fr\] Compare les variantes gemma3 :: furnace :: gemma3:12b/,
+        ),
       );
     });
   });

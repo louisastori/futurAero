@@ -136,6 +136,8 @@ function createMockBackend() {
     endpoint: "http://127.0.0.1:11434",
     mode: "test",
     localOnly: true,
+    activeProfile: "balanced",
+    availableProfiles: ["balanced", "max", "furnace"],
     activeModel: "gemma3:27b",
     availableModels: ["gemma3:27b", "gemma3:12b", "gemma3:4b", "phi3:mini"],
     gemma3Models: ["gemma3:27b", "gemma3:12b", "gemma3:4b"],
@@ -148,6 +150,7 @@ function createMockBackend() {
   let snapshot = createSnapshot();
   let activityCounter = 2;
   let lastSelectedModel = null;
+  let lastSelectedProfile = null;
   let suggestionCounter = 1;
 
   function clone(value) {
@@ -698,27 +701,34 @@ function createMockBackend() {
     async updateEntityProperties(payload) {
       return applyEntityChanges(payload);
     },
-    async fetchAiRuntimeStatus() {
-      return clone(runtime);
+    async fetchAiRuntimeStatus(selectedProfile = null) {
+      return {
+        ...clone(runtime),
+        activeProfile: selectedProfile ?? runtime.activeProfile,
+      };
     },
     async sendAiChatMessage(
       message,
       locale,
       history,
       selectedModel,
+      selectedProfile,
       currentSnapshot,
     ) {
       lastSelectedModel = selectedModel;
+      lastSelectedProfile = selectedProfile;
       const suggestionId = `ent_ai_suggestion_${String(suggestionCounter++).padStart(3, "0")}`;
       return {
-        answer: `[${locale}] ${message} :: ${selectedModel ?? runtime.activeModel} :: ${currentSnapshot.status.projectName} :: ${history.length}`,
+        answer: `[${locale}] ${message} :: ${selectedProfile ?? runtime.activeProfile} :: ${selectedModel ?? runtime.activeModel} :: ${currentSnapshot.status.projectName} :: ${history.length}`,
         runtime: {
           ...clone(runtime),
+          activeProfile: selectedProfile ?? runtime.activeProfile,
           activeModel: selectedModel ?? runtime.activeModel,
         },
         references: [`project:${currentSnapshot.details.projectId}`],
         structured: {
           summary: `Analyse structuree pour ${currentSnapshot.status.projectName}`,
+          runtimeProfile: selectedProfile ?? runtime.activeProfile,
           contextRefs: [
             {
               entityId: currentSnapshot.entities[0]?.id ?? null,
@@ -729,6 +739,15 @@ function createMockBackend() {
           confidence: 0.82,
           riskLevel: "medium",
           limitations: ["Mock backend structure la reponse localement."],
+          critiquePasses: [
+            {
+              stage: "critic",
+              summary: "Le critic mock ne releve pas de contradiction majeure.",
+              confidenceDelta: -0.03,
+              issues: ["validation manuelle recommandee"],
+              adjustments: ["review before apply"],
+            },
+          ],
           proposedCommands: [
             {
               kind: "entity.properties.update",
@@ -787,6 +806,9 @@ function createMockBackend() {
     },
     getLastSelectedModel() {
       return lastSelectedModel;
+    },
+    getLastSelectedProfile() {
+      return lastSelectedProfile;
     },
   };
 }

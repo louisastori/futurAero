@@ -83,6 +83,8 @@ const FALLBACK_AI_STATUS = {
   endpoint: "http://127.0.0.1:11434",
   mode: "web-preview",
   localOnly: true,
+  activeProfile: "balanced",
+  availableProfiles: ["balanced", "max", "furnace"],
   activeModel: null,
   availableModels: [],
   gemma3Models: [],
@@ -117,6 +119,17 @@ function defaultGemma3Model(runtime) {
   }
 
   return gemma3Models[0] ?? "";
+}
+
+function getAvailableAiProfiles(runtime) {
+  if (
+    Array.isArray(runtime?.availableProfiles) &&
+    runtime.availableProfiles.length > 0
+  ) {
+    return [...new Set(runtime.availableProfiles)];
+  }
+
+  return ["balanced", "max", "furnace"];
 }
 
 function MenuBar({ menus, activeMenuId, onSelect }) {
@@ -1170,8 +1183,11 @@ async function regenerateLatestPart(payload, currentSnapshot) {
   };
 }
 
-async function fetchAiRuntimeStatus() {
-  return (await invokeBackend("ai_runtime_status")) ?? FALLBACK_AI_STATUS;
+async function fetchAiRuntimeStatus(selectedProfile = null) {
+  return (
+    (await invokeBackend("ai_runtime_status", { selectedProfile })) ??
+    FALLBACK_AI_STATUS
+  );
 }
 
 function buildFallbackAiReferences(snapshot) {
@@ -1266,6 +1282,7 @@ async function sendAiChatMessage(
   locale,
   history,
   selectedModel,
+  selectedProfile,
   snapshot,
 ) {
   const response = await invokeBackend("ai_chat_send_message", {
@@ -1273,6 +1290,7 @@ async function sendAiChatMessage(
     locale,
     history,
     selectedModel,
+    selectedProfile,
   });
   if (response) {
     return response;
@@ -1728,6 +1746,54 @@ function buildOpenSpecAutoPrompt(commandId, snapshot) {
     return `Mode document${openSpecHint}: resume la nouvelle cellule ${cell.name}, ses signaux, son controle minimal et le prochain jalon OpenSpec a traiter.`;
   }
 
+  if (commandId === "perception.run.start") {
+    const run = [...(snapshot.entities ?? [])]
+      .filter((entity) => entity.perceptionRunSummary)
+      .at(-1);
+    if (!run?.perceptionRunSummary) {
+      return null;
+    }
+
+    return `Mode explain${openSpecHint}: explique ${run.name}, les ecarts observes, les obstacles inconnus et la prochaine action commissioning recommandee.`;
+  }
+
+  if (commandId === "commissioning.session.start") {
+    const session = [...(snapshot.entities ?? [])]
+      .filter((entity) => entity.commissioningSessionSummary)
+      .at(-1);
+    if (!session?.commissioningSessionSummary) {
+      return null;
+    }
+
+    return `Mode summarize${openSpecHint}: resume ${session.name}, les captures terrain attachees, les ajustements ouverts et la prochaine verification as-built.`;
+  }
+
+  if (commandId === "commissioning.compare.as_built") {
+    const comparison = [...(snapshot.entities ?? [])]
+      .filter((entity) => entity.asBuiltComparisonSummary)
+      .at(-1);
+    if (!comparison?.asBuiltComparisonSummary) {
+      return null;
+    }
+
+    return `Mode explain${openSpecHint}: explique les ecarts as-built de ${comparison.name}, les tolerances depassees et les corrections prioritaire a appliquer.`;
+  }
+
+  if (commandId === "optimization.run.start") {
+    const study = [...(snapshot.entities ?? [])]
+      .filter((entity) => entity.optimizationStudySummary)
+      .at(-1);
+    if (!study?.optimizationStudySummary) {
+      return null;
+    }
+
+    return `Mode explain${openSpecHint}: explique le classement de ${study.name}, le meilleur candidat et les contraintes qui limitent l optimisation.`;
+  }
+
+  if (commandId === "integration.replay.degraded") {
+    return `Mode explain${openSpecHint}: analyse le replay degrade de connectivite, les effets de jitter/pertes et le risque sur la cellule ou la telemetrie.`;
+  }
+
   if (commandId === "help.openspec") {
     return `Mode summarize: a partir des documents OpenSpec visibles, quel est le prochain jalon technique concret et pourquoi ?`;
   }
@@ -1765,7 +1831,7 @@ function assistantRoleLabel(locale, role) {
 
 function assistantAccent(locale, runtime) {
   if (runtime.available) {
-    return `${translate(locale, "ui.ai.runtime_ready", "Pret")} | ${runtime.activeModel ?? translate(locale, "ui.ai.no_model", "aucun modele")}`;
+    return `${translate(locale, "ui.ai.runtime_ready", "Pret")} | ${runtime.activeProfile ?? "balanced"} | ${runtime.activeModel ?? translate(locale, "ui.ai.no_model", "aucun modele")}`;
   }
 
   return translate(locale, "ui.ai.runtime_fallback", "Fallback local");
@@ -1773,7 +1839,7 @@ function assistantAccent(locale, runtime) {
 
 function assistantBadge(locale, runtime) {
   if (runtime.available) {
-    return `${translate(locale, "ui.ai.badge", "IA locale")} | ${runtime.activeModel ?? translate(locale, "ui.ai.no_model", "aucun modele")}`;
+    return `${translate(locale, "ui.ai.badge", "IA locale")} | ${runtime.activeProfile ?? "balanced"} | ${runtime.activeModel ?? translate(locale, "ui.ai.no_model", "aucun modele")}`;
   }
 
   return `${translate(locale, "ui.ai.badge", "IA locale")} | ${translate(locale, "ui.ai.runtime_fallback", "Fallback local")}`;
@@ -1801,6 +1867,7 @@ export default function App({ backend = defaultDesktopBackend }) {
   const [autoPromptEnabled, setAutoPromptEnabled] = useState(true);
   const [autoPromptQueue, setAutoPromptQueue] = useState([]);
   const [selectedAiModel, setSelectedAiModel] = useState("");
+  const [selectedAiProfile, setSelectedAiProfile] = useState("balanced");
   const [panelState, setPanelState] = useState(defaultWorkspacePanels);
   const [dockWidths, setDockWidths] = useState(defaultWorkspaceDockWidths);
   const [dragSide, setDragSide] = useState(null);
@@ -1879,6 +1946,7 @@ export default function App({ backend = defaultDesktopBackend }) {
   };
   const { leftExpanded, rightExpanded } = getWorkspaceColumnState(panelState);
   const gemma3Models = getGemma3Models(aiRuntime);
+  const availableAiProfiles = getAvailableAiProfiles(aiRuntime);
   const workspaceStyle = {
     "--workspace-left-column": `${getVisibleSidebarWidth(dockWidths.left, leftExpanded)}px`,
     "--workspace-right-column": `${getVisibleSidebarWidth(dockWidths.right, rightExpanded)}px`,
@@ -2265,6 +2333,16 @@ export default function App({ backend = defaultDesktopBackend }) {
   }, [aiRuntime.activeModel, gemma3Models.join("|")]);
 
   useEffect(() => {
+    setSelectedAiProfile((previous) => {
+      if (previous && availableAiProfiles.includes(previous)) {
+        return previous;
+      }
+
+      return aiRuntime.activeProfile ?? availableAiProfiles[0] ?? "balanced";
+    });
+  }, [aiRuntime.activeProfile, availableAiProfiles.join("|")]);
+
+  useEffect(() => {
     const entityIds = projectSnapshot.entities.map((entity) => entity.id);
     if (entityIds.includes(selectedEntityId)) {
       return;
@@ -2343,7 +2421,7 @@ export default function App({ backend = defaultDesktopBackend }) {
     async function bootstrapWorkspace() {
       const [bootstrap, runtime] = await Promise.all([
         backend.fetchWorkspaceBootstrap(),
-        backend.fetchAiRuntimeStatus(),
+        backend.fetchAiRuntimeStatus(selectedAiProfile),
       ]);
       if (!mounted) {
         return;
@@ -2367,6 +2445,25 @@ export default function App({ backend = defaultDesktopBackend }) {
   }, []);
 
   useEffect(() => {
+    let mounted = true;
+
+    async function refreshRuntimeProfile() {
+      const runtime = await backend.fetchAiRuntimeStatus(selectedAiProfile);
+      if (!mounted) {
+        return;
+      }
+
+      setAiRuntime(runtime);
+    }
+
+    refreshRuntimeProfile();
+
+    return () => {
+      mounted = false;
+    };
+  }, [backend, selectedAiProfile]);
+
+  useEffect(() => {
     if (!autoPromptEnabled || aiBusy || autoPromptQueue.length === 0) {
       return;
     }
@@ -2384,6 +2481,7 @@ export default function App({ backend = defaultDesktopBackend }) {
     locale,
     projectSnapshot,
     selectedAiModel,
+    selectedAiProfile,
   ]);
 
   useEffect(() => {
@@ -2487,7 +2585,7 @@ export default function App({ backend = defaultDesktopBackend }) {
     try {
       const [snapshot, runtime] = await Promise.all([
         backend.loadWorkspaceFixture(nextFixtureId),
-        backend.fetchAiRuntimeStatus(),
+        backend.fetchAiRuntimeStatus(selectedAiProfile),
       ]);
       setProjectSnapshot(snapshot);
       setCommandResult(null);
@@ -2672,6 +2770,7 @@ export default function App({ backend = defaultDesktopBackend }) {
         locale,
         history,
         selectedAiModel || null,
+        selectedAiProfile || null,
         activeSnapshot,
       );
       setAiRuntime(response.runtime);
@@ -3854,7 +3953,7 @@ export default function App({ backend = defaultDesktopBackend }) {
                       : t("ui.ai.runtime_fallback", "Fallback local")}
                   </strong>
                   <span className="command-id">
-                    {aiRuntime.provider} |{" "}
+                    {aiRuntime.provider} | {aiRuntime.activeProfile ?? "balanced"} |{" "}
                     {aiRuntime.activeModel ??
                       t("ui.ai.no_model", "aucun modele")}
                   </span>
@@ -3866,6 +3965,30 @@ export default function App({ backend = defaultDesktopBackend }) {
                   <div className="muted">{aiRuntime.warning}</div>
                 ) : null}
               </div>
+
+              <label className="control-group assistant-model-group">
+                <span>{t("ui.ai.profile_label", "Profil IA")}</span>
+                <select
+                  className="shell-select"
+                  data-ai-profile-select="true"
+                  aria-label={t("ui.ai.profile_label", "Profil IA")}
+                  value={selectedAiProfile}
+                  onChange={(event) => setSelectedAiProfile(event.target.value)}
+                  disabled={aiBusy}
+                >
+                  {availableAiProfiles.map((profile) => (
+                    <option key={profile} value={profile}>
+                      {profile}
+                    </option>
+                  ))}
+                </select>
+                <div className="muted">
+                  {t(
+                    "ui.ai.profile_hint",
+                    "Le profil selectionne pilote la profondeur du runtime local au prochain message.",
+                  )}
+                </div>
+              </label>
 
               <label className="control-group assistant-model-group">
                 <span>{t("ui.ai.model_label", "Modele Gemma3")}</span>
@@ -3954,6 +4077,7 @@ export default function App({ backend = defaultDesktopBackend }) {
                         <div className="result-card" data-ai-structured="true">
                           <strong>{entry.structured.summary}</strong>
                           <div className="command-id">
+                            {entry.structured.runtimeProfile ?? "balanced"} |{" "}
                             {entry.structured.riskLevel} |{" "}
                             {formatStructuredConfidence(
                               entry.structured.confidence,
@@ -3979,6 +4103,29 @@ export default function App({ backend = defaultDesktopBackend }) {
                               )}
                             </div>
                               ) : null}
+                          {entry.structured.critiquePasses?.length > 0 ? (
+                            <div className="property-card-list">
+                              {entry.structured.critiquePasses.map((pass) => (
+                                <div
+                                  key={`${entry.suggestionId ?? "structured"}-${pass.stage}`}
+                                  className="result-card"
+                                  data-ai-critique-pass={pass.stage}
+                                >
+                                  <strong>{pass.stage}</strong>
+                                  <div className="muted">{pass.summary}</div>
+                                  {pass.issues?.length > 0 ? (
+                                    <div className="assistant-warning-list">
+                                      {pass.issues.map((issue) => (
+                                        <div key={issue} className="muted">
+                                          {issue}
+                                        </div>
+                                      ))}
+                                    </div>
+                                  ) : null}
+                                </div>
+                              ))}
+                            </div>
+                          ) : null}
                           {entry.structured.limitations?.length > 0 ? (
                             <div className="assistant-warning-list">
                               {entry.structured.limitations.map((limitation) => (

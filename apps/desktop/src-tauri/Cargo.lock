@@ -740,6 +740,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "faero-commissioning"
+version = "0.1.0"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "faero-core"
 version = "0.1.0"
 dependencies = [
@@ -763,6 +770,22 @@ version = "0.1.0"
 dependencies = [
  "faero-types",
  "serde_json",
+]
+
+[[package]]
+name = "faero-optimization"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "faero-perception"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -927,9 +950,12 @@ version = "0.1.0"
 dependencies = [
  "faero-ai",
  "faero-assembly",
+ "faero-commissioning",
  "faero-core",
  "faero-geometry",
  "faero-integration",
+ "faero-optimization",
+ "faero-perception",
  "faero-plugin-host",
  "faero-robotics",
  "faero-safety",

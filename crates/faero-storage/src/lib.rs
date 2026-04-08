@@ -35,6 +35,10 @@ pub fn save_project(
     fs::create_dir_all(root.join("plugins/state"))?;
     fs::create_dir_all(root.join("openspec/docs"))?;
     fs::create_dir_all(root.join("simulations/runs"))?;
+    fs::create_dir_all(root.join("perception/runs"))?;
+    fs::create_dir_all(root.join("commissioning/sessions"))?;
+    fs::create_dir_all(root.join("commissioning/reports"))?;
+    fs::create_dir_all(root.join("optimization/studies"))?;
     fs::create_dir_all(root.join("ai/sessions"))?;
     fs::create_dir_all(root.join("ai/suggestions"))?;
     fs::create_dir_all(root.join("events"))?;
@@ -76,6 +80,9 @@ pub fn save_project(
         &document.plugin_states,
     )?;
     write_simulation_run_artifacts(root, &document.nodes)?;
+    write_perception_artifacts(root, &document.nodes)?;
+    write_commissioning_artifacts(root, &document.nodes)?;
+    write_optimization_artifacts(root, &document.nodes)?;
     write_ai_artifacts(root, &document.nodes)?;
     write_command_envelopes(root.join("events/commands.jsonl"), &document.commands)?;
     write_event_envelopes(root.join("events/events.jsonl"), &document.events)?;
@@ -367,6 +374,110 @@ fn write_simulation_run_artifacts(
     Ok(())
 }
 
+fn write_perception_artifacts(
+    root: &Path,
+    nodes: &BTreeMap<String, EntityRecord>,
+) -> Result<(), StorageError> {
+    for node in nodes.values().filter(|node| node.entity_type == "PerceptionRun") {
+        let run_root = root.join("perception/runs").join(&node.id);
+        fs::create_dir_all(&run_root)?;
+        write_json_value(
+            root.join("perception/runs").join(format!("{}.json", node.id)),
+            &serde_json::json!({
+                "id": node.id,
+                "summaryRef": format!("perception/runs/{}/summary.json", node.id),
+                "occupancyRef": format!("perception/runs/{}/occupancy-map.json", node.id),
+                "comparisonRef": format!("perception/runs/{}/comparison.json", node.id),
+                "framesRef": format!("perception/runs/{}/frames.jsonl", node.id),
+                "jobRef": format!("perception/runs/{}/job.json", node.id),
+            }),
+        )?;
+        if let Some(summary) = node.data.get("summary") {
+            write_json_value(run_root.join("summary.json"), summary)?;
+        }
+        if let Some(occupancy_map) = node.data.get("occupancyMap") {
+            write_json_value(run_root.join("occupancy-map.json"), occupancy_map)?;
+        }
+        if let Some(comparison) = node.data.get("comparison") {
+            write_json_value(run_root.join("comparison.json"), comparison)?;
+        }
+        write_jsonl_array_artifact(run_root.join("frames.jsonl"), node.data.get("frames"))?;
+        if let Some(job) = node.data.get("job") {
+            write_json_value(run_root.join("job.json"), job)?;
+        }
+    }
+
+    Ok(())
+}
+
+fn write_commissioning_artifacts(
+    root: &Path,
+    nodes: &BTreeMap<String, EntityRecord>,
+) -> Result<(), StorageError> {
+    for node in nodes
+        .values()
+        .filter(|node| node.entity_type == "CommissioningSession")
+    {
+        let session_root = root.join("commissioning/sessions").join(&node.id);
+        fs::create_dir_all(&session_root)?;
+        if let Some(summary) = node.data.get("summary") {
+            write_json_value(session_root.join("summary.json"), summary)?;
+        }
+        write_jsonl_array_artifact(session_root.join("captures.jsonl"), node.data.get("captures"))?;
+        write_jsonl_array_artifact(
+            session_root.join("adjustments.jsonl"),
+            node.data.get("adjustments"),
+        )?;
+    }
+
+    for node in nodes
+        .values()
+        .filter(|node| node.entity_type == "AsBuiltComparison")
+    {
+        let report_root = root.join("commissioning/reports").join(&node.id);
+        fs::create_dir_all(&report_root)?;
+        if let Some(summary) = node.data.get("summary") {
+            write_json_value(report_root.join("summary.json"), summary)?;
+        }
+        write_jsonl_array_artifact(
+            report_root.join("measurements.jsonl"),
+            node.data.get("measurements"),
+        )?;
+    }
+
+    Ok(())
+}
+
+fn write_optimization_artifacts(
+    root: &Path,
+    nodes: &BTreeMap<String, EntityRecord>,
+) -> Result<(), StorageError> {
+    for node in nodes
+        .values()
+        .filter(|node| node.entity_type == "OptimizationStudy")
+    {
+        let study_root = root.join("optimization/studies").join(&node.id);
+        fs::create_dir_all(&study_root)?;
+        if let Some(summary) = node.data.get("summary") {
+            write_json_value(study_root.join("summary.json"), summary)?;
+        }
+        write_json_value(
+            study_root.join("definition.json"),
+            &serde_json::json!({
+                "objectives": node.data.get("objectives").cloned().unwrap_or(Value::Null),
+                "constraints": node.data.get("constraints").cloned().unwrap_or(Value::Null),
+                "variables": node.data.get("variables").cloned().unwrap_or(Value::Null),
+                "candidates": node.data.get("candidates").cloned().unwrap_or(Value::Null),
+            }),
+        )?;
+        if let Some(ranked) = node.data.get("rankedCandidates") {
+            write_json_value(study_root.join("ranked-candidates.json"), ranked)?;
+        }
+    }
+
+    Ok(())
+}
+
 fn write_ai_artifacts(
     root: &Path,
     nodes: &BTreeMap<String, EntityRecord>,
@@ -568,8 +679,8 @@ mod tests {
 
     use faero_types::{
         Addressing, ConnectionMode, DisplayUnits, EndpointType, LinkMetrics, OpenSpecDocument,
-        PluginManifest, ProjectDocument, ProjectMetadata, QosProfile, StreamDirection,
-        TelemetryStream, TimingProfile, TransportProfile,
+        PluginContribution, PluginManifest, ProjectDocument, ProjectMetadata, QosProfile,
+        StreamDirection, TelemetryStream, TimingProfile, TransportProfile,
     };
     use tempfile::tempdir;
 
@@ -721,10 +832,17 @@ mod tests {
                 id: "ent_plugin_001".to_string(),
                 plugin_id: "plg.integration.viewer".to_string(),
                 version: "0.1.0".to_string(),
+                release_channel: "stable".to_string(),
                 capabilities: vec!["panel".to_string()],
                 permissions: vec!["project.read".to_string()],
+                contributions: vec![PluginContribution {
+                    kind: "panel".to_string(),
+                    target: "workspace.right".to_string(),
+                    title: "Integration Viewer".to_string(),
+                }],
                 entrypoints: vec!["plugins/integration-viewer/index.js".to_string()],
                 compatibility: vec!["faero-core@0.1".to_string()],
+                signature: Some("sha256:demo".to_string()),
                 status: "installed".to_string(),
             },
         );
@@ -851,7 +969,10 @@ mod tests {
                     "sessionId": "ai_session_001",
                     "userIntent": "explain collision",
                     "mode": "explain",
+                    "runtimeProfile": "furnace",
                     "modelInfo": "gemma3:27b",
+                    "criticModelInfo": "ollama:furnace:critic",
+                    "critiquePassCount": 2,
                     "contextRefs": [
                         {
                             "entityId": "ent_run_001",
@@ -874,6 +995,7 @@ mod tests {
                 status: "draft".to_string(),
                 data: serde_json::json!({
                     "summary": "Collision detectee sur la pince",
+                    "runtimeProfile": "furnace",
                     "contextRefs": [
                         {
                             "entityId": "ent_run_001",
@@ -884,8 +1006,130 @@ mod tests {
                     "confidence": 0.82,
                     "riskLevel": "high",
                     "limitations": ["Aucun replay perception"],
+                    "critiquePasses": [
+                        {
+                            "stage": "critic",
+                            "summary": "Validation manuelle recommandee",
+                            "confidenceDelta": -0.05,
+                            "issues": ["artefact perception manquant"],
+                            "adjustments": ["review before apply"]
+                        }
+                    ],
                     "proposedCommands": [],
                     "explanation": ["La collision apparait a mi-cycle."]
+                }),
+            },
+        );
+        document.nodes.insert(
+            "ent_perc_001".to_string(),
+            EntityRecord {
+                id: "ent_perc_001".to_string(),
+                entity_type: "PerceptionRun".to_string(),
+                name: "PerceptionRun-001".to_string(),
+                revision: "rev_0006".to_string(),
+                status: "completed".to_string(),
+                data: serde_json::json!({
+                    "summary": {
+                        "status": "warning",
+                        "frameCount": 3,
+                        "averageCoverageRatio": 0.87,
+                        "unknownObstacleCount": 1,
+                        "deviationCount": 2
+                    },
+                    "job": {
+                        "jobId": "job_perc_001",
+                        "status": "completed"
+                    },
+                    "frames": [
+                        { "timestampMs": 0, "pointCount": 1200, "coverageRatio": 0.82 }
+                    ],
+                    "occupancyMap": [
+                        { "cellId": "occ_001", "occupancyRatio": 0.82 }
+                    ],
+                    "comparison": {
+                        "deviationCount": 2,
+                        "unknownObstacleCount": 1,
+                        "maxDeviationMm": 4.2
+                    }
+                }),
+            },
+        );
+        document.nodes.insert(
+            "ent_comm_001".to_string(),
+            EntityRecord {
+                id: "ent_comm_001".to_string(),
+                entity_type: "CommissioningSession".to_string(),
+                name: "CommissioningSession-001".to_string(),
+                revision: "rev_0007".to_string(),
+                status: "active".to_string(),
+                data: serde_json::json!({
+                    "summary": {
+                        "status": "capturing",
+                        "progressRatio": 0.85,
+                        "captureCount": 2,
+                        "adjustmentCount": 2
+                    },
+                    "captures": [
+                        { "id": "cap_001", "assetRef": "captures/scan_001.pcd" }
+                    ],
+                    "adjustments": [
+                        { "id": "adj_001", "status": "pending" }
+                    ]
+                }),
+            },
+        );
+        document.nodes.insert(
+            "ent_ab_001".to_string(),
+            EntityRecord {
+                id: "ent_ab_001".to_string(),
+                entity_type: "AsBuiltComparison".to_string(),
+                name: "AsBuiltComparison-001".to_string(),
+                revision: "rev_0008".to_string(),
+                status: "completed".to_string(),
+                data: serde_json::json!({
+                    "summary": {
+                        "acceptedCount": 1,
+                        "rejectedCount": 1,
+                        "averageDeviationMm": 1.15,
+                        "maxDeviationMm": 1.7
+                    },
+                    "measurements": [
+                        { "id": "m_001", "deviationMm": 0.8 },
+                        { "id": "m_002", "deviationMm": 1.7 }
+                    ]
+                }),
+            },
+        );
+        document.nodes.insert(
+            "ent_opt_001".to_string(),
+            EntityRecord {
+                id: "ent_opt_001".to_string(),
+                entity_type: "OptimizationStudy".to_string(),
+                name: "OptimizationStudy-001".to_string(),
+                revision: "rev_0009".to_string(),
+                status: "completed".to_string(),
+                data: serde_json::json!({
+                    "summary": {
+                        "candidateCount": 3,
+                        "objectiveCount": 3,
+                        "bestCandidateId": "candidate_balanced",
+                        "bestScore": 27.5
+                    },
+                    "rankedCandidates": [
+                        { "id": "candidate_balanced", "score": 27.5 }
+                    ],
+                    "objectives": [
+                        { "id": "obj_cycle", "goal": "minimize" }
+                    ],
+                    "constraints": [
+                        { "id": "cst_safety", "expression": "safety_margin_mm >= 18" }
+                    ],
+                    "variables": [
+                        { "id": "var_speed", "current": 0.82 }
+                    ],
+                    "candidates": [
+                        { "id": "candidate_balanced", "cycleTimeMs": 1050 }
+                    ]
                 }),
             },
         );
@@ -920,7 +1164,7 @@ mod tests {
     }
 
     #[test]
-    fn save_project_writes_simulation_and_ai_artifact_files() {
+    fn save_project_writes_simulation_perception_commissioning_optimization_and_ai_artifact_files() {
         let dir = tempdir().expect("tempdir should be available");
         let project_root = dir.path().join("artifacted.faero");
         let document = sample_document_with_simulation_and_ai();
@@ -972,6 +1216,27 @@ mod tests {
                 .join("ai/suggestions/ent_ai_suggestion_001.json")
                 .exists()
         );
+        assert!(project_root.join("perception/runs/ent_perc_001.json").exists());
+        assert!(
+            project_root
+                .join("perception/runs/ent_perc_001/occupancy-map.json")
+                .exists()
+        );
+        assert!(
+            project_root
+                .join("commissioning/sessions/ent_comm_001/summary.json")
+                .exists()
+        );
+        assert!(
+            project_root
+                .join("commissioning/reports/ent_ab_001/measurements.jsonl")
+                .exists()
+        );
+        assert!(
+            project_root
+                .join("optimization/studies/ent_opt_001/ranked-candidates.json")
+                .exists()
+        );
 
         let metrics =
             fs::read_to_string(project_root.join("simulations/runs/ent_run_001/metrics.json"))
@@ -981,6 +1246,11 @@ mod tests {
             fs::read_to_string(project_root.join("ai/suggestions/ent_ai_suggestion_001.json"))
                 .expect("ai suggestion artifact should read");
         assert!(suggestion.contains("\"riskLevel\": \"high\""));
+        let occupancy = fs::read_to_string(
+            project_root.join("perception/runs/ent_perc_001/occupancy-map.json"),
+        )
+        .expect("occupancy artifact should read");
+        assert!(occupancy.contains("occupancyRatio"));
     }
 
     #[test]
@@ -1183,10 +1453,17 @@ mod tests {
                 id: "ent_plugin_001".to_string(),
                 plugin_id: "plg.integration.viewer".to_string(),
                 version: "0.1.0".to_string(),
+                release_channel: "stable".to_string(),
                 capabilities: vec!["panel".to_string()],
                 permissions: vec!["project.read".to_string()],
+                contributions: vec![PluginContribution {
+                    kind: "panel".to_string(),
+                    target: "workspace.right".to_string(),
+                    title: "Integration Viewer".to_string(),
+                }],
                 entrypoints: vec!["plugins/integration-viewer/index.js".to_string()],
                 compatibility: vec!["faero-core@0.1".to_string()],
+                signature: Some("sha256:demo".to_string()),
                 status: "installed".to_string(),
             },
         )

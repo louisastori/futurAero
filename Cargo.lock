@@ -109,6 +109,9 @@ dependencies = [
 [[package]]
 name = "faero-commissioning"
 version = "0.1.0"
+dependencies = [
+ "serde",
+]
 
 [[package]]
 name = "faero-core"
@@ -140,6 +143,7 @@ dependencies = [
 name = "faero-optimization"
 version = "0.1.0"
 dependencies = [
+ "serde",
  "thiserror",
 ]
 
@@ -147,6 +151,7 @@ dependencies = [
 name = "faero-perception"
 version = "0.1.0"
 dependencies = [
+ "serde",
  "thiserror",
 ]
 

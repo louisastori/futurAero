@@ -1,8 +1,8 @@
 use std::{env, time::Duration};
 
 use faero_types::{
-    AiContextReference, AiProposedCommand, AiRiskLevel, AiStructuredExplain, ExternalEndpoint,
-    ProjectDocument,
+    AiContextReference, AiCritiquePass, AiProposedCommand, AiRiskLevel, AiStructuredExplain,
+    ExternalEndpoint, ProjectDocument,
 };
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
@@ -15,6 +15,32 @@ const GEMMA3_MODEL_PREFIX: &str = "gemma3:";
 const MAX_HISTORY_MESSAGES: usize = 8;
 const MAX_CONTEXT_REFERENCES: usize = 8;
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum AiProfilePreset {
+    Balanced,
+    Max,
+    Furnace,
+}
+
+impl AiProfilePreset {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Balanced => "balanced",
+            Self::Max => "max",
+            Self::Furnace => "furnace",
+        }
+    }
+
+    fn from_requested(value: Option<&str>) -> Self {
+        match value.map(str::trim).filter(|value| !value.is_empty()) {
+            Some("max") => Self::Max,
+            Some("furnace") => Self::Furnace,
+            _ => Self::Balanced,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct AiRuntimeStatus {
@@ -23,6 +49,8 @@ pub struct AiRuntimeStatus {
     pub endpoint: String,
     pub mode: String,
     pub local_only: bool,
+    pub active_profile: String,
+    pub available_profiles: Vec<String>,
     pub active_model: Option<String>,
     pub available_models: Vec<String>,
     pub gemma3_models: Vec<String>,
@@ -66,6 +94,12 @@ struct AiRuntimeConfig {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ModelSelection {
     active_model: Option<String>,
+    warning: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ProfileSelection {
+    profile: AiProfilePreset,
     warning: Option<String>,
 }
 
@@ -140,12 +174,22 @@ struct OllamaChatResponse {
 }
 
 pub fn query_runtime_status() -> AiRuntimeStatus {
+    query_runtime_status_with_profile(None)
+}
+
+pub fn query_runtime_status_with_profile(selected_profile: Option<&str>) -> AiRuntimeStatus {
     let config = AiRuntimeConfig::from_env();
     let client = build_http_client(config.timeout_secs);
 
     match fetch_model_names(&client, &config) {
-        Ok(models) => runtime_status_from_models(&config, models, None),
-        Err(error) => unavailable_runtime_status(&config, error.to_string(), Vec::new(), None),
+        Ok(models) => runtime_status_from_models(&config, models, None, selected_profile),
+        Err(error) => unavailable_runtime_status(
+            &config,
+            error.to_string(),
+            Vec::new(),
+            None,
+            selected_profile,
+        ),
     }
 }
 
@@ -155,6 +199,7 @@ pub fn chat_with_project(
     history: &[AiConversationMessage],
     message: &str,
     selected_model: Option<&str>,
+    selected_profile: Option<&str>,
 ) -> Result<AiChatResponse, AiError> {
     let trimmed_message = message.trim();
     if trimmed_message.is_empty() {
@@ -164,20 +209,35 @@ pub fn chat_with_project(
     let config = AiRuntimeConfig::from_env();
     let client = build_http_client(config.timeout_secs);
     let references = collect_context_references(document);
-    let structured = Some(build_structured_explain(document, trimmed_message));
+    let requested_profile = AiProfilePreset::from_requested(selected_profile);
 
     let response = match fetch_model_names(&client, &config) {
         Ok(models) => {
-            let runtime = runtime_status_from_models(&config, models.clone(), selected_model);
+            let runtime = runtime_status_from_models(
+                &config,
+                models.clone(),
+                selected_model,
+                selected_profile,
+            );
+            let effective_profile = AiProfilePreset::from_requested(Some(&runtime.active_profile));
+            let structured = Some(build_structured_explain(
+                document,
+                trimmed_message,
+                effective_profile,
+            ));
             if let Some(model) = runtime.active_model.clone() {
+                let prompt = ChatPromptContext {
+                    locale,
+                    history,
+                    message: trimmed_message,
+                    document,
+                    profile: effective_profile,
+                };
                 match send_ollama_chat(
                     &client,
                     &config,
                     &model,
-                    locale,
-                    history,
-                    trimmed_message,
-                    document,
+                    &prompt,
                 ) {
                     Ok(answer) => {
                         let warnings = runtime.warning.clone().into_iter().collect();
@@ -197,7 +257,13 @@ pub fn chat_with_project(
                         document,
                         references,
                         structured.clone(),
-                        degraded_runtime_status(&config, error.to_string(), models, selected_model),
+                        degraded_runtime_status(
+                            &config,
+                            error.to_string(),
+                            models,
+                            selected_model,
+                            Some(effective_profile.as_str()),
+                        ),
                     ),
                 }
             } else {
@@ -212,6 +278,7 @@ pub fn chat_with_project(
                         "no preferred local model found".to_string(),
                         models,
                         selected_model,
+                        Some(requested_profile.as_str()),
                     ),
                 )
             }
@@ -221,8 +288,18 @@ pub fn chat_with_project(
             trimmed_message,
             document,
             references,
-            structured,
-            unavailable_runtime_status(&config, error.to_string(), Vec::new(), selected_model),
+            Some(build_structured_explain(
+                document,
+                trimmed_message,
+                requested_profile,
+            )),
+            unavailable_runtime_status(
+                &config,
+                error.to_string(),
+                Vec::new(),
+                selected_model,
+                Some(requested_profile.as_str()),
+            ),
         ),
     };
 
@@ -254,18 +331,22 @@ fn runtime_status_from_models(
     config: &AiRuntimeConfig,
     models: Vec<String>,
     requested_model: Option<&str>,
+    requested_profile: Option<&str>,
 ) -> AiRuntimeStatus {
     let selection = resolve_model_selection(&models, &config.preferred_models, requested_model);
+    let profile = resolve_profile_selection(&models, requested_profile);
     AiRuntimeStatus {
         available: !models.is_empty(),
         provider: "ollama".to_string(),
         endpoint: config.endpoint.clone(),
         mode: "grounded-chat".to_string(),
         local_only: true,
+        active_profile: profile.profile.as_str().to_string(),
+        available_profiles: available_profiles(),
         active_model: selection.active_model,
         gemma3_models: collect_gemma3_models(&models),
         available_models: models,
-        warning: selection.warning,
+        warning: combine_warnings(selection.warning, profile.warning),
     }
 }
 
@@ -274,19 +355,26 @@ fn unavailable_runtime_status(
     warning: String,
     available_models: Vec<String>,
     requested_model: Option<&str>,
+    requested_profile: Option<&str>,
 ) -> AiRuntimeStatus {
     let selection =
         resolve_model_selection(&available_models, &config.preferred_models, requested_model);
+    let profile = resolve_profile_selection(&available_models, requested_profile);
     AiRuntimeStatus {
         available: false,
         provider: "ollama".to_string(),
         endpoint: config.endpoint.clone(),
         mode: "fallback-local".to_string(),
         local_only: true,
+        active_profile: profile.profile.as_str().to_string(),
+        available_profiles: available_profiles(),
         active_model: selection.active_model,
         gemma3_models: collect_gemma3_models(&available_models),
         available_models,
-        warning: combine_warnings(Some(warning), selection.warning),
+        warning: combine_warnings(
+            Some(warning),
+            combine_warnings(selection.warning, profile.warning),
+        ),
     }
 }
 
@@ -295,9 +383,11 @@ fn degraded_runtime_status(
     warning: String,
     available_models: Vec<String>,
     requested_model: Option<&str>,
+    requested_profile: Option<&str>,
 ) -> AiRuntimeStatus {
     let selection =
         resolve_model_selection(&available_models, &config.preferred_models, requested_model);
+    let profile = resolve_profile_selection(&available_models, requested_profile);
     AiRuntimeStatus {
         available: !available_models.is_empty(),
         provider: "ollama".to_string(),
@@ -308,10 +398,15 @@ fn degraded_runtime_status(
             "degraded-chat".to_string()
         },
         local_only: true,
+        active_profile: profile.profile.as_str().to_string(),
+        available_profiles: available_profiles(),
         active_model: selection.active_model,
         gemma3_models: collect_gemma3_models(&available_models),
         available_models,
-        warning: combine_warnings(Some(warning), selection.warning),
+        warning: combine_warnings(
+            Some(warning),
+            combine_warnings(selection.warning, profile.warning),
+        ),
     }
 }
 
@@ -345,6 +440,89 @@ fn resolve_model_selection(
     }
 }
 
+fn available_profiles() -> Vec<String> {
+    vec![
+        AiProfilePreset::Balanced.as_str().to_string(),
+        AiProfilePreset::Max.as_str().to_string(),
+        AiProfilePreset::Furnace.as_str().to_string(),
+    ]
+}
+
+fn resolve_profile_selection(models: &[String], requested_profile: Option<&str>) -> ProfileSelection {
+    let requested = AiProfilePreset::from_requested(requested_profile);
+    if models.is_empty() {
+        return ProfileSelection {
+            profile: requested,
+            warning: None,
+        };
+    }
+
+    match requested {
+        AiProfilePreset::Balanced => ProfileSelection {
+            profile: requested,
+            warning: None,
+        },
+        AiProfilePreset::Max => {
+            if has_large_local_model(models, 12) {
+                ProfileSelection {
+                    profile: requested,
+                    warning: None,
+                }
+            } else {
+                ProfileSelection {
+                    profile: AiProfilePreset::Balanced,
+                    warning: Some(
+                        "requested AI profile `max` degraded to `balanced` because no 12b+ local model is available"
+                            .to_string(),
+                    ),
+                }
+            }
+        }
+        AiProfilePreset::Furnace => {
+            if has_large_local_model(models, 27) {
+                ProfileSelection {
+                    profile: requested,
+                    warning: None,
+                }
+            } else if has_large_local_model(models, 12) {
+                ProfileSelection {
+                    profile: AiProfilePreset::Max,
+                    warning: Some(
+                        "requested AI profile `furnace` degraded to `max` because no 27b local model is available"
+                            .to_string(),
+                    ),
+                }
+            } else {
+                ProfileSelection {
+                    profile: AiProfilePreset::Balanced,
+                    warning: Some(
+                        "requested AI profile `furnace` degraded to `balanced` because local resources are insufficient"
+                            .to_string(),
+                    ),
+                }
+            }
+        }
+    }
+}
+
+fn has_large_local_model(models: &[String], minimum_size_b: u32) -> bool {
+    models.iter().any(|model| model_size_b(model).is_some_and(|size| size >= minimum_size_b))
+}
+
+fn model_size_b(model: &str) -> Option<u32> {
+    let lower = model.to_ascii_lowercase();
+    if lower.contains("27b") {
+        return Some(27);
+    }
+    if lower.contains("12b") {
+        return Some(12);
+    }
+    if lower.contains("4b") {
+        return Some(4);
+    }
+    None
+}
+
 fn select_default_model(models: &[String], preferred_models: &[String]) -> Option<String> {
     preferred_models
         .iter()
@@ -370,23 +548,28 @@ fn combine_warnings(primary: Option<String>, secondary: Option<String>) -> Optio
     }
 }
 
+struct ChatPromptContext<'a> {
+    locale: &'a str,
+    history: &'a [AiConversationMessage],
+    message: &'a str,
+    document: &'a ProjectDocument,
+    profile: AiProfilePreset,
+}
+
 fn send_ollama_chat(
     client: &Client,
     config: &AiRuntimeConfig,
     model: &str,
-    locale: &str,
-    history: &[AiConversationMessage],
-    message: &str,
-    document: &ProjectDocument,
+    prompt: &ChatPromptContext<'_>,
 ) -> Result<String, AiError> {
     let request = OllamaChatRequest {
         model: model.to_string(),
         stream: false,
-        messages: build_ollama_messages(locale, history, message, document),
+        messages: build_ollama_messages(prompt),
         options: OllamaChatOptions {
-            temperature: 0.2,
+            temperature: profile_temperature(prompt.profile),
             top_p: 0.9,
-            num_ctx: 8_192,
+            num_ctx: profile_context_window(prompt.profile),
         },
     };
 
@@ -397,22 +580,21 @@ fn send_ollama_chat(
         .error_for_status()?
         .json::<OllamaChatResponse>()?;
 
-    Ok(normalize_answer(response.message.content, locale, document))
+    Ok(normalize_answer(
+        response.message.content,
+        prompt.locale,
+        prompt.document,
+    ))
 }
 
-fn build_ollama_messages(
-    locale: &str,
-    history: &[AiConversationMessage],
-    message: &str,
-    document: &ProjectDocument,
-) -> Vec<OllamaChatMessage> {
+fn build_ollama_messages(prompt: &ChatPromptContext<'_>) -> Vec<OllamaChatMessage> {
     let mut messages = vec![OllamaChatMessage {
         role: "system".to_string(),
-        content: build_system_prompt(locale, document),
+        content: build_system_prompt(prompt.locale, prompt.document, prompt.profile),
     }];
 
     messages.extend(
-        trim_history(history)
+        trim_history(prompt.history)
             .into_iter()
             .map(|entry| OllamaChatMessage {
                 role: entry.role,
@@ -421,12 +603,12 @@ fn build_ollama_messages(
     );
     messages.push(OllamaChatMessage {
         role: "user".to_string(),
-        content: message.to_string(),
+        content: prompt.message.to_string(),
     });
     messages
 }
 
-fn build_system_prompt(locale: &str, document: &ProjectDocument) -> String {
+fn build_system_prompt(locale: &str, document: &ProjectDocument, profile: AiProfilePreset) -> String {
     format!(
         "You are FutureAero Local AI, a local-only assistant for CAD, robotics, simulation, commissioning, integration and safety engineering.\n\
 Use only the provided project context.\n\
@@ -435,11 +617,29 @@ If the context does not contain an answer, say so clearly.\n\
 Do not suggest silent mutations.\n\
 Keep the answer short, concrete and engineering-focused.\n\
 When you mention an object, include its id when useful.\n\
+Runtime profile: {}.\n\
 Answer {}.\n\n\
 Project context:\n{}",
+        profile.as_str(),
         language_instruction(locale),
         build_project_summary(document)
     )
+}
+
+fn profile_temperature(profile: AiProfilePreset) -> f32 {
+    match profile {
+        AiProfilePreset::Balanced => 0.2,
+        AiProfilePreset::Max => 0.15,
+        AiProfilePreset::Furnace => 0.1,
+    }
+}
+
+fn profile_context_window(profile: AiProfilePreset) -> usize {
+    match profile {
+        AiProfilePreset::Balanced => 8_192,
+        AiProfilePreset::Max => 16_384,
+        AiProfilePreset::Furnace => 24_576,
+    }
 }
 
 fn language_instruction(locale: &str) -> &'static str {
@@ -593,7 +793,11 @@ fn collect_context_references(document: &ProjectDocument) -> Vec<String> {
         .collect()
 }
 
-fn build_structured_explain(document: &ProjectDocument, message: &str) -> AiStructuredExplain {
+fn build_structured_explain(
+    document: &ProjectDocument,
+    message: &str,
+    profile: AiProfilePreset,
+) -> AiStructuredExplain {
     let latest_run = latest_entity_by_type(document, "SimulationRun");
     let latest_safety = latest_entity_by_type(document, "SafetyReport");
     let latest_robot_cell = latest_entity_by_type(document, "RobotCell");
@@ -837,9 +1041,26 @@ fn build_structured_explain(document: &ProjectDocument, message: &str) -> AiStru
     if limitations.is_empty() {
         limitations.push("Le raisonnement est borne aux artefacts locaux disponibles.".to_string());
     }
+    let critique_passes = critique_structured_explain(
+        document,
+        message,
+        profile,
+        &context_refs,
+        &limitations,
+        &proposed_commands,
+    );
+    confidence = apply_critique_confidence(confidence, &critique_passes);
+    if !critique_passes.is_empty() {
+        explanation.extend(
+            critique_passes
+                .iter()
+                .map(|pass| format!("Critique {}: {}", pass.stage, pass.summary)),
+        );
+    }
 
     AiStructuredExplain {
         summary,
+        runtime_profile: profile.as_str().to_string(),
         context_refs: context_refs
             .into_iter()
             .take(MAX_CONTEXT_REFERENCES)
@@ -847,12 +1068,112 @@ fn build_structured_explain(document: &ProjectDocument, message: &str) -> AiStru
         confidence,
         risk_level,
         limitations,
+        critique_passes,
         proposed_commands: proposed_commands
             .into_iter()
             .take(4)
             .collect(),
         explanation,
     }
+}
+
+fn critique_structured_explain(
+    document: &ProjectDocument,
+    message: &str,
+    profile: AiProfilePreset,
+    context_refs: &[AiContextReference],
+    limitations: &[String],
+    proposed_commands: &[AiProposedCommand],
+) -> Vec<AiCritiquePass> {
+    let mut issues = Vec::new();
+    let mut adjustments = Vec::new();
+    let mut confidence_delta = 0.0;
+
+    if context_refs.len() < 2 {
+        issues.push("contexte local trop court".to_string());
+        adjustments.push("demand additional local artifacts before applying changes".to_string());
+        confidence_delta -= 0.08;
+    }
+    if limitations.iter().any(|limitation| limitation.contains("Aucun run")) {
+        issues.push("aucun run de simulation local".to_string());
+        adjustments.push("prefer simulation.run.start before deeper explanation".to_string());
+        confidence_delta -= 0.12;
+    }
+    if contains_any_keyword(message, &["perception", "lidar", "scan"])
+        && latest_entity_by_type(document, "PerceptionRun").is_none()
+    {
+        issues.push("aucun run perception local".to_string());
+        adjustments.push("collect a perception run before trusting scene comparison".to_string());
+        confidence_delta -= 0.14;
+    }
+    if contains_any_keyword(message, &["commissioning", "terrain", "as-built"])
+        && latest_entity_by_type(document, "CommissioningSession").is_none()
+    {
+        issues.push("aucune session commissioning locale".to_string());
+        adjustments.push("open a commissioning session and attach captures".to_string());
+        confidence_delta -= 0.1;
+    }
+    if proposed_commands.len() > 2 {
+        adjustments.push("keep the suggested command list short and explicit".to_string());
+        confidence_delta -= 0.03;
+    }
+
+    let mut passes = vec![AiCritiquePass {
+        stage: "critic".to_string(),
+        summary: if issues.is_empty() {
+            "Le critic interne ne detecte pas de contradiction majeure dans les artefacts locaux."
+                .to_string()
+        } else {
+            format!("{} point(s) de vigilance detecte(s).", issues.len())
+        },
+        confidence_delta,
+        issues: issues.clone(),
+        adjustments: adjustments.clone(),
+    }];
+
+    if matches!(profile, AiProfilePreset::Max | AiProfilePreset::Furnace) {
+        let consistency_issue = if latest_entity_by_type(document, "SafetyReport").is_none()
+            && latest_entity_by_type(document, "SimulationRun").is_some()
+        {
+            Some("simulation available without a recent safety report".to_string())
+        } else {
+            None
+        };
+        passes.push(AiCritiquePass {
+            stage: "critic_consistency".to_string(),
+            summary: if consistency_issue.is_some() {
+                "Le second regard releve une couverture inegale entre simulation et safety."
+                    .to_string()
+            } else {
+                "Le second regard ne releve pas d incoherence majeure entre artefacts."
+                    .to_string()
+            },
+            confidence_delta: if consistency_issue.is_some() { -0.04 } else { 0.0 },
+            issues: consistency_issue.into_iter().collect(),
+            adjustments: vec!["cross-check safety and simulation artifacts".to_string()],
+        });
+    }
+
+    if matches!(profile, AiProfilePreset::Furnace) {
+        passes.push(AiCritiquePass {
+            stage: "critic_final".to_string(),
+            summary:
+                "La passe furnace privilegie la prudence: aucune mutation n est recommandee sans artefact rejouable."
+                    .to_string(),
+            confidence_delta: -0.02,
+            issues: Vec::new(),
+            adjustments: vec!["require replayable artifacts before apply".to_string()],
+        });
+    }
+
+    passes
+}
+
+fn apply_critique_confidence(base: f64, critique_passes: &[AiCritiquePass]) -> f64 {
+    critique_passes
+        .iter()
+        .fold(base, |confidence, pass| confidence + pass.confidence_delta)
+        .clamp(0.05, 0.98)
 }
 
 fn build_safety_suggestion_commands(
@@ -1080,6 +1401,8 @@ fn normalize_answer(answer: String, locale: &str, document: &ProjectDocument) ->
                 endpoint: DEFAULT_OLLAMA_ENDPOINT.to_string(),
                 mode: "fallback-local".to_string(),
                 local_only: true,
+                active_profile: "balanced".to_string(),
+                available_profiles: available_profiles(),
                 active_model: None,
                 available_models: Vec::new(),
                 gemma3_models: Vec::new(),
@@ -1152,8 +1475,8 @@ mod tests {
 
     use faero_types::{
         Addressing, ConnectionMode, EndpointType, EntityRecord, ExternalEndpoint, LinkMetrics,
-        PluginManifest, ProjectDocument, QosProfile, StreamDirection, TelemetryStream,
-        TimingProfile, TransportProfile,
+        PluginContribution, PluginManifest, ProjectDocument, QosProfile, StreamDirection,
+        TelemetryStream, TimingProfile, TransportProfile,
     };
 
     use super::*;
@@ -1398,10 +1721,17 @@ mod tests {
                 id: "ent_plugin_001".to_string(),
                 plugin_id: "plg.integration.viewer".to_string(),
                 version: "0.1.0".to_string(),
+                release_channel: "stable".to_string(),
                 capabilities: vec!["panel".to_string()],
                 permissions: vec!["project.read".to_string()],
+                contributions: vec![PluginContribution {
+                    kind: "panel".to_string(),
+                    target: "workspace.right".to_string(),
+                    title: "Integration Viewer".to_string(),
+                }],
                 entrypoints: vec!["plugins/integration-viewer/index.js".to_string()],
                 compatibility: vec!["faero-core@0.1".to_string()],
+                signature: Some("sha256:demo".to_string()),
                 status: "installed".to_string(),
             },
         );
@@ -1468,6 +1798,26 @@ mod tests {
             missing.warning,
             Some("requested local model `gemma3:4b` not available".to_string())
         );
+    }
+
+    #[test]
+    fn resolve_profile_selection_degrades_when_local_resources_are_insufficient() {
+        let large_models = vec!["gemma3:27b".to_string(), "gemma3:12b".to_string()];
+        let small_models = vec!["gemma3:4b".to_string(), "phi3:mini".to_string()];
+
+        let furnace = resolve_profile_selection(&large_models, Some("furnace"));
+        assert_eq!(furnace.profile, AiProfilePreset::Furnace);
+        assert_eq!(furnace.warning, None);
+
+        let degraded = resolve_profile_selection(&small_models, Some("furnace"));
+        assert_eq!(degraded.profile, AiProfilePreset::Balanced);
+        assert!(degraded
+            .warning
+            .as_deref()
+            .is_some_and(|warning| warning.contains("degraded")));
+
+        let max_profile = resolve_profile_selection(&large_models, Some("max"));
+        assert_eq!(max_profile.profile, AiProfilePreset::Max);
     }
 
     #[test]
@@ -1550,6 +1900,7 @@ mod tests {
             &AiRuntimeConfig::from_env(),
             "offline".to_string(),
             vec!["gemma3:27b".to_string()],
+            None,
             None,
         );
 
@@ -1669,7 +2020,7 @@ mod tests {
 
     #[test]
     fn chat_with_project_rejects_empty_message() {
-        let _error = chat_with_project(&sample_document(), "fr", &[], "   ", None)
+        let _error = chat_with_project(&sample_document(), "fr", &[], "   ", None, None)
             .expect_err("empty message should fail");
     }
 
@@ -1713,7 +2064,14 @@ mod tests {
                 ),
                 ("FUTUREAERO_OLLAMA_MODEL", None),
             ]);
-            chat_with_project(&document, "fr", &[], "Resume le projet", Some("gemma3:27b"))
+            chat_with_project(
+                &document,
+                "fr",
+                &[],
+                "Resume le projet",
+                Some("gemma3:27b"),
+                Some("furnace"),
+            )
         }
         .expect("disconnecting chat should fallback");
         disconnecting_handle
@@ -1747,7 +2105,14 @@ mod tests {
                 ),
                 ("FUTUREAERO_OLLAMA_MODEL", None),
             ]);
-            chat_with_project(&document, "fr", &[], "Resume le projet", Some("gemma3:27b"))
+            chat_with_project(
+                &document,
+                "fr",
+                &[],
+                "Resume le projet",
+                Some("gemma3:27b"),
+                Some("max"),
+            )
         }
         .expect("invalid chat payload should fallback");
         invalid_payload_handle
@@ -1800,6 +2165,7 @@ mod tests {
                 &history,
                 "Resume le projet",
                 Some("gemma3:27b"),
+                Some("furnace"),
             )
         }
         .expect("chat should succeed");
@@ -1840,7 +2206,14 @@ mod tests {
         let empty_response = {
             let _env =
                 TestEnvScope::new(&[("FUTUREAERO_OLLAMA_ENDPOINT", Some(empty_endpoint.as_str()))]);
-            chat_with_project(&document, "en", &[], "Explain the project", None)
+            chat_with_project(
+                &document,
+                "en",
+                &[],
+                "Explain the project",
+                None,
+                Some("max"),
+            )
         }
         .expect("fallback response should still succeed");
         empty_handle.join().expect("server thread should finish");
@@ -1886,6 +2259,7 @@ mod tests {
                 &[],
                 "Resume el proyecto",
                 Some("gemma3:27b"),
+                Some("furnace"),
             )
         }
         .expect("chat failure should fallback");
@@ -1917,7 +2291,7 @@ mod tests {
         let response = {
             let _env =
                 TestEnvScope::new(&[("FUTUREAERO_OLLAMA_ENDPOINT", Some(endpoint.as_str()))]);
-            chat_with_project(&document, "fr", &[], "Resume le projet", None)
+            chat_with_project(&document, "fr", &[], "Resume le projet", None, None)
         }
         .expect("tag failure should fallback");
         handle.join().expect("server thread should finish");
@@ -1935,27 +2309,31 @@ mod tests {
     #[test]
     fn helpers_cover_locales_labels_references_and_normalization() {
         let document = sample_document();
-        let prompt = build_system_prompt("es", &document);
+        let prompt = build_system_prompt("es", &document, AiProfilePreset::Furnace);
         assert!(prompt.contains("Answer in Spanish."));
+        assert!(prompt.contains("Runtime profile: furnace."));
         assert_eq!(language_instruction("en"), "in English");
         assert_eq!(language_instruction("es"), "in Spanish");
         assert_eq!(language_instruction("fr"), "in French");
 
-        let messages = build_ollama_messages(
-            "fr",
-            &[
-                AiConversationMessage {
-                    role: "system".to_string(),
-                    content: "ignore".to_string(),
-                },
-                AiConversationMessage {
-                    role: "user".to_string(),
-                    content: " besoin ".to_string(),
-                },
-            ],
-            "Etat courant",
-            &document,
-        );
+        let history = [
+            AiConversationMessage {
+                role: "system".to_string(),
+                content: "ignore".to_string(),
+            },
+            AiConversationMessage {
+                role: "user".to_string(),
+                content: " besoin ".to_string(),
+            },
+        ];
+        let prompt_context = ChatPromptContext {
+            locale: "fr",
+            history: &history,
+            message: "Etat courant",
+            document: &document,
+            profile: AiProfilePreset::Max,
+        };
+        let messages = build_ollama_messages(&prompt_context);
         assert_eq!(messages[0].role, "system");
         assert_eq!(messages[1].role, "user");
         assert_eq!(
@@ -2000,6 +2378,8 @@ mod tests {
                     endpoint: DEFAULT_OLLAMA_ENDPOINT.to_string(),
                     mode: "fallback-local".to_string(),
                     local_only: true,
+                    active_profile: "balanced".to_string(),
+                    available_profiles: available_profiles(),
                     active_model: None,
                     available_models: Vec::new(),
                     gemma3_models: Vec::new(),
@@ -2227,7 +2607,8 @@ mod tests {
             },
         );
 
-        let explain = build_structured_explain(&document, "explique le blocage");
+        let explain =
+            build_structured_explain(&document, "explique le blocage", AiProfilePreset::Furnace);
 
         assert!(
             explain
@@ -2241,5 +2622,7 @@ mod tests {
                 .iter()
                 .any(|command| command.kind == "simulation.run.start")
         );
+        assert_eq!(explain.runtime_profile, "furnace");
+        assert!(explain.critique_passes.len() >= 2);
     }
 }

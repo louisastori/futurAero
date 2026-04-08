@@ -253,14 +253,28 @@ pub struct JobEnvelope {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
+pub struct PluginContribution {
+    pub kind: String,
+    pub target: String,
+    pub title: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct PluginManifest {
     pub id: String,
     pub plugin_id: String,
     pub version: String,
+    #[serde(default = "default_plugin_release_channel")]
+    pub release_channel: String,
     pub capabilities: Vec<String>,
     pub permissions: Vec<String>,
+    #[serde(default)]
+    pub contributions: Vec<PluginContribution>,
     pub entrypoints: Vec<String>,
     pub compatibility: Vec<String>,
+    #[serde(default)]
+    pub signature: Option<String>,
     pub status: String,
 }
 
@@ -438,12 +452,26 @@ pub struct AiProposedCommand {
 #[serde(rename_all = "camelCase")]
 pub struct AiStructuredExplain {
     pub summary: String,
+    #[serde(default = "default_ai_runtime_profile")]
+    pub runtime_profile: String,
     pub context_refs: Vec<AiContextReference>,
     pub confidence: f64,
     pub risk_level: AiRiskLevel,
     pub limitations: Vec<String>,
+    #[serde(default)]
+    pub critique_passes: Vec<AiCritiquePass>,
     pub proposed_commands: Vec<AiProposedCommand>,
     pub explanation: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AiCritiquePass {
+    pub stage: String,
+    pub summary: String,
+    pub confidence_delta: f64,
+    pub issues: Vec<String>,
+    pub adjustments: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -452,12 +480,26 @@ pub struct AiSessionLog {
     pub session_id: String,
     pub user_intent: String,
     pub mode: String,
+    #[serde(default = "default_ai_runtime_profile")]
+    pub runtime_profile: String,
     pub model_info: String,
+    #[serde(default)]
+    pub critic_model_info: Option<String>,
+    #[serde(default)]
+    pub critique_pass_count: usize,
     pub context_refs: Vec<AiContextReference>,
     pub prompt_hash: String,
     pub response_hash: String,
     pub created_suggestion_ids: Vec<String>,
     pub accepted_suggestion_ids: Vec<String>,
+}
+
+fn default_plugin_release_channel() -> String {
+    "stable".to_string()
+}
+
+fn default_ai_runtime_profile() -> String {
+    "balanced".to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -616,6 +658,7 @@ mod tests {
     fn ai_structured_explain_serializes_with_required_fields() {
         let explain = AiStructuredExplain {
             summary: "Collision detectee sur la pince".to_string(),
+            runtime_profile: "balanced".to_string(),
             context_refs: vec![AiContextReference {
                 entity_id: Some("ent_run_001".to_string()),
                 role: "source".to_string(),
@@ -624,6 +667,14 @@ mod tests {
             confidence: 0.82,
             risk_level: AiRiskLevel::High,
             limitations: vec!["Aucun replay perception disponible.".to_string()],
+            critique_passes: vec![AiCritiquePass {
+                stage: "critic".to_string(),
+                summary: "La confiance est reduite car aucun replay perception n est disponible."
+                    .to_string(),
+                confidence_delta: -0.08,
+                issues: vec!["absence de replay perception".to_string()],
+                adjustments: vec!["confidence lowered".to_string()],
+            }],
             proposed_commands: vec![AiProposedCommand {
                 kind: "simulation.run.start".to_string(),
                 target_id: Some("ent_run_001".to_string()),
@@ -635,7 +686,9 @@ mod tests {
         let json = serde_json::to_value(explain).expect("structured explain should serialize");
         assert_eq!(json["confidence"], 0.82);
         assert_eq!(json["riskLevel"], "high");
+        assert_eq!(json["runtimeProfile"], "balanced");
         assert_eq!(json["contextRefs"][0]["path"], "summary.collisionCount");
+        assert_eq!(json["critiquePasses"][0]["stage"], "critic");
         assert_eq!(json["proposedCommands"][0]["kind"], "simulation.run.start");
     }
 }

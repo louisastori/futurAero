@@ -12,6 +12,9 @@ faero-assembly = { path = "../../../crates/faero-assembly" }
 faero-core = { path = "../../../crates/faero-core" }
 faero-geometry = { path = "../../../crates/faero-geometry" }
 faero-integration = { path = "../../../crates/faero-integration" }
+faero-commissioning = { path = "../../../crates/faero-commissioning" }
+faero-optimization = { path = "../../../crates/faero-optimization" }
+faero-perception = { path = "../../../crates/faero-perception" }
 faero-plugin-host = { path = "../../../crates/faero-plugin-host" }
 faero-robotics = { path = "../../../crates/faero-robotics" }
 faero-safety = { path = "../../../crates/faero-safety" }

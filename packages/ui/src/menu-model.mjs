@@ -276,6 +276,37 @@ const menuDefinitions = [
         translationKey: "menu_item.simulation.safety_analysis",
         command: "analyze.safety",
       },
+      { type: "separator" },
+      {
+        id: "simulation.perception_run",
+        label: "Run Perception",
+        translationKey: "menu_item.simulation.perception_run",
+        command: "perception.run.start",
+      },
+      {
+        id: "simulation.integration_replay",
+        label: "Replay Degraded Link",
+        translationKey: "menu_item.simulation.integration_replay",
+        command: "integration.replay.degraded",
+      },
+      {
+        id: "simulation.commissioning_session",
+        label: "Start Commissioning",
+        translationKey: "menu_item.simulation.commissioning_session",
+        command: "commissioning.session.start",
+      },
+      {
+        id: "simulation.as_built_compare",
+        label: "Compare As-Built",
+        translationKey: "menu_item.simulation.as_built_compare",
+        command: "commissioning.compare.as_built",
+      },
+      {
+        id: "simulation.optimization_run",
+        label: "Run Optimization",
+        translationKey: "menu_item.simulation.optimization_run",
+        command: "optimization.run.start",
+      },
     ],
   },
   {

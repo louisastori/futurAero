@@ -9,7 +9,10 @@ use std::{
 
 use faero_ai::{
     AiChatResponse, AiConversationMessage, AiRuntimeStatus, chat_with_project,
-    query_runtime_status as query_ai_runtime_status,
+    query_runtime_status_with_profile as query_ai_runtime_status,
+};
+use faero_commissioning::{
+    AsBuiltMeasurement, CommissioningCapture, compare_as_built, start_commissioning_session,
 };
 use faero_assembly::{
     AssemblySolveReport, AssemblySolveStatus, MateConstraint, MateType, Occurrence, Transform3D,
@@ -20,15 +23,25 @@ use faero_geometry::{
     ExtrusionDefinition, MaterialProfile, SketchConstraintState, rectangular_profile,
     regenerate_extrusion,
 };
+use faero_integration::{
+    IntegrationStubRegistry, degraded_wireless_profile, stub_bluetooth_endpoint,
+    stub_opcua_endpoint, stub_plc_endpoint, stub_robot_controller_endpoint, stub_ros2_endpoint,
+    stub_wifi_endpoint,
+};
+use faero_optimization::{run_study, seeded_study};
+use faero_perception::{
+    NominalSceneTarget, PointCloudFrame, calibrate_rig, run_perception, seeded_sensor_rig,
+};
 use faero_plugin_host::validate_manifest;
 use faero_robotics::{CartesianPose, RobotTarget, validate_sequence};
 use faero_safety::{SafetyInterlock, SafetyStatus, SafetyZone, SafetyZoneKind, evaluate_safety};
 use faero_sim::{SimulationRequest, SimulationStatus, run_simulation};
 use faero_types::{
     AiSessionLog, ControlTransition, ControllerState, ControllerStateMachine, EntityRecord,
-    ExternalEndpoint, PluginManifest, ProjectDocument, QosProfile, ScheduledSignalChange,
-    SignalAssignment, SignalComparator, SignalCondition, SignalDefinition, SignalKind, SignalValue,
-    SimulationContactPair, StreamDirection, TelemetryStream, TimingProfile,
+    ExternalEndpoint, NetworkCaptureDataset, PluginContribution, PluginManifest, ProjectDocument,
+    QosProfile, ScheduledSignalChange, SignalAssignment, SignalComparator, SignalCondition,
+    SignalDefinition, SignalKind, SignalValue, SimulationContactPair, StreamDirection,
+    TelemetryStream, TimingProfile,
 };
 use serde::Serialize;
 use tauri::{
@@ -90,8 +103,13 @@ struct EntitySummary {
     part_geometry: Option<PartGeometrySummary>,
     assembly_summary: Option<AssemblyEntitySummary>,
     robot_cell_summary: Option<RobotCellEntitySummary>,
+    sensor_rig_summary: Option<SensorRigEntitySummary>,
     simulation_run_summary: Option<SimulationRunEntitySummary>,
     safety_report_summary: Option<SafetyReportEntitySummary>,
+    perception_run_summary: Option<PerceptionRunEntitySummary>,
+    commissioning_session_summary: Option<CommissioningSessionEntitySummary>,
+    as_built_comparison_summary: Option<AsBuiltComparisonEntitySummary>,
+    optimization_study_summary: Option<OptimizationStudyEntitySummary>,
 }
 
 #[derive(Serialize, Clone)]
@@ -155,6 +173,52 @@ struct SafetyReportEntitySummary {
     active_zone_count: usize,
     blocking_interlock_count: usize,
     advisory_zone_count: usize,
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct SensorRigEntitySummary {
+    sensor_count: usize,
+    lidar_count: usize,
+    sample_rate_hz: f64,
+    calibration_status: Option<String>,
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct PerceptionRunEntitySummary {
+    status: String,
+    frame_count: usize,
+    average_coverage_ratio: f64,
+    unknown_obstacle_count: u32,
+    deviation_count: usize,
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct CommissioningSessionEntitySummary {
+    status: String,
+    progress_ratio: f64,
+    capture_count: usize,
+    adjustment_count: usize,
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct AsBuiltComparisonEntitySummary {
+    accepted_count: usize,
+    rejected_count: usize,
+    average_deviation_mm: f64,
+    max_deviation_mm: f64,
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct OptimizationStudyEntitySummary {
+    candidate_count: usize,
+    objective_count: usize,
+    best_candidate_id: Option<String>,
+    best_score: f64,
 }
 
 #[derive(Serialize, Clone)]
@@ -593,6 +657,7 @@ impl WorkspaceSession {
             session_id: session_id.clone(),
             user_intent: message.to_string(),
             mode: "explain".to_string(),
+            runtime_profile: response.runtime.active_profile.clone(),
             model_info: format!(
                 "{}:{}",
                 response.runtime.provider,
@@ -602,6 +667,12 @@ impl WorkspaceSession {
                     .clone()
                     .unwrap_or_else(|| response.runtime.mode.clone())
             ),
+            critic_model_info: Some(format!(
+                "{}:{}:critic",
+                response.runtime.provider,
+                response.runtime.active_profile
+            )),
+            critique_pass_count: structured.critique_passes.len(),
             context_refs: structured.context_refs.clone(),
             prompt_hash: stable_hash(message),
             response_hash: stable_hash(&response.answer),
@@ -616,7 +687,10 @@ impl WorkspaceSession {
                 "sessionId": session_log.session_id,
                 "userIntent": session_log.user_intent,
                 "mode": session_log.mode,
+                "runtimeProfile": session_log.runtime_profile,
                 "modelInfo": session_log.model_info,
+                "criticModelInfo": session_log.critic_model_info,
+                "critiquePassCount": session_log.critique_pass_count,
                 "contextRefs": session_log.context_refs,
                 "promptHash": session_log.prompt_hash,
                 "responseHash": session_log.response_hash,
@@ -625,7 +699,8 @@ impl WorkspaceSession {
                 "tags": ["ai", "journal"],
                 "parameterSet": {
                     "createdSuggestionCount": created_suggestion_ids.len(),
-                    "runtimeAvailable": response.runtime.available
+                    "runtimeAvailable": response.runtime.available,
+                    "critiquePassCount": structured.critique_passes.len()
                 }
             }),
         );
@@ -655,18 +730,21 @@ impl WorkspaceSession {
                 "runtime": response.runtime.clone(),
                 "references": response.references.clone(),
                 "summary": structured.summary.clone(),
+                "runtimeProfile": structured.runtime_profile.clone(),
                 "contextRefs": structured.context_refs.clone(),
                 "confidence": structured.confidence,
                 "riskLevel": risk_level,
                 "reviewStatus": "pending",
                 "limitations": structured.limitations.clone(),
+                "critiquePasses": structured.critique_passes.clone(),
                 "proposedCommands": structured.proposed_commands.clone(),
                 "explanation": structured.explanation.clone(),
-                "tags": ["ai", "explain", "local"],
+                "tags": ["ai", "explain", "local", response.runtime.active_profile.clone()],
                 "parameterSet": {
                     "confidence": structured.confidence,
                     "referenceCount": response.references.len(),
-                    "proposedCommandCount": structured.proposed_commands.len()
+                    "proposedCommandCount": structured.proposed_commands.len(),
+                    "critiquePassCount": structured.critique_passes.len()
                 }
             }),
         );
@@ -1028,27 +1106,25 @@ impl WorkspaceSession {
             }
             "entity.create.sensor_rig" => {
                 let index = self.graph.entity_count() + 1;
-                let entity = sample_entity(
-                    "SensorRig",
+                let (entity, summary) = build_sensor_rig_entity(
                     &format!("ent_rig_{index:03}"),
                     &format!("SensorRig-{index:03}"),
-                    serde_json::json!({
-                        "sensorTypes": ["lidar", "camera"],
-                        "source": "desktop_session"
-                    }),
-                );
+                )?;
                 self.graph
                     .apply_command(CoreCommand::CreateEntity(entity))
                     .map_err(|error| error.to_string())?;
                 Ok(CommandResult {
                     command_id: command_id.to_string(),
                     status: "applied".to_string(),
-                    message: "rig capteurs ajoute".to_string(),
+                    message: format!(
+                        "rig capteurs ajoute: {} capteur(s) | {} lidar(s)",
+                        summary.sensor_count, summary.lidar_count
+                    ),
                 })
             }
             "entity.create.external_endpoint" => {
                 let endpoint_index = self.graph.endpoint_count() + 1;
-                let (endpoint, stream) = sample_wireless_endpoint_with_stream(endpoint_index);
+                let (endpoint, stream) = sample_endpoint_with_stream(endpoint_index);
                 self.graph
                     .apply_command(CoreCommand::RegisterEndpoint(endpoint))
                     .map_err(|error| error.to_string())?;
@@ -1058,7 +1134,7 @@ impl WorkspaceSession {
                 Ok(CommandResult {
                     command_id: command_id.to_string(),
                     status: "applied".to_string(),
-                    message: "endpoint externe et flux telemetrie ajoutes".to_string(),
+                    message: "endpoint externe, binding et flux telemetrie ajoutes".to_string(),
                 })
             }
             "plugin.manage" => {
@@ -1153,6 +1229,271 @@ impl WorkspaceSession {
                         summary.cycle_time_ms,
                         summary.collision_count,
                         summary.signal_sample_count
+                    ),
+                })
+            }
+            "perception.run.start" => {
+                let sensor_rig = if let Some(existing) = self
+                    .graph
+                    .document()
+                    .nodes
+                    .values()
+                    .filter(|entity| sensor_rig_summary_from_entity(entity).is_some())
+                    .max_by(|left, right| left.id.cmp(&right.id))
+                    .cloned()
+                {
+                    existing
+                } else {
+                    let index = self.graph.entity_count() + 1;
+                    let (entity, _) = build_sensor_rig_entity(
+                        &format!("ent_rig_{index:03}"),
+                        &format!("SensorRig-{index:03}"),
+                    )?;
+                    self.graph
+                        .apply_command(CoreCommand::CreateEntity(entity.clone()))
+                        .map_err(|error| error.to_string())?;
+                    entity
+                };
+
+                let run_index = self.graph.entity_count() + 1;
+                let (entity, summary) = build_perception_run_entity(
+                    &format!("ent_perc_{run_index:03}"),
+                    &format!("PerceptionRun-{run_index:03}"),
+                    &sensor_rig,
+                )?;
+                self.graph
+                    .apply_command(CoreCommand::CreateEntity(entity.clone()))
+                    .map_err(|error| error.to_string())?;
+                self.push_system_activity("perception.run.completed", Some(entity.id));
+                Ok(CommandResult {
+                    command_id: command_id.to_string(),
+                    status: "applied".to_string(),
+                    message: format!(
+                        "run perception termine: {} | {} frame(s) | {} ecart(s)",
+                        summary.status, summary.frame_count, summary.deviation_count
+                    ),
+                })
+            }
+            "integration.replay.degraded" => {
+                let mut registry = IntegrationStubRegistry::seeded();
+                let endpoint_id = self
+                    .graph
+                    .document()
+                    .endpoints
+                    .keys()
+                    .find(|id| id.starts_with("ext_wifi") || id.starts_with("ext_ble"))
+                    .cloned()
+                    .unwrap_or_else(|| "ext_wifi_001".to_string());
+                registry.register_trace(NetworkCaptureDataset {
+                    id: format!("trace_{endpoint_id}"),
+                    endpoint_id: endpoint_id.clone(),
+                    capture_type: "pcap".to_string(),
+                    timestamp_range: "2026-04-08T08:00:00Z/2026-04-08T08:00:12Z".to_string(),
+                    asset_refs: vec![
+                        format!("captures/{endpoint_id}/trace_001.pcap"),
+                        format!("captures/{endpoint_id}/trace_001.sidecar.json"),
+                    ],
+                    link_metrics: registry
+                        .simulate_link(&endpoint_id, None)
+                        .unwrap_or_default(),
+                    status: "ready".to_string(),
+                });
+                let report = registry
+                    .replay_trace(&format!("trace_{endpoint_id}"), Some(&degraded_wireless_profile()))
+                    .ok_or_else(|| "trace industrielle introuvable".to_string())?;
+                let entity = sample_entity(
+                    "IndustrialReplay",
+                    &format!("ent_replay_{:03}", self.graph.entity_count() + 1),
+                    "IndustrialReplay",
+                    serde_json::json!({
+                        "endpointId": endpoint_id,
+                        "summary": {
+                            "sampleCount": report.sample_count,
+                            "degraded": report.degraded,
+                            "latencyMs": report.effective_metrics.latency_ms,
+                            "dropRate": report.effective_metrics.drop_rate
+                        },
+                        "tags": ["integration", "replay", "wireless"]
+                    }),
+                );
+                self.graph
+                    .apply_command(CoreCommand::CreateEntity(entity.clone()))
+                    .map_err(|error| error.to_string())?;
+                self.push_system_activity("integration.replay.completed", Some(entity.id));
+                Ok(CommandResult {
+                    command_id: command_id.to_string(),
+                    status: "applied".to_string(),
+                    message: format!(
+                        "replay degrade: {} echantillon(s) | latence {:?} ms | drop {:?}",
+                        report.sample_count,
+                        report.effective_metrics.latency_ms,
+                        report.effective_metrics.drop_rate
+                    ),
+                })
+            }
+            "commissioning.session.start" => {
+                let perception_run = if let Some(existing) = self
+                    .graph
+                    .document()
+                    .nodes
+                    .values()
+                    .filter(|entity| perception_run_summary_from_entity(entity).is_some())
+                    .max_by(|left, right| left.id.cmp(&right.id))
+                    .cloned()
+                {
+                    existing
+                } else {
+                    let rig_index = self.graph.entity_count() + 1;
+                    let (rig_entity, _) = build_sensor_rig_entity(
+                        &format!("ent_rig_{rig_index:03}"),
+                        &format!("SensorRig-{rig_index:03}"),
+                    )?;
+                    self.graph
+                        .apply_command(CoreCommand::CreateEntity(rig_entity.clone()))
+                        .map_err(|error| error.to_string())?;
+                    let run_index = self.graph.entity_count() + 1;
+                    let (run_entity, _) = build_perception_run_entity(
+                        &format!("ent_perc_{run_index:03}"),
+                        &format!("PerceptionRun-{run_index:03}"),
+                        &rig_entity,
+                    )?;
+                    self.graph
+                        .apply_command(CoreCommand::CreateEntity(run_entity.clone()))
+                        .map_err(|error| error.to_string())?;
+                    run_entity
+                };
+                let session_index = self.graph.entity_count() + 1;
+                let (entity, summary) = build_commissioning_session_entity(
+                    &format!("ent_comm_{session_index:03}"),
+                    &format!("CommissioningSession-{session_index:03}"),
+                    &perception_run,
+                )?;
+                self.graph
+                    .apply_command(CoreCommand::CreateEntity(entity.clone()))
+                    .map_err(|error| error.to_string())?;
+                self.push_system_activity("commissioning.session.started", Some(entity.id));
+                Ok(CommandResult {
+                    command_id: command_id.to_string(),
+                    status: "applied".to_string(),
+                    message: format!(
+                        "session commissioning ouverte: {:.0}% | {} capture(s)",
+                        summary.progress_ratio * 100.0,
+                        summary.capture_count
+                    ),
+                })
+            }
+            "commissioning.compare.as_built" => {
+                let session = if let Some(existing) = self
+                    .graph
+                    .document()
+                    .nodes
+                    .values()
+                    .filter(|entity| commissioning_session_summary_from_entity(entity).is_some())
+                    .max_by(|left, right| left.id.cmp(&right.id))
+                    .cloned()
+                {
+                    existing
+                } else {
+                    let perception_index = self.graph.entity_count() + 1;
+                    let (rig_entity, _) = build_sensor_rig_entity(
+                        &format!("ent_rig_{perception_index:03}"),
+                        &format!("SensorRig-{perception_index:03}"),
+                    )?;
+                    self.graph
+                        .apply_command(CoreCommand::CreateEntity(rig_entity.clone()))
+                        .map_err(|error| error.to_string())?;
+                    let (run_entity, _) = build_perception_run_entity(
+                        &format!("ent_perc_{:03}", self.graph.entity_count() + 1),
+                        &format!("PerceptionRun-{:03}", self.graph.entity_count() + 1),
+                        &rig_entity,
+                    )?;
+                    self.graph
+                        .apply_command(CoreCommand::CreateEntity(run_entity.clone()))
+                        .map_err(|error| error.to_string())?;
+                    let (session_entity, _) = build_commissioning_session_entity(
+                        &format!("ent_comm_{:03}", self.graph.entity_count() + 1),
+                        &format!("CommissioningSession-{:03}", self.graph.entity_count() + 1),
+                        &run_entity,
+                    )?;
+                    self.graph
+                        .apply_command(CoreCommand::CreateEntity(session_entity.clone()))
+                        .map_err(|error| error.to_string())?;
+                    session_entity
+                };
+                let comparison_index = self.graph.entity_count() + 1;
+                let (entity, summary) = build_as_built_comparison_entity(
+                    &format!("ent_ab_{comparison_index:03}"),
+                    &format!("AsBuiltComparison-{comparison_index:03}"),
+                    &session,
+                )?;
+                self.graph
+                    .apply_command(CoreCommand::CreateEntity(entity.clone()))
+                    .map_err(|error| error.to_string())?;
+                self.push_system_activity("commissioning.compare.completed", Some(entity.id));
+                Ok(CommandResult {
+                    command_id: command_id.to_string(),
+                    status: "applied".to_string(),
+                    message: format!(
+                        "comparaison as-built: {} ok | {} ko | {:.2} mm max",
+                        summary.accepted_count, summary.rejected_count, summary.max_deviation_mm
+                    ),
+                })
+            }
+            "optimization.run.start" => {
+                let comparison = if let Some(existing) = self
+                    .graph
+                    .document()
+                    .nodes
+                    .values()
+                    .filter(|entity| as_built_comparison_summary_from_entity(entity).is_some())
+                    .max_by(|left, right| left.id.cmp(&right.id))
+                    .cloned()
+                {
+                    existing
+                } else {
+                    let session_index = self.graph.entity_count() + 1;
+                    let session = sample_entity(
+                        "CommissioningSession",
+                        &format!("ent_comm_{session_index:03}"),
+                        &format!("CommissioningSession-{session_index:03}"),
+                        serde_json::json!({
+                            "summary": {
+                                "status": "capturing",
+                                "progressRatio": 0.6,
+                                "captureCount": 2,
+                                "adjustmentCount": 2
+                            }
+                        }),
+                    );
+                    self.graph
+                        .apply_command(CoreCommand::CreateEntity(session.clone()))
+                        .map_err(|error| error.to_string())?;
+                    let (comparison_entity, _) = build_as_built_comparison_entity(
+                        &format!("ent_ab_{:03}", self.graph.entity_count() + 1),
+                        &format!("AsBuiltComparison-{:03}", self.graph.entity_count() + 1),
+                        &session,
+                    )?;
+                    self.graph
+                        .apply_command(CoreCommand::CreateEntity(comparison_entity.clone()))
+                        .map_err(|error| error.to_string())?;
+                    comparison_entity
+                };
+                let study_index = self.graph.entity_count() + 1;
+                let (entity, summary) = build_optimization_study_entity(
+                    &format!("ent_opt_{study_index:03}"),
+                    &format!("OptimizationStudy-{study_index:03}"),
+                    &comparison,
+                )?;
+                self.graph
+                    .apply_command(CoreCommand::CreateEntity(entity.clone()))
+                    .map_err(|error| error.to_string())?;
+                self.push_system_activity("optimization.run.completed", Some(entity.id));
+                Ok(CommandResult {
+                    command_id: command_id.to_string(),
+                    status: "applied".to_string(),
+                    message: format!(
+                        "optimisation terminee: {} candidat(s) | meilleur {:?} | {:.2}",
+                        summary.candidate_count, summary.best_candidate_id, summary.best_score
                     ),
                 })
             }
@@ -1409,8 +1750,14 @@ fn build_project_snapshot_from_document(
             let part_geometry = part_geometry_summary_from_entity(entity);
             let assembly_summary = assembly_summary_from_entity(entity);
             let robot_cell_summary = robot_cell_summary_from_entity(entity);
+            let sensor_rig_summary = sensor_rig_summary_from_entity(entity);
             let simulation_run_summary = simulation_run_summary_from_entity(entity);
             let safety_report_summary = safety_report_summary_from_entity(entity);
+            let perception_run_summary = perception_run_summary_from_entity(entity);
+            let commissioning_session_summary =
+                commissioning_session_summary_from_entity(entity);
+            let as_built_comparison_summary = as_built_comparison_summary_from_entity(entity);
+            let optimization_study_summary = optimization_study_summary_from_entity(entity);
             EntitySummary {
                 id: entity.id.clone(),
                 entity_type: entity.entity_type.clone(),
@@ -1428,6 +1775,11 @@ fn build_project_snapshot_from_document(
                             .map(format_robot_cell_entity_detail)
                     })
                     .or_else(|| {
+                        sensor_rig_summary
+                            .as_ref()
+                            .map(format_sensor_rig_entity_detail)
+                    })
+                    .or_else(|| {
                         simulation_run_summary
                             .as_ref()
                             .map(format_simulation_run_entity_detail)
@@ -1437,12 +1789,37 @@ fn build_project_snapshot_from_document(
                             .as_ref()
                             .map(format_safety_report_entity_detail)
                     })
+                    .or_else(|| {
+                        perception_run_summary
+                            .as_ref()
+                            .map(format_perception_run_entity_detail)
+                    })
+                    .or_else(|| {
+                        commissioning_session_summary
+                            .as_ref()
+                            .map(format_commissioning_session_entity_detail)
+                    })
+                    .or_else(|| {
+                        as_built_comparison_summary
+                            .as_ref()
+                            .map(format_as_built_comparison_entity_detail)
+                    })
+                    .or_else(|| {
+                        optimization_study_summary
+                            .as_ref()
+                            .map(format_optimization_study_entity_detail)
+                    })
                     .or_else(|| generic_entity_detail(entity)),
                 part_geometry,
                 assembly_summary,
                 robot_cell_summary,
+                sensor_rig_summary,
                 simulation_run_summary,
                 safety_report_summary,
+                perception_run_summary,
+                commissioning_session_summary,
+                as_built_comparison_summary,
+                optimization_study_summary,
             }
         })
         .collect::<Vec<_>>();
@@ -2366,6 +2743,304 @@ fn build_safety_report_entity(
     Ok((entity, summary))
 }
 
+fn sample_perception_frames() -> Vec<PointCloudFrame> {
+    vec![
+        PointCloudFrame {
+            point_count: 1_200,
+            coverage_ratio: 0.82,
+            timestamp_ms: 0,
+            observed_obstacle_count: 2,
+        },
+        PointCloudFrame {
+            point_count: 1_420,
+            coverage_ratio: 0.88,
+            timestamp_ms: 80,
+            observed_obstacle_count: 3,
+        },
+        PointCloudFrame {
+            point_count: 1_510,
+            coverage_ratio: 0.91,
+            timestamp_ms: 160,
+            observed_obstacle_count: 3,
+        },
+    ]
+}
+
+fn sample_nominal_scene_targets() -> Vec<NominalSceneTarget> {
+    vec![
+        NominalSceneTarget {
+            id: "fixture_pick".to_string(),
+            label: "Pick fixture".to_string(),
+            expected_clearance_mm: 12.0,
+        },
+        NominalSceneTarget {
+            id: "fixture_place".to_string(),
+            label: "Place fixture".to_string(),
+            expected_clearance_mm: 12.0,
+        },
+    ]
+}
+
+fn build_sensor_rig_entity(
+    id: &str,
+    name: &str,
+) -> Result<(EntityRecord, SensorRigEntitySummary), String> {
+    let rig = seeded_sensor_rig(id.to_string(), name.to_string());
+    let calibration = calibrate_rig(&rig, 2.5, 0.4).map_err(|error| error.to_string())?;
+    let summary = SensorRigEntitySummary {
+        sensor_count: rig.mounts.len(),
+        lidar_count: rig
+            .mounts
+            .iter()
+            .filter(|mount| {
+                matches!(
+                    mount.sensor_kind,
+                    faero_perception::SensorKind::Lidar2d
+                        | faero_perception::SensorKind::Lidar3d
+                        | faero_perception::SensorKind::SafetyLidar
+                )
+            })
+            .count(),
+        sample_rate_hz: rig
+            .mounts
+            .iter()
+            .map(|mount| mount.sample_rate_hz as f64)
+            .fold(0.0, f64::max),
+        calibration_status: Some(calibration.status.clone()),
+    };
+    let entity = sample_entity(
+        "SensorRig",
+        id,
+        name,
+        serde_json::json!({
+            "baseFrameId": rig.base_frame_id,
+            "mounts": serde_json::to_value(&rig.mounts).map_err(|error| error.to_string())?,
+            "calibration": serde_json::to_value(&calibration).map_err(|error| error.to_string())?,
+            "tags": ["perception", "sensor_rig"],
+            "parameterSet": {
+                "sensorCount": summary.sensor_count,
+                "lidarCount": summary.lidar_count,
+                "sampleRateHz": summary.sample_rate_hz
+            }
+        }),
+    );
+
+    Ok((entity, summary))
+}
+
+fn build_perception_run_entity(
+    id: &str,
+    name: &str,
+    rig_entity: &EntityRecord,
+) -> Result<(EntityRecord, PerceptionRunEntitySummary), String> {
+    let rig = seeded_sensor_rig(rig_entity.id.clone(), rig_entity.name.clone());
+    let calibration = calibrate_rig(&rig, 2.5, 0.4).map_err(|error| error.to_string())?;
+    let run = run_perception(
+        &rig,
+        &calibration,
+        &sample_perception_frames(),
+        &sample_nominal_scene_targets(),
+    )
+    .map_err(|error| error.to_string())?;
+    let summary = PerceptionRunEntitySummary {
+        status: run.status.clone(),
+        frame_count: run.frame_count,
+        average_coverage_ratio: run.average_coverage_ratio as f64,
+        unknown_obstacle_count: run.unknown_obstacle_count,
+        deviation_count: run.comparison.deviation_count,
+    };
+    let entity = sample_entity(
+        "PerceptionRun",
+        id,
+        name,
+        serde_json::json!({
+            "rigId": rig_entity.id.clone(),
+            "summary": {
+                "status": summary.status.clone(),
+                "frameCount": summary.frame_count,
+                "averageCoverageRatio": summary.average_coverage_ratio,
+                "unknownObstacleCount": summary.unknown_obstacle_count,
+                "deviationCount": summary.deviation_count
+            },
+            "job": {
+                "jobId": format!("job_{}", id.trim_start_matches("ent_")),
+                "status": "completed",
+                "progress": 1.0,
+                "phase": "compare",
+            },
+            "frames": serde_json::to_value(sample_perception_frames()).map_err(|error| error.to_string())?,
+            "occupancyMap": serde_json::to_value(&run.occupancy_cells).map_err(|error| error.to_string())?,
+            "comparison": serde_json::to_value(&run.comparison).map_err(|error| error.to_string())?,
+            "progressSamples": serde_json::to_value(&run.progress_samples).map_err(|error| error.to_string())?,
+            "tags": ["perception", "artifact"],
+            "parameterSet": {
+                "frameCount": summary.frame_count,
+                "status": summary.status.clone()
+            }
+        }),
+    );
+
+    Ok((entity, summary))
+}
+
+fn build_commissioning_session_entity(
+    id: &str,
+    name: &str,
+    perception_run: &EntityRecord,
+) -> Result<(EntityRecord, CommissioningSessionEntitySummary), String> {
+    let captures = vec![
+        CommissioningCapture {
+            id: format!("cap_{}_01", id.trim_start_matches("ent_")),
+            source: "lidar".to_string(),
+            capture_type: "point_cloud".to_string(),
+            asset_ref: format!("captures/{}/scan_001.pcd", perception_run.id),
+        },
+        CommissioningCapture {
+            id: format!("cap_{}_02", id.trim_start_matches("ent_")),
+            source: "wifi".to_string(),
+            capture_type: "network_trace".to_string(),
+            asset_ref: format!("captures/{}/trace_001.pcap", perception_run.id),
+        },
+    ];
+    let session = start_commissioning_session(id.to_string(), captures);
+    let summary = CommissioningSessionEntitySummary {
+        status: session.status.clone(),
+        progress_ratio: session.progress_ratio as f64,
+        capture_count: session.captures.len(),
+        adjustment_count: session.adjustments.len(),
+    };
+    let entity = sample_entity(
+        "CommissioningSession",
+        id,
+        name,
+        serde_json::json!({
+            "perceptionRunId": perception_run.id.clone(),
+            "captures": serde_json::to_value(&session.captures).map_err(|error| error.to_string())?,
+            "adjustments": serde_json::to_value(&session.adjustments).map_err(|error| error.to_string())?,
+            "summary": {
+                "status": summary.status.clone(),
+                "progressRatio": summary.progress_ratio,
+                "captureCount": summary.capture_count,
+                "adjustmentCount": summary.adjustment_count
+            },
+            "tags": ["commissioning", "field"],
+            "parameterSet": {
+                "progressRatio": summary.progress_ratio
+            }
+        }),
+    );
+
+    Ok((entity, summary))
+}
+
+fn build_as_built_comparison_entity(
+    id: &str,
+    name: &str,
+    session: &EntityRecord,
+) -> Result<(EntityRecord, AsBuiltComparisonEntitySummary), String> {
+    let measurements = vec![
+        AsBuiltMeasurement {
+            id: "m_001".to_string(),
+            target_id: "fixture_pick".to_string(),
+            deviation_mm: 0.8,
+            tolerance_mm: 1.0,
+            source_capture_id: "cap_001".to_string(),
+        },
+        AsBuiltMeasurement {
+            id: "m_002".to_string(),
+            target_id: "fixture_place".to_string(),
+            deviation_mm: 1.7,
+            tolerance_mm: 1.0,
+            source_capture_id: "cap_002".to_string(),
+        },
+    ];
+    let comparison = compare_as_built(measurements);
+    let summary = AsBuiltComparisonEntitySummary {
+        accepted_count: comparison.accepted_count,
+        rejected_count: comparison.rejected_count,
+        average_deviation_mm: comparison.average_deviation_mm as f64,
+        max_deviation_mm: comparison.max_deviation_mm as f64,
+    };
+    let entity = sample_entity(
+        "AsBuiltComparison",
+        id,
+        name,
+        serde_json::json!({
+            "sessionId": session.id.clone(),
+            "measurements": serde_json::to_value(&comparison.measurements).map_err(|error| error.to_string())?,
+            "summary": {
+                "acceptedCount": summary.accepted_count,
+                "rejectedCount": summary.rejected_count,
+                "averageDeviationMm": summary.average_deviation_mm,
+                "maxDeviationMm": summary.max_deviation_mm
+            },
+            "tags": ["commissioning", "as_built"],
+            "parameterSet": {
+                "measurementCount": comparison.measurements.len()
+            }
+        }),
+    );
+
+    Ok((entity, summary))
+}
+
+fn build_optimization_study_entity(
+    id: &str,
+    name: &str,
+    comparison: &EntityRecord,
+) -> Result<(EntityRecord, OptimizationStudyEntitySummary), String> {
+    let mut study = seeded_study(id.to_string());
+    let max_deviation_mm = comparison
+        .data
+        .get("summary")
+        .and_then(|summary| summary.get("maxDeviationMm"))
+        .and_then(|value| value.as_f64())
+        .unwrap_or(0.0);
+    if max_deviation_mm > 1.0
+        && let Some(variable) = study.variables.first_mut()
+    {
+        variable.current = 0.78;
+    }
+    let report = run_study(&study).map_err(|error| error.to_string())?;
+    let best_score = report
+        .ranked_candidates
+        .first()
+        .map(|candidate| candidate.score as f64)
+        .unwrap_or(0.0);
+    let summary = OptimizationStudyEntitySummary {
+        candidate_count: report.candidate_count,
+        objective_count: study.objectives.len(),
+        best_candidate_id: report.best_candidate_id.clone(),
+        best_score,
+    };
+    let entity = sample_entity(
+        "OptimizationStudy",
+        id,
+        name,
+        serde_json::json!({
+            "comparisonId": comparison.id.clone(),
+            "objectives": serde_json::to_value(&study.objectives).map_err(|error| error.to_string())?,
+            "constraints": serde_json::to_value(&study.constraints).map_err(|error| error.to_string())?,
+            "variables": serde_json::to_value(&study.variables).map_err(|error| error.to_string())?,
+            "candidates": serde_json::to_value(&study.candidates).map_err(|error| error.to_string())?,
+            "rankedCandidates": serde_json::to_value(&report.ranked_candidates).map_err(|error| error.to_string())?,
+            "summary": {
+                "candidateCount": summary.candidate_count,
+                "objectiveCount": summary.objective_count,
+                "bestCandidateId": summary.best_candidate_id.clone(),
+                "bestScore": summary.best_score
+            },
+            "tags": ["optimization", "study"],
+            "parameterSet": {
+                "candidateCount": summary.candidate_count,
+                "objectiveCount": summary.objective_count
+            }
+        }),
+    );
+
+    Ok((entity, summary))
+}
+
 fn number_from_value(value: &serde_json::Value, key: &str) -> Option<f64> {
     value.get(key)?.as_f64()
 }
@@ -2642,6 +3317,103 @@ fn safety_report_summary_from_entity(entity: &EntityRecord) -> Option<SafetyRepo
     })
 }
 
+fn sensor_rig_summary_from_entity(entity: &EntityRecord) -> Option<SensorRigEntitySummary> {
+    if entity.entity_type != "SensorRig" {
+        return None;
+    }
+
+    let mounts = entity.data.get("mounts")?.as_array()?;
+    let sample_rate_hz = mounts
+        .iter()
+        .filter_map(|mount| mount.get("sampleRateHz").and_then(|value| value.as_f64()))
+        .max_by(f64::total_cmp)
+        .unwrap_or(0.0);
+    Some(SensorRigEntitySummary {
+        sensor_count: mounts.len(),
+        lidar_count: mounts
+            .iter()
+            .filter(|mount| {
+                mount.get("sensorKind")
+                    .and_then(|value| value.as_str())
+                    .is_some_and(|kind| kind.contains("lidar"))
+            })
+            .count(),
+        sample_rate_hz,
+        calibration_status: entity
+            .data
+            .get("calibration")
+            .and_then(|value| value.get("status"))
+            .and_then(|value| value.as_str())
+            .map(str::to_string),
+    })
+}
+
+fn perception_run_summary_from_entity(entity: &EntityRecord) -> Option<PerceptionRunEntitySummary> {
+    if entity.entity_type != "PerceptionRun" {
+        return None;
+    }
+
+    let summary = entity.data.get("summary")?;
+    Some(PerceptionRunEntitySummary {
+        status: string_from_value(summary, "status")?,
+        frame_count: summary.get("frameCount")?.as_u64()? as usize,
+        average_coverage_ratio: number_from_value(summary, "averageCoverageRatio")?,
+        unknown_obstacle_count: summary.get("unknownObstacleCount")?.as_u64()? as u32,
+        deviation_count: summary.get("deviationCount")?.as_u64()? as usize,
+    })
+}
+
+fn commissioning_session_summary_from_entity(
+    entity: &EntityRecord,
+) -> Option<CommissioningSessionEntitySummary> {
+    if entity.entity_type != "CommissioningSession" {
+        return None;
+    }
+
+    let summary = entity.data.get("summary")?;
+    Some(CommissioningSessionEntitySummary {
+        status: string_from_value(summary, "status")?,
+        progress_ratio: number_from_value(summary, "progressRatio")?,
+        capture_count: summary.get("captureCount")?.as_u64()? as usize,
+        adjustment_count: summary.get("adjustmentCount")?.as_u64()? as usize,
+    })
+}
+
+fn as_built_comparison_summary_from_entity(
+    entity: &EntityRecord,
+) -> Option<AsBuiltComparisonEntitySummary> {
+    if entity.entity_type != "AsBuiltComparison" {
+        return None;
+    }
+
+    let summary = entity.data.get("summary")?;
+    Some(AsBuiltComparisonEntitySummary {
+        accepted_count: summary.get("acceptedCount")?.as_u64()? as usize,
+        rejected_count: summary.get("rejectedCount")?.as_u64()? as usize,
+        average_deviation_mm: number_from_value(summary, "averageDeviationMm")?,
+        max_deviation_mm: number_from_value(summary, "maxDeviationMm")?,
+    })
+}
+
+fn optimization_study_summary_from_entity(
+    entity: &EntityRecord,
+) -> Option<OptimizationStudyEntitySummary> {
+    if entity.entity_type != "OptimizationStudy" {
+        return None;
+    }
+
+    let summary = entity.data.get("summary")?;
+    Some(OptimizationStudyEntitySummary {
+        candidate_count: summary.get("candidateCount")?.as_u64()? as usize,
+        objective_count: summary.get("objectiveCount")?.as_u64()? as usize,
+        best_candidate_id: summary
+            .get("bestCandidateId")
+            .and_then(|value| value.as_str())
+            .map(str::to_string),
+        best_score: number_from_value(summary, "bestScore")?,
+    })
+}
+
 fn format_signal_value(value: &serde_json::Value) -> String {
     match value {
         serde_json::Value::Bool(value) => value.to_string(),
@@ -2710,6 +3482,20 @@ fn generic_entity_detail(entity: &EntityRecord) -> Option<String> {
                 .and_then(|value| value.as_f64())
                 .unwrap_or(0.0)
         )),
+        "IndustrialReplay" => Some(format!(
+            "{} sample(s) | latency {:?} ms",
+            entity
+                .data
+                .get("summary")
+                .and_then(|value| value.get("sampleCount"))
+                .and_then(|value| value.as_u64())
+                .unwrap_or(0),
+            entity
+                .data
+                .get("summary")
+                .and_then(|value| value.get("latencyMs"))
+                .and_then(|value| value.as_u64())
+        )),
         _ => None,
     }
 }
@@ -2752,18 +3538,86 @@ fn format_safety_report_entity_detail(summary: &SafetyReportEntitySummary) -> St
     )
 }
 
-fn sample_wireless_endpoint_with_stream(index: usize) -> (ExternalEndpoint, TelemetryStream) {
-    let mut endpoint = faero_integration::stub_wifi_endpoint();
-    endpoint.id = format!("ext_wifi_{index:03}");
-    endpoint.name = format!("Wireless Edge {index:03}");
-    endpoint.addressing.host = Some(format!("wireless-edge-{index:03}.local"));
-    endpoint.signal_map_ids = vec![format!("sig_wireless_{index:03}")];
+fn format_sensor_rig_entity_detail(summary: &SensorRigEntitySummary) -> String {
+    format!(
+        "{} sensor(s) | {} lidar | {} Hz",
+        summary.sensor_count, summary.lidar_count, summary.sample_rate_hz
+    )
+}
+
+fn format_perception_run_entity_detail(summary: &PerceptionRunEntitySummary) -> String {
+    format!(
+        "{} | {} frame(s) | {} unknown",
+        summary.status, summary.frame_count, summary.unknown_obstacle_count
+    )
+}
+
+fn format_commissioning_session_entity_detail(
+    summary: &CommissioningSessionEntitySummary,
+) -> String {
+    format!(
+        "{} | {:.0}% | {} capture(s)",
+        summary.status,
+        summary.progress_ratio * 100.0,
+        summary.capture_count
+    )
+}
+
+fn format_as_built_comparison_entity_detail(summary: &AsBuiltComparisonEntitySummary) -> String {
+    format!(
+        "{} ok | {} ko | {:.2} mm",
+        summary.accepted_count, summary.rejected_count, summary.max_deviation_mm
+    )
+}
+
+fn format_optimization_study_entity_detail(summary: &OptimizationStudyEntitySummary) -> String {
+    format!(
+        "{} obj | {} cand | {:.2}",
+        summary.objective_count, summary.candidate_count, summary.best_score
+    )
+}
+
+fn sample_endpoint_with_stream(index: usize) -> (ExternalEndpoint, TelemetryStream) {
+    let endpoint_kind = (index - 1) % 6;
+    let mut endpoint = match endpoint_kind {
+        0 => stub_ros2_endpoint(),
+        1 => stub_opcua_endpoint(),
+        2 => stub_plc_endpoint(),
+        3 => stub_robot_controller_endpoint(),
+        4 => stub_wifi_endpoint(),
+        _ => stub_bluetooth_endpoint(),
+    };
+
+    let endpoint_prefix = match &endpoint.endpoint_type {
+        faero_types::EndpointType::Ros2 => "ros2",
+        faero_types::EndpointType::Opcua => "opcua",
+        faero_types::EndpointType::Plc => "plc",
+        faero_types::EndpointType::RobotController => "robot",
+        faero_types::EndpointType::WifiDevice => "wifi",
+        _ => "ble",
+    };
+    endpoint.id = format!("ext_{endpoint_prefix}_{index:03}");
+    endpoint.name = format!("{} {index:03}", endpoint.name);
+    if endpoint.addressing.host.is_some() {
+        endpoint.addressing.host = Some(format!("{endpoint_prefix}-{index:03}.local"));
+    }
+    if endpoint.addressing.device_id.is_some() {
+        endpoint.addressing.device_id = Some(format!("{endpoint_prefix}-device-{index:03}"));
+    }
+    endpoint.signal_map_ids = vec![format!("sig_{endpoint_prefix}_{index:03}")];
 
     let stream = TelemetryStream {
-        id: format!("str_wifi_{index:03}"),
-        name: format!("Telemetry-{index:03}"),
+        id: format!("str_{endpoint_prefix}_{index:03}"),
+        name: format!("Telemetry-{endpoint_prefix}-{index:03}"),
         endpoint_id: endpoint.id.clone(),
-        stream_type: "mqtt_topic".to_string(),
+        stream_type: match &endpoint.endpoint_type {
+            faero_types::EndpointType::Ros2 => "ros2_topic".to_string(),
+            faero_types::EndpointType::Opcua => "opcua_subscription".to_string(),
+            faero_types::EndpointType::Plc => "plc_tag".to_string(),
+            faero_types::EndpointType::RobotController => "robot_status".to_string(),
+            faero_types::EndpointType::WifiDevice => "mqtt_topic".to_string(),
+            _ => "gatt_characteristic".to_string(),
+        },
         direction: StreamDirection::Inbound,
         codec_profile: serde_json::json!({ "encoding": "json" }),
         schema_ref: "schemas/telemetry/bumper-status.schema.json".to_string(),
@@ -2786,10 +3640,24 @@ fn sample_plugin_manifest(index: usize, plugin_id: &str) -> PluginManifest {
         id: format!("ent_plugin_{index:03}"),
         plugin_id: plugin_id.to_string(),
         version: "0.1.0".to_string(),
+        release_channel: "stable".to_string(),
         capabilities: vec!["panel".to_string(), "command".to_string()],
         permissions: vec!["project.read".to_string(), "plugin.ui.mount".to_string()],
+        contributions: vec![
+            PluginContribution {
+                kind: "panel".to_string(),
+                target: "workspace.right".to_string(),
+                title: "Desktop Runtime".to_string(),
+            },
+            PluginContribution {
+                kind: "command".to_string(),
+                target: "project.export".to_string(),
+                title: "Project Export Hook".to_string(),
+            },
+        ],
         entrypoints: vec!["plugins/desktop-runtime/index.js".to_string()],
         compatibility: vec!["faero-core@0.1".to_string()],
+        signature: Some(format!("sha256:plugin-{index:03}")),
         status: "installed".to_string(),
     }
 }
@@ -2917,8 +3785,8 @@ fn workspace_reject_ai_suggestion(
 }
 
 #[tauri::command]
-fn ai_runtime_status() -> AiRuntimeStatus {
-    query_ai_runtime_status()
+fn ai_runtime_status(selected_profile: Option<String>) -> AiRuntimeStatus {
+    query_ai_runtime_status(selected_profile.as_deref())
 }
 
 #[tauri::command]
@@ -2927,6 +3795,7 @@ fn ai_chat_send_message(
     locale: String,
     history: Vec<AiConversationMessage>,
     selected_model: Option<String>,
+    selected_profile: Option<String>,
     state: State<'_, SharedWorkspace>,
 ) -> Result<AiChatResponse, String> {
     let document = {
@@ -2939,6 +3808,7 @@ fn ai_chat_send_message(
         &history,
         &message,
         selected_model.as_deref(),
+        selected_profile.as_deref(),
     )
     .map_err(|error| error.to_string())?;
 
@@ -3095,6 +3965,32 @@ fn build_native_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<tauri::men
         Some("CmdOrCtrl+B"),
     )?;
     let simulation_safety = build_menu_item(app, "analyze.safety", "Safety Analysis", None)?;
+    let simulation_perception =
+        build_menu_item(app, "perception.run.start", "Run Perception", None)?;
+    let simulation_replay = build_menu_item(
+        app,
+        "integration.replay.degraded",
+        "Replay Degraded Link",
+        None,
+    )?;
+    let simulation_commissioning = build_menu_item(
+        app,
+        "commissioning.session.start",
+        "Start Commissioning",
+        None,
+    )?;
+    let simulation_as_built = build_menu_item(
+        app,
+        "commissioning.compare.as_built",
+        "Compare As-Built",
+        None,
+    )?;
+    let simulation_optimization = build_menu_item(
+        app,
+        "optimization.run.start",
+        "Run Optimization",
+        None,
+    )?;
     let simulation_menu = SubmenuBuilder::new(app, "Simulation")
         .item(&simulation_start)
         .item(&simulation_stop)
@@ -3102,6 +3998,12 @@ fn build_native_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<tauri::men
         .separator()
         .item(&simulation_regenerate)
         .item(&simulation_safety)
+        .separator()
+        .item(&simulation_perception)
+        .item(&simulation_replay)
+        .item(&simulation_commissioning)
+        .item(&simulation_as_built)
+        .item(&simulation_optimization)
         .build()?;
 
     let ai_focus = build_menu_item(
@@ -3553,6 +4455,12 @@ mod tests {
                 endpoint: "http://127.0.0.1:11434".to_string(),
                 mode: "test".to_string(),
                 local_only: true,
+                active_profile: "furnace".to_string(),
+                available_profiles: vec![
+                    "balanced".to_string(),
+                    "max".to_string(),
+                    "furnace".to_string(),
+                ],
                 active_model: Some("gemma3:27b".to_string()),
                 available_models: vec!["gemma3:27b".to_string()],
                 gemma3_models: vec!["gemma3:27b".to_string()],
@@ -3561,6 +4469,7 @@ mod tests {
             references: vec![format!("entity:{}", part.id)],
             structured: Some(faero_types::AiStructuredExplain {
                 summary: "Change la piece".to_string(),
+                runtime_profile: "furnace".to_string(),
                 context_refs: vec![faero_types::AiContextReference {
                     entity_id: Some(part.id.clone()),
                     role: "source".to_string(),
@@ -3569,6 +4478,14 @@ mod tests {
                 confidence: 0.84,
                 risk_level: faero_types::AiRiskLevel::Medium,
                 limitations: vec!["Test backend".to_string()],
+                critique_passes: vec![faero_types::AiCritiquePass {
+                    stage: "critic".to_string(),
+                    summary: "La suggestion reste plausible sur la base des artefacts locaux."
+                        .to_string(),
+                    confidence_delta: -0.02,
+                    issues: vec!["validation manuelle recommandee".to_string()],
+                    adjustments: vec!["review before apply".to_string()],
+                }],
                 proposed_commands: vec![faero_types::AiProposedCommand {
                     kind: "entity.properties.update".to_string(),
                     target_id: Some(part.id.clone()),
@@ -3630,5 +4547,83 @@ mod tests {
             .find(|entity| entity.id == rejected_id)
             .expect("rejected suggestion should exist");
         assert_eq!(rejected.data["reviewStatus"], "rejected");
+    }
+
+    #[test]
+    fn perception_commissioning_and_optimization_commands_create_summaries() {
+        let mut session = WorkspaceSession::empty("Session");
+
+        let perception = session
+            .execute_command("perception.run.start")
+            .expect("perception run should execute");
+        let commissioning = session
+            .execute_command("commissioning.session.start")
+            .expect("commissioning session should execute");
+        let comparison = session
+            .execute_command("commissioning.compare.as_built")
+            .expect("as-built comparison should execute");
+        let optimization = session
+            .execute_command("optimization.run.start")
+            .expect("optimization should execute");
+
+        let snapshot = session.snapshot();
+        assert_eq!(perception.status, "applied");
+        assert_eq!(commissioning.status, "applied");
+        assert_eq!(comparison.status, "applied");
+        assert_eq!(optimization.status, "applied");
+        assert!(snapshot
+            .entities
+            .iter()
+            .any(|entity| entity.sensor_rig_summary.is_some()));
+        assert!(snapshot
+            .entities
+            .iter()
+            .any(|entity| entity.perception_run_summary.is_some()));
+        assert!(snapshot
+            .entities
+            .iter()
+            .any(|entity| entity.commissioning_session_summary.is_some()));
+        assert!(snapshot
+            .entities
+            .iter()
+            .any(|entity| entity.as_built_comparison_summary.is_some()));
+        assert!(snapshot
+            .entities
+            .iter()
+            .any(|entity| entity.optimization_study_summary.is_some()));
+    }
+
+    #[test]
+    fn endpoint_creation_and_integration_replay_cover_multiple_endpoint_families() {
+        let mut session = WorkspaceSession::empty("Session");
+        for _ in 0..6 {
+            session
+                .execute_command("entity.create.external_endpoint")
+                .expect("endpoint creation should succeed");
+        }
+
+        let replay = session
+            .execute_command("integration.replay.degraded")
+            .expect("degraded replay should execute");
+        let snapshot = session.snapshot();
+
+        assert_eq!(snapshot.endpoints.len(), 6);
+        assert!(snapshot
+            .endpoints
+            .iter()
+            .any(|endpoint| endpoint.endpoint_type == "ros2"));
+        assert!(snapshot
+            .endpoints
+            .iter()
+            .any(|endpoint| endpoint.endpoint_type == "opcua"));
+        assert!(snapshot
+            .endpoints
+            .iter()
+            .any(|endpoint| endpoint.endpoint_type == "bluetooth_le"));
+        assert_eq!(replay.status, "applied");
+        assert!(snapshot
+            .entities
+            .iter()
+            .any(|entity| entity.entity_type == "IndustrialReplay"));
     }
 }

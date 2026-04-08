@@ -1,16 +1,28 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use faero_types::PluginManifest;
+use faero_types::{PluginContribution, PluginManifest};
 use thiserror::Error;
 
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum PluginHostError {
     #[error("plugin `{0}` requests unknown permission `{1}`")]
     UnknownPermission(String, String),
+    #[error("plugin `{0}` contributes unknown kind `{1}`")]
+    UnknownContributionKind(String, String),
     #[error("plugin `{0}` is already installed")]
     AlreadyInstalled(String),
     #[error("plugin `{0}` is not installed")]
     NotInstalled(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PluginAuditStatus {
+    pub plugin_id: String,
+    pub enabled: bool,
+    pub release_channel: String,
+    pub permission_count: usize,
+    pub contribution_count: usize,
+    pub signature_present: bool,
 }
 
 #[derive(Debug, Default)]
@@ -52,6 +64,20 @@ impl PluginRegistry {
     pub fn installed_count(&self) -> usize {
         self.installed.len()
     }
+
+    pub fn audit_statuses(&self) -> Vec<PluginAuditStatus> {
+        self.installed
+            .values()
+            .map(|manifest| PluginAuditStatus {
+                plugin_id: manifest.plugin_id.clone(),
+                enabled: self.enabled.contains(&manifest.plugin_id),
+                release_channel: manifest.release_channel.clone(),
+                permission_count: manifest.permissions.len(),
+                contribution_count: manifest.contributions.len(),
+                signature_present: manifest.signature.is_some(),
+            })
+            .collect()
+    }
 }
 
 pub fn allowed_permissions() -> BTreeSet<&'static str> {
@@ -64,6 +90,10 @@ pub fn allowed_permissions() -> BTreeSet<&'static str> {
     ])
 }
 
+pub fn allowed_contribution_kinds() -> BTreeSet<&'static str> {
+    BTreeSet::from(["panel", "command", "inspector_section", "report_view"])
+}
+
 pub fn validate_manifest(manifest: &PluginManifest) -> Result<(), PluginHostError> {
     let allowed = allowed_permissions();
     for permission in &manifest.permissions {
@@ -73,6 +103,24 @@ pub fn validate_manifest(manifest: &PluginManifest) -> Result<(), PluginHostErro
                 permission.clone(),
             ));
         }
+    }
+    let allowed_contributions = allowed_contribution_kinds();
+    for contribution in &manifest.contributions {
+        validate_contribution(manifest, contribution, &allowed_contributions)?;
+    }
+    Ok(())
+}
+
+fn validate_contribution(
+    manifest: &PluginManifest,
+    contribution: &PluginContribution,
+    allowed_contributions: &BTreeSet<&'static str>,
+) -> Result<(), PluginHostError> {
+    if !allowed_contributions.contains(contribution.kind.as_str()) {
+        return Err(PluginHostError::UnknownContributionKind(
+            manifest.plugin_id.clone(),
+            contribution.kind.clone(),
+        ));
     }
     Ok(())
 }
@@ -91,10 +139,17 @@ mod tests {
             id: "ent_plugin_001".to_string(),
             plugin_id: "plg.integration.viewer".to_string(),
             version: "0.1.0".to_string(),
+            release_channel: "stable".to_string(),
             capabilities: vec!["panel".to_string()],
             permissions: permission_values,
+            contributions: vec![PluginContribution {
+                kind: "panel".to_string(),
+                target: "workspace.right".to_string(),
+                title: "Integration Viewer".to_string(),
+            }],
             entrypoints: vec!["plugins/integration-viewer/index.js".to_string()],
             compatibility: vec!["faero-core@0.1".to_string()],
+            signature: Some("sha256:demo".to_string()),
             status: "installed".to_string(),
         }
     }
@@ -177,6 +232,16 @@ mod tests {
     }
 
     #[test]
+    fn allowed_contributions_contains_expected_kinds() {
+        let contributions = allowed_contribution_kinds();
+
+        assert!(contributions.contains("panel"));
+        assert!(contributions.contains("command"));
+        assert!(contributions.contains("inspector_section"));
+        assert!(contributions.contains("report_view"));
+    }
+
+    #[test]
     fn accepts_manifests_without_explicit_permissions() {
         let manifest = sample_manifest(Vec::new());
         assert_eq!(validate_manifest(&manifest), Ok(()));
@@ -191,5 +256,39 @@ mod tests {
             .install(invalid_manifest)
             .expect_err("invalid permissions should block installation");
         assert_eq!(registry.installed_count(), 0);
+    }
+
+    #[test]
+    fn rejects_unknown_contribution_kind_and_reports_audit_status() {
+        let invalid = PluginManifest {
+            contributions: vec![PluginContribution {
+                kind: "webhook".to_string(),
+                target: "workspace.right".to_string(),
+                title: "Webhook".to_string(),
+            }],
+            ..sample_manifest(vec!["project.read"])
+        };
+        let error = validate_manifest(&invalid).expect_err("invalid contribution should fail");
+        assert_eq!(
+            error,
+            PluginHostError::UnknownContributionKind(
+                "plg.integration.viewer".to_string(),
+                "webhook".to_string()
+            )
+        );
+
+        let mut registry = PluginRegistry::default();
+        registry
+            .install(sample_manifest(vec!["project.read", "plugin.ui.mount"]))
+            .expect("manifest should install");
+        registry
+            .enable("plg.integration.viewer")
+            .expect("plugin should enable");
+        let audits = registry.audit_statuses();
+        assert_eq!(audits.len(), 1);
+        assert!(audits[0].enabled);
+        assert_eq!(audits[0].release_channel, "stable");
+        assert_eq!(audits[0].contribution_count, 1);
+        assert!(audits[0].signature_present);
     }
 }
