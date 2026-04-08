@@ -3,7 +3,7 @@ export const defaultLocale = "fr";
 export const supportedLocales = [
   { id: "fr", label: "Francais" },
   { id: "en", label: "English" },
-  { id: "es", label: "Espanol" }
+  { id: "es", label: "Espanol" },
 ];
 
 const translations = {
@@ -11,6 +11,9 @@ const translations = {
     "menu.file": "Fichier",
     "menu.edit": "Edition",
     "menu.view": "Affichage",
+    "menu.insert": "Insertion",
+    "menu.simulation": "Simulation",
+    "menu.ai": "IA",
     "menu.git": "Git",
     "menu.project": "Projet",
     "menu.build": "Generation",
@@ -46,6 +49,20 @@ const translations = {
     "menu_item.view.viewport_3d": "Viewport 3D",
     "menu_item.view.simulation_timeline": "Timeline de simulation",
     "menu_item.view.telemetry_monitor": "Moniteur de telemetrie",
+    "menu_item.insert.add_part": "Ajouter une piece",
+    "menu_item.insert.add_assembly": "Ajouter un assemblage",
+    "menu_item.insert.add_robot_cell": "Ajouter une cellule robotique",
+    "menu_item.insert.add_sensor_rig": "Ajouter un rig capteurs",
+    "menu_item.insert.add_external_endpoint": "Ajouter un endpoint externe",
+    "menu_item.insert.project_properties": "Proprietes du projet",
+    "menu_item.simulation.start": "Demarrer la simulation",
+    "menu_item.simulation.stop": "Arreter la simulation",
+    "menu_item.simulation.step": "Pas de simulation",
+    "menu_item.simulation.rebuild_geometry": "Reconstruire la geometrie",
+    "menu_item.simulation.safety_analysis": "Analyse safety",
+    "menu_item.ai.focus_input": "Focus chat IA locale",
+    "menu_item.ai.show_panel": "Afficher l assistant IA",
+    "menu_item.ai.deep_explain": "Explication IA approfondie",
     "menu_item.git.commit": "Commit",
     "menu_item.git.push": "Push",
     "menu_item.git.pull": "Pull",
@@ -59,7 +76,8 @@ const translations = {
     "menu_item.build.regenerate_part": "Regenerer la piece",
     "menu_item.build.rebuild_assembly": "Reconstruire l assemblage",
     "menu_item.build.build_robot_cell": "Construire la cellule robotique",
-    "menu_item.build.prepare_commissioning": "Preparer le package commissioning",
+    "menu_item.build.prepare_commissioning":
+      "Preparer le package commissioning",
     "menu_item.debug.start_simulation": "Demarrer la simulation",
     "menu_item.debug.start_without_debugging": "Demarrer sans debogage",
     "menu_item.debug.stop": "Arreter",
@@ -113,12 +131,14 @@ const translations = {
     "ui.property.default_frame": "Repere par defaut",
     "ui.property.root_scene": "Scene racine",
     "ui.property.openspec_documents": "Documents OpenSpec",
-    "ui.property.no_openspec_documents": "Aucun document OpenSpec lisible dans cette session.",
+    "ui.property.no_openspec_documents":
+      "Aucun document OpenSpec lisible dans cette session.",
     "ui.property.linked_entities": "Entites liees",
     "ui.property.linked_endpoints": "Endpoints lies",
     "ui.property.tags": "Tags",
     "ui.property.parametric_parts": "Pieces parametriques",
-    "ui.property.no_parametric_parts": "Aucune piece parametrique regeneree dans cette session.",
+    "ui.property.no_parametric_parts":
+      "Aucune piece parametrique regeneree dans cette session.",
     "ui.property.parametric_editor": "Edition parametrique",
     "ui.property.width": "Largeur",
     "ui.property.height": "Hauteur",
@@ -144,7 +164,8 @@ const translations = {
     "ui.workspace.resize_left": "Redimensionner le panneau gauche",
     "ui.workspace.resize_right": "Redimensionner le panneau droit",
     "ui.output.recent_activity": "Activite recente",
-    "ui.output.no_activity": "Aucune activite commande/evenement pour cette fixture.",
+    "ui.output.no_activity":
+      "Aucune activite commande/evenement pour cette fixture.",
     "ui.output.raw_status": "Etat brut",
     "ui.activity.command": "commande",
     "ui.activity.event": "evenement",
@@ -156,10 +177,13 @@ const translations = {
     "ui.ai.no_model": "aucun modele",
     "ui.ai.endpoint": "Endpoint:",
     "ui.ai.model_label": "Modele Gemma3",
-    "ui.ai.model_hint": "Le modele selectionne sera utilise au prochain message.",
+    "ui.ai.model_hint":
+      "Le modele selectionne sera utilise au prochain message.",
     "ui.ai.model_unavailable": "Aucune variante gemma3 detectee localement.",
-    "ui.ai.no_messages": "Aucune discussion pour l instant. Le chat s appuie sur le projet charge et reste local.",
-    "ui.ai.placeholder": "Pose une question sur le projet courant, la simulation, l integration ou la safety...",
+    "ui.ai.no_messages":
+      "Aucune discussion pour l instant. Le chat s appuie sur le projet charge et reste local.",
+    "ui.ai.placeholder":
+      "Pose une question sur le projet courant, la simulation, l integration ou la safety...",
     "ui.ai.local_only": "Mode local uniquement",
     "ui.ai.send": "Envoyer",
     "ui.ai.sending": "Generation...",
@@ -167,51 +191,79 @@ const translations = {
     "ui.ai.badge": "IA locale",
     "ui.ai.focused": "Panneau Assistant IA local actif.",
     "ui.ai.prompt.summary": "Resume le projet courant",
-    "ui.ai.prompt.integration": "Quels endpoints et flux sont relies a ce projet ?",
+    "ui.ai.prompt.integration":
+      "Quels endpoints et flux sont relies a ce projet ?",
     "ui.ai.prompt.next_step": "Quel est le prochain jalon technique concret ?",
     "ui.command.run": "Executer",
     "ui.command.running": "Execution...",
     "ui.command.last_result": "Dernier resultat",
     "ui.command.no_result": "Aucune commande executee pendant cette session.",
-    "ui.command.project_opened": "Projet charge depuis la fixture selectionnee.",
-    "ui.command.recent_opened": "Fixture suivante ouverte depuis la liste recente.",
+    "ui.command.project_opened":
+      "Projet charge depuis la fixture selectionnee.",
+    "ui.command.recent_opened":
+      "Fixture suivante ouverte depuis la liste recente.",
     "ui.command.properties_opened": "Panneau Proprietes ouvert.",
     "ui.command.exit_requested": "Fermeture de l application demandee.",
-    "ui.command.exit_unavailable": "Fermeture indisponible dans cet apercu. Lance le shell Tauri pour fermer la fenetre.",
+    "ui.command.exit_unavailable":
+      "Fermeture indisponible dans cet apercu. Lance le shell Tauri pour fermer la fenetre.",
     "ui.command.regenerate_part": "Regenerer la piece",
-    "ui.command.regenerate_part_unavailable": "Aucune piece parametrique disponible pour la regeneration.",
-    "ui.command.invalid_part_dimensions": "Les dimensions de piece doivent etre strictement positives.",
-    "ui.output.problems": "Les checks critiques remontent ici: build, simulation, integration, couverture, plugins.",
+    "ui.command.regenerate_part_unavailable":
+      "Aucune piece parametrique disponible pour la regeneration.",
+    "ui.command.invalid_part_dimensions":
+      "Les dimensions de piece doivent etre strictement positives.",
+    "ui.output.problems":
+      "Les checks critiques remontent ici: build, simulation, integration, couverture, plugins.",
     "ui.viewport.reference_toolbar": "Scenes de reference",
     "ui.viewport.reference_caption": "Lecture de la scene",
-    "ui.viewport.reference_inspiration": "Reproduction originale inspiree des references fournies",
+    "ui.viewport.reference_inspiration":
+      "Reproduction originale inspiree des references fournies",
     "ui.viewport.reference_analysis": "Analyse extraite des images",
     "ui.viewport.reference_legend": "Legende",
     "ui.viewport.scene.turbofan.title": "Turbofan eclate",
-    "ui.viewport.scene.turbofan.summary": "Vue moteur avec separation lisible du fan, des etages internes et de l arbre central.",
-    "ui.viewport.scene.turbofan.analysis_1": "L image de reference montre une decomposition par etages pour lire le flux primaire, le rotor fan et la chaine compresseur turbine.",
-    "ui.viewport.scene.turbofan.analysis_2": "La reproduction dans l app privilegie les volumes concentriques et les ecarts entre modules pour garder une lecture maintenance claire.",
-    "ui.viewport.scene.turbofan.analysis_3": "Le code du viewport isole les familles visuelles utiles a un futur workbench moteur: pales, arbre coeur, carenage et stades rotor.",
+    "ui.viewport.scene.turbofan.summary":
+      "Vue moteur avec separation lisible du fan, des etages internes et de l arbre central.",
+    "ui.viewport.scene.turbofan.analysis_1":
+      "L image de reference montre une decomposition par etages pour lire le flux primaire, le rotor fan et la chaine compresseur turbine.",
+    "ui.viewport.scene.turbofan.analysis_2":
+      "La reproduction dans l app privilegie les volumes concentriques et les ecarts entre modules pour garder une lecture maintenance claire.",
+    "ui.viewport.scene.turbofan.analysis_3":
+      "Le code du viewport isole les familles visuelles utiles a un futur workbench moteur: pales, arbre coeur, carenage et stades rotor.",
     "ui.viewport.scene.airframe.title": "Cellule transparente",
-    "ui.viewport.scene.airframe.summary": "Vue cellule semi-transparente pour exposer structure primaire, enveloppe externe et systemes internes.",
-    "ui.viewport.scene.airframe.analysis_1": "Les references CATIA montrent une lecture simultanee de la peau, des cadres, des longerons et des systemes embarques.",
-    "ui.viewport.scene.airframe.analysis_2": "La scene reproduit cette logique avec une coque externe legere et des couches internes colorees pour la propulsion et le routage.",
-    "ui.viewport.scene.airframe.analysis_3": "Cette base permet ensuite d accrocher des workbenches structure, integration systeme et inspection de zones internes.",
+    "ui.viewport.scene.airframe.summary":
+      "Vue cellule semi-transparente pour exposer structure primaire, enveloppe externe et systemes internes.",
+    "ui.viewport.scene.airframe.analysis_1":
+      "Les references CATIA montrent une lecture simultanee de la peau, des cadres, des longerons et des systemes embarques.",
+    "ui.viewport.scene.airframe.analysis_2":
+      "La scene reproduit cette logique avec une coque externe legere et des couches internes colorees pour la propulsion et le routage.",
+    "ui.viewport.scene.airframe.analysis_3":
+      "Cette base permet ensuite d accrocher des workbenches structure, integration systeme et inspection de zones internes.",
     "ui.viewport.scene.wireframe.title": "Wireframe maintenance",
-    "ui.viewport.scene.wireframe.summary": "Vue filaire orientee inspection, acces outillage et lecture des volumes de maintenance.",
-    "ui.viewport.scene.wireframe.analysis_1": "L image source insiste sur la structure filaire et les repers de volume plus que sur le rendu matiere.",
-    "ui.viewport.scene.wireframe.analysis_2": "La reproduction met en avant les axes, les diagonales de lecture et une zone d acces pour retrouver un langage CAO atelier.",
-    "ui.viewport.scene.wireframe.analysis_3": "Ce preset sert de point de depart pour les vues de montage, d accessibilite et de verification de routage.",
+    "ui.viewport.scene.wireframe.summary":
+      "Vue filaire orientee inspection, acces outillage et lecture des volumes de maintenance.",
+    "ui.viewport.scene.wireframe.analysis_1":
+      "L image source insiste sur la structure filaire et les repers de volume plus que sur le rendu matiere.",
+    "ui.viewport.scene.wireframe.analysis_2":
+      "La reproduction met en avant les axes, les diagonales de lecture et une zone d acces pour retrouver un langage CAO atelier.",
+    "ui.viewport.scene.wireframe.analysis_3":
+      "Ce preset sert de point de depart pour les vues de montage, d accessibilite et de verification de routage.",
     "ui.viewport.scene.stress.title": "Carte de contraintes",
-    "ui.viewport.scene.stress.summary": "Visualisation type FEA d une piece tubulaire avec gradients de contraintes et points chauds identifies.",
-    "ui.viewport.scene.stress.analysis_1": "La reference montre une distribution de contraintes sur une piece ramifiee avec fortes concentrations aux jonctions.",
-    "ui.viewport.scene.stress.analysis_2": "Le viewport reproduit une echelle continue froid-vers-chaud et des foyers visibles pour les zones critiques.",
-    "ui.viewport.scene.stress.analysis_3": "Cette scene prepare un futur affichage de resultats solveur, legends quantitatives et selections par plage de charge.",
+    "ui.viewport.scene.stress.summary":
+      "Visualisation type FEA d une piece tubulaire avec gradients de contraintes et points chauds identifies.",
+    "ui.viewport.scene.stress.analysis_1":
+      "La reference montre une distribution de contraintes sur une piece ramifiee avec fortes concentrations aux jonctions.",
+    "ui.viewport.scene.stress.analysis_2":
+      "Le viewport reproduit une echelle continue froid-vers-chaud et des foyers visibles pour les zones critiques.",
+    "ui.viewport.scene.stress.analysis_3":
+      "Cette scene prepare un futur affichage de resultats solveur, legends quantitatives et selections par plage de charge.",
     "ui.viewport.scene.aero.title": "Heatmap aerodynamique",
-    "ui.viewport.scene.aero.summary": "Carte d ecoulement surfacique inspirant un futur workbench aero avec lecture d attachement et de separation.",
-    "ui.viewport.scene.aero.analysis_1": "La reference montre une aile coloree par etats d ecoulement et pertubations localisees sur la surface.",
-    "ui.viewport.scene.aero.analysis_2": "La reproduction met l accent sur la nappe principale, les streamlines et deux points de lecture pour les zones de transition.",
-    "ui.viewport.scene.aero.analysis_3": "Cette base sert a preparer un futur affichage CFD plus riche avec overlays pression, vitesse et zones detachees.",
+    "ui.viewport.scene.aero.summary":
+      "Carte d ecoulement surfacique inspirant un futur workbench aero avec lecture d attachement et de separation.",
+    "ui.viewport.scene.aero.analysis_1":
+      "La reference montre une aile coloree par etats d ecoulement et pertubations localisees sur la surface.",
+    "ui.viewport.scene.aero.analysis_2":
+      "La reproduction met l accent sur la nappe principale, les streamlines et deux points de lecture pour les zones de transition.",
+    "ui.viewport.scene.aero.analysis_3":
+      "Cette base sert a preparer un futur affichage CFD plus riche avec overlays pression, vitesse et zones detachees.",
     "ui.viewport.legend.primary_flow": "Flux primaire",
     "ui.viewport.legend.rotor_stage": "Etage rotor",
     "ui.viewport.legend.core_shaft": "Arbre coeur",
@@ -227,19 +279,23 @@ const translations = {
     "ui.viewport.legend.flow_attached": "Ecoulement attache",
     "ui.viewport.legend.flow_transition": "Zone de transition",
     "ui.viewport.legend.flow_detached": "Ecoulement detache",
-    "ui.viewport.caption": "Workbench aeronautique de reference branche au shell desktop pour reproduire des vues moteur, structure, FEA et aero.",
+    "ui.viewport.caption":
+      "Workbench aeronautique de reference branche au shell desktop pour reproduire des vues moteur, structure, FEA et aero.",
     "ui.locale.label": "Langue",
     "ui.fixture.label": "Projet de demonstration",
     "ui.fixture.empty": "Aucune fixture",
     "ui.fixture.loading": "Chargement...",
     "ui.problems.none_blocking": "0 bloquant",
     "ui.status.web_preview": "apercu web",
-    "ui.status.tauri": "tauri-rust"
+    "ui.status.tauri": "tauri-rust",
   },
   en: {
     "menu.file": "File",
     "menu.edit": "Edit",
     "menu.view": "View",
+    "menu.insert": "Insert",
+    "menu.simulation": "Simulation",
+    "menu.ai": "AI",
     "menu.git": "Git",
     "menu.project": "Project",
     "menu.build": "Build",
@@ -275,6 +331,20 @@ const translations = {
     "menu_item.view.viewport_3d": "3D Viewport",
     "menu_item.view.simulation_timeline": "Simulation Timeline",
     "menu_item.view.telemetry_monitor": "Telemetry Monitor",
+    "menu_item.insert.add_part": "Add Part",
+    "menu_item.insert.add_assembly": "Add Assembly",
+    "menu_item.insert.add_robot_cell": "Add Robot Cell",
+    "menu_item.insert.add_sensor_rig": "Add Sensor Rig",
+    "menu_item.insert.add_external_endpoint": "Add External Endpoint",
+    "menu_item.insert.project_properties": "Project Properties",
+    "menu_item.simulation.start": "Start Simulation",
+    "menu_item.simulation.stop": "Stop Simulation",
+    "menu_item.simulation.step": "Step Simulation",
+    "menu_item.simulation.rebuild_geometry": "Rebuild Geometry",
+    "menu_item.simulation.safety_analysis": "Safety Analysis",
+    "menu_item.ai.focus_input": "Focus Local AI Chat",
+    "menu_item.ai.show_panel": "Show AI Assistant",
+    "menu_item.ai.deep_explain": "AI Deep Explain",
     "menu_item.git.commit": "Commit",
     "menu_item.git.push": "Push",
     "menu_item.git.pull": "Pull",
@@ -342,12 +412,14 @@ const translations = {
     "ui.property.default_frame": "Default frame",
     "ui.property.root_scene": "Root scene",
     "ui.property.openspec_documents": "OpenSpec documents",
-    "ui.property.no_openspec_documents": "No readable OpenSpec document in this session.",
+    "ui.property.no_openspec_documents":
+      "No readable OpenSpec document in this session.",
     "ui.property.linked_entities": "Linked entities",
     "ui.property.linked_endpoints": "Linked endpoints",
     "ui.property.tags": "Tags",
     "ui.property.parametric_parts": "Parametric parts",
-    "ui.property.no_parametric_parts": "No regenerated parametric part in this session.",
+    "ui.property.no_parametric_parts":
+      "No regenerated parametric part in this session.",
     "ui.property.parametric_editor": "Parametric editor",
     "ui.property.width": "Width",
     "ui.property.height": "Height",
@@ -387,8 +459,10 @@ const translations = {
     "ui.ai.model_label": "Gemma3 Model",
     "ui.ai.model_hint": "The selected model will be used for the next message.",
     "ui.ai.model_unavailable": "No local gemma3 variant was detected.",
-    "ui.ai.no_messages": "No conversation yet. The chat stays grounded on the loaded project and remains local only.",
-    "ui.ai.placeholder": "Ask about the current project, simulation, integration, commissioning or safety...",
+    "ui.ai.no_messages":
+      "No conversation yet. The chat stays grounded on the loaded project and remains local only.",
+    "ui.ai.placeholder":
+      "Ask about the current project, simulation, integration, commissioning or safety...",
     "ui.ai.local_only": "Local-only mode",
     "ui.ai.send": "Send",
     "ui.ai.sending": "Generating...",
@@ -396,7 +470,8 @@ const translations = {
     "ui.ai.badge": "Local AI",
     "ui.ai.focused": "Local AI Assistant panel focused.",
     "ui.ai.prompt.summary": "Summarize the current project",
-    "ui.ai.prompt.integration": "Which endpoints and streams are connected to this project?",
+    "ui.ai.prompt.integration":
+      "Which endpoints and streams are connected to this project?",
     "ui.ai.prompt.next_step": "What is the next concrete technical milestone?",
     "ui.command.run": "Run",
     "ui.command.running": "Running...",
@@ -406,41 +481,66 @@ const translations = {
     "ui.command.recent_opened": "Next fixture opened from the recent list.",
     "ui.command.properties_opened": "Properties panel opened.",
     "ui.command.exit_requested": "Application close requested.",
-    "ui.command.exit_unavailable": "Close is unavailable in this preview. Launch the Tauri shell to close the window.",
+    "ui.command.exit_unavailable":
+      "Close is unavailable in this preview. Launch the Tauri shell to close the window.",
     "ui.command.regenerate_part": "Regenerate part",
-    "ui.command.regenerate_part_unavailable": "No parametric part is available for regeneration.",
-    "ui.command.invalid_part_dimensions": "Part dimensions must be strictly positive.",
-    "ui.output.problems": "Critical checks surface here: build, simulation, integration, coverage, plugins.",
+    "ui.command.regenerate_part_unavailable":
+      "No parametric part is available for regeneration.",
+    "ui.command.invalid_part_dimensions":
+      "Part dimensions must be strictly positive.",
+    "ui.output.problems":
+      "Critical checks surface here: build, simulation, integration, coverage, plugins.",
     "ui.viewport.reference_toolbar": "Reference scenes",
     "ui.viewport.reference_caption": "Scene reading",
-    "ui.viewport.reference_inspiration": "Original reproduction inspired by the provided references",
+    "ui.viewport.reference_inspiration":
+      "Original reproduction inspired by the provided references",
     "ui.viewport.reference_analysis": "Analysis extracted from the images",
     "ui.viewport.reference_legend": "Legend",
     "ui.viewport.scene.turbofan.title": "Exploded turbofan",
-    "ui.viewport.scene.turbofan.summary": "Engine view with readable fan, internal stages and central shaft separation.",
-    "ui.viewport.scene.turbofan.analysis_1": "The reference image emphasizes stage-by-stage decomposition to read the primary flow, fan rotor and compressor turbine chain.",
-    "ui.viewport.scene.turbofan.analysis_2": "The in-app reproduction favors concentric volumes and spacing between modules to keep a maintenance-oriented readout.",
-    "ui.viewport.scene.turbofan.analysis_3": "The viewport code isolates the visual families needed for a future engine workbench: blades, core shaft, casing and rotor stages.",
+    "ui.viewport.scene.turbofan.summary":
+      "Engine view with readable fan, internal stages and central shaft separation.",
+    "ui.viewport.scene.turbofan.analysis_1":
+      "The reference image emphasizes stage-by-stage decomposition to read the primary flow, fan rotor and compressor turbine chain.",
+    "ui.viewport.scene.turbofan.analysis_2":
+      "The in-app reproduction favors concentric volumes and spacing between modules to keep a maintenance-oriented readout.",
+    "ui.viewport.scene.turbofan.analysis_3":
+      "The viewport code isolates the visual families needed for a future engine workbench: blades, core shaft, casing and rotor stages.",
     "ui.viewport.scene.airframe.title": "Transparent airframe",
-    "ui.viewport.scene.airframe.summary": "Semi-transparent airframe view exposing primary structure, outer shell and internal systems.",
-    "ui.viewport.scene.airframe.analysis_1": "The CATIA references show skin, frames, spars and embedded systems at the same time.",
-    "ui.viewport.scene.airframe.analysis_2": "This scene reproduces that logic with a light external shell and colored internal layers for propulsion and routing.",
-    "ui.viewport.scene.airframe.analysis_3": "This becomes the base for future structure, system integration and internal inspection workbenches.",
+    "ui.viewport.scene.airframe.summary":
+      "Semi-transparent airframe view exposing primary structure, outer shell and internal systems.",
+    "ui.viewport.scene.airframe.analysis_1":
+      "The CATIA references show skin, frames, spars and embedded systems at the same time.",
+    "ui.viewport.scene.airframe.analysis_2":
+      "This scene reproduces that logic with a light external shell and colored internal layers for propulsion and routing.",
+    "ui.viewport.scene.airframe.analysis_3":
+      "This becomes the base for future structure, system integration and internal inspection workbenches.",
     "ui.viewport.scene.wireframe.title": "Maintenance wireframe",
-    "ui.viewport.scene.wireframe.summary": "Wireframe-oriented view for inspection, tool access and maintenance volume reading.",
-    "ui.viewport.scene.wireframe.analysis_1": "The source image focuses on structural wireframe and volume cues more than material rendering.",
-    "ui.viewport.scene.wireframe.analysis_2": "The reproduction highlights axes, reading diagonals and one access zone to recover a workshop CAD language.",
-    "ui.viewport.scene.wireframe.analysis_3": "This preset is a base for assembly, accessibility and routing verification views.",
+    "ui.viewport.scene.wireframe.summary":
+      "Wireframe-oriented view for inspection, tool access and maintenance volume reading.",
+    "ui.viewport.scene.wireframe.analysis_1":
+      "The source image focuses on structural wireframe and volume cues more than material rendering.",
+    "ui.viewport.scene.wireframe.analysis_2":
+      "The reproduction highlights axes, reading diagonals and one access zone to recover a workshop CAD language.",
+    "ui.viewport.scene.wireframe.analysis_3":
+      "This preset is a base for assembly, accessibility and routing verification views.",
     "ui.viewport.scene.stress.title": "Stress map",
-    "ui.viewport.scene.stress.summary": "FEA-style view of a tubular part with stress gradients and explicit hot spots.",
-    "ui.viewport.scene.stress.analysis_1": "The reference shows stress distribution on a branched part with strong concentrations around junctions.",
-    "ui.viewport.scene.stress.analysis_2": "The viewport reproduces a cold-to-hot scale and visible hotspots for critical zones.",
-    "ui.viewport.scene.stress.analysis_3": "This scene prepares future solver result rendering, quantitative legends and range-based filtering.",
+    "ui.viewport.scene.stress.summary":
+      "FEA-style view of a tubular part with stress gradients and explicit hot spots.",
+    "ui.viewport.scene.stress.analysis_1":
+      "The reference shows stress distribution on a branched part with strong concentrations around junctions.",
+    "ui.viewport.scene.stress.analysis_2":
+      "The viewport reproduces a cold-to-hot scale and visible hotspots for critical zones.",
+    "ui.viewport.scene.stress.analysis_3":
+      "This scene prepares future solver result rendering, quantitative legends and range-based filtering.",
     "ui.viewport.scene.aero.title": "Aerodynamic heatmap",
-    "ui.viewport.scene.aero.summary": "Surface flow map preparing a future aero workbench with attachment and separation reading.",
-    "ui.viewport.scene.aero.analysis_1": "The reference image colors a wing-like surface by flow state with localized disturbances.",
-    "ui.viewport.scene.aero.analysis_2": "The reproduction focuses on the main blanket, streamlines and two callouts for transition regions.",
-    "ui.viewport.scene.aero.analysis_3": "This is a base for richer CFD overlays with pressure, velocity and separated-flow regions.",
+    "ui.viewport.scene.aero.summary":
+      "Surface flow map preparing a future aero workbench with attachment and separation reading.",
+    "ui.viewport.scene.aero.analysis_1":
+      "The reference image colors a wing-like surface by flow state with localized disturbances.",
+    "ui.viewport.scene.aero.analysis_2":
+      "The reproduction focuses on the main blanket, streamlines and two callouts for transition regions.",
+    "ui.viewport.scene.aero.analysis_3":
+      "This is a base for richer CFD overlays with pressure, velocity and separated-flow regions.",
     "ui.viewport.legend.primary_flow": "Primary flow",
     "ui.viewport.legend.rotor_stage": "Rotor stage",
     "ui.viewport.legend.core_shaft": "Core shaft",
@@ -456,19 +556,23 @@ const translations = {
     "ui.viewport.legend.flow_attached": "Attached flow",
     "ui.viewport.legend.flow_transition": "Transition zone",
     "ui.viewport.legend.flow_detached": "Detached flow",
-    "ui.viewport.caption": "Reference aerospace workbench wired into the desktop shell to reproduce engine, structure, FEA and aero views.",
+    "ui.viewport.caption":
+      "Reference aerospace workbench wired into the desktop shell to reproduce engine, structure, FEA and aero views.",
     "ui.locale.label": "Language",
     "ui.fixture.label": "Demo project",
     "ui.fixture.empty": "No fixture",
     "ui.fixture.loading": "Loading...",
     "ui.problems.none_blocking": "0 blocking",
     "ui.status.web_preview": "web preview",
-    "ui.status.tauri": "tauri-rust"
+    "ui.status.tauri": "tauri-rust",
   },
   es: {
     "menu.file": "Archivo",
     "menu.edit": "Editar",
     "menu.view": "Ver",
+    "menu.insert": "Insertar",
+    "menu.simulation": "Simulacion",
+    "menu.ai": "IA",
     "menu.git": "Git",
     "menu.project": "Proyecto",
     "menu.build": "Compilar",
@@ -504,6 +608,20 @@ const translations = {
     "menu_item.view.viewport_3d": "Viewport 3D",
     "menu_item.view.simulation_timeline": "Linea de tiempo de simulacion",
     "menu_item.view.telemetry_monitor": "Monitor de telemetria",
+    "menu_item.insert.add_part": "Agregar pieza",
+    "menu_item.insert.add_assembly": "Agregar ensamblaje",
+    "menu_item.insert.add_robot_cell": "Agregar celda robotica",
+    "menu_item.insert.add_sensor_rig": "Agregar rig de sensores",
+    "menu_item.insert.add_external_endpoint": "Agregar endpoint externo",
+    "menu_item.insert.project_properties": "Propiedades del proyecto",
+    "menu_item.simulation.start": "Iniciar simulacion",
+    "menu_item.simulation.stop": "Detener simulacion",
+    "menu_item.simulation.step": "Paso de simulacion",
+    "menu_item.simulation.rebuild_geometry": "Reconstruir la geometria",
+    "menu_item.simulation.safety_analysis": "Analisis safety",
+    "menu_item.ai.focus_input": "Focus en el chat IA local",
+    "menu_item.ai.show_panel": "Mostrar asistente IA",
+    "menu_item.ai.deep_explain": "Explicacion IA profunda",
     "menu_item.git.commit": "Commit",
     "menu_item.git.push": "Push",
     "menu_item.git.pull": "Pull",
@@ -517,7 +635,8 @@ const translations = {
     "menu_item.build.regenerate_part": "Regenerar pieza",
     "menu_item.build.rebuild_assembly": "Reconstruir ensamblaje",
     "menu_item.build.build_robot_cell": "Construir celda robotica",
-    "menu_item.build.prepare_commissioning": "Preparar paquete de commissioning",
+    "menu_item.build.prepare_commissioning":
+      "Preparar paquete de commissioning",
     "menu_item.debug.start_simulation": "Iniciar simulacion",
     "menu_item.debug.start_without_debugging": "Iniciar sin depuracion",
     "menu_item.debug.stop": "Detener",
@@ -571,12 +690,14 @@ const translations = {
     "ui.property.default_frame": "Marco por defecto",
     "ui.property.root_scene": "Escena raiz",
     "ui.property.openspec_documents": "Documentos OpenSpec",
-    "ui.property.no_openspec_documents": "No hay documentos OpenSpec legibles en esta sesion.",
+    "ui.property.no_openspec_documents":
+      "No hay documentos OpenSpec legibles en esta sesion.",
     "ui.property.linked_entities": "Entidades vinculadas",
     "ui.property.linked_endpoints": "Endpoints vinculados",
     "ui.property.tags": "Tags",
     "ui.property.parametric_parts": "Piezas parametricas",
-    "ui.property.no_parametric_parts": "No hay ninguna pieza parametrica regenerada en esta sesion.",
+    "ui.property.no_parametric_parts":
+      "No hay ninguna pieza parametrica regenerada en esta sesion.",
     "ui.property.parametric_editor": "Edicion parametrica",
     "ui.property.width": "Anchura",
     "ui.property.height": "Altura",
@@ -602,7 +723,8 @@ const translations = {
     "ui.workspace.resize_left": "Redimensionar panel izquierdo",
     "ui.workspace.resize_right": "Redimensionar panel derecho",
     "ui.output.recent_activity": "Actividad reciente",
-    "ui.output.no_activity": "Sin actividad de comandos/eventos para este fixture.",
+    "ui.output.no_activity":
+      "Sin actividad de comandos/eventos para este fixture.",
     "ui.output.raw_status": "Estado bruto",
     "ui.activity.command": "comando",
     "ui.activity.event": "evento",
@@ -614,10 +736,14 @@ const translations = {
     "ui.ai.no_model": "sin modelo",
     "ui.ai.endpoint": "Endpoint:",
     "ui.ai.model_label": "Modelo Gemma3",
-    "ui.ai.model_hint": "El modelo seleccionado se usara en el proximo mensaje.",
-    "ui.ai.model_unavailable": "No se detecto ninguna variante local de gemma3.",
-    "ui.ai.no_messages": "Todavia no hay conversacion. El chat usa el proyecto cargado y se mantiene local.",
-    "ui.ai.placeholder": "Pregunta sobre el proyecto actual, la simulacion, la integracion, commissioning o safety...",
+    "ui.ai.model_hint":
+      "El modelo seleccionado se usara en el proximo mensaje.",
+    "ui.ai.model_unavailable":
+      "No se detecto ninguna variante local de gemma3.",
+    "ui.ai.no_messages":
+      "Todavia no hay conversacion. El chat usa el proyecto cargado y se mantiene local.",
+    "ui.ai.placeholder":
+      "Pregunta sobre el proyecto actual, la simulacion, la integracion, commissioning o safety...",
     "ui.ai.local_only": "Modo solo local",
     "ui.ai.send": "Enviar",
     "ui.ai.sending": "Generando...",
@@ -625,51 +751,79 @@ const translations = {
     "ui.ai.badge": "IA local",
     "ui.ai.focused": "Panel del Asistente IA local enfocado.",
     "ui.ai.prompt.summary": "Resume el proyecto actual",
-    "ui.ai.prompt.integration": "Que endpoints y flujos estan conectados a este proyecto?",
+    "ui.ai.prompt.integration":
+      "Que endpoints y flujos estan conectados a este proyecto?",
     "ui.ai.prompt.next_step": "Cual es el siguiente hito tecnico concreto?",
     "ui.command.run": "Ejecutar",
     "ui.command.running": "Ejecutando...",
     "ui.command.last_result": "Ultimo resultado",
     "ui.command.no_result": "Ningun comando ejecutado en esta sesion.",
-    "ui.command.project_opened": "Proyecto cargado desde el fixture seleccionado.",
-    "ui.command.recent_opened": "Se abrio el siguiente fixture de la lista reciente.",
+    "ui.command.project_opened":
+      "Proyecto cargado desde el fixture seleccionado.",
+    "ui.command.recent_opened":
+      "Se abrio el siguiente fixture de la lista reciente.",
     "ui.command.properties_opened": "Panel de Propiedades abierto.",
     "ui.command.exit_requested": "Se solicito el cierre de la aplicacion.",
-    "ui.command.exit_unavailable": "El cierre no esta disponible en esta vista previa. Inicia el shell Tauri para cerrar la ventana.",
+    "ui.command.exit_unavailable":
+      "El cierre no esta disponible en esta vista previa. Inicia el shell Tauri para cerrar la ventana.",
     "ui.command.regenerate_part": "Regenerar pieza",
-    "ui.command.regenerate_part_unavailable": "No hay ninguna pieza parametrica disponible para regenerar.",
-    "ui.command.invalid_part_dimensions": "Las dimensiones de la pieza deben ser estrictamente positivas.",
-    "ui.output.problems": "Los checks criticos aparecen aqui: build, simulacion, integracion, cobertura, plugins.",
+    "ui.command.regenerate_part_unavailable":
+      "No hay ninguna pieza parametrica disponible para regenerar.",
+    "ui.command.invalid_part_dimensions":
+      "Las dimensiones de la pieza deben ser estrictamente positivas.",
+    "ui.output.problems":
+      "Los checks criticos aparecen aqui: build, simulacion, integracion, cobertura, plugins.",
     "ui.viewport.reference_toolbar": "Escenas de referencia",
     "ui.viewport.reference_caption": "Lectura de la escena",
-    "ui.viewport.reference_inspiration": "Reproduccion original inspirada en las referencias proporcionadas",
+    "ui.viewport.reference_inspiration":
+      "Reproduccion original inspirada en las referencias proporcionadas",
     "ui.viewport.reference_analysis": "Analisis extraido de las imagenes",
     "ui.viewport.reference_legend": "Leyenda",
     "ui.viewport.scene.turbofan.title": "Turbofan explotado",
-    "ui.viewport.scene.turbofan.summary": "Vista de motor con separacion legible del fan, las etapas internas y el eje central.",
-    "ui.viewport.scene.turbofan.analysis_1": "La imagen de referencia destaca una descomposicion por etapas para leer el flujo primario, el rotor fan y la cadena compresor turbina.",
-    "ui.viewport.scene.turbofan.analysis_2": "La reproduccion en la app prioriza volumenes concentricos y separaciones entre modulos para mantener una lectura orientada al mantenimiento.",
-    "ui.viewport.scene.turbofan.analysis_3": "El codigo del viewport aisla las familias visuales utiles para un futuro workbench motor: palas, eje central, carcasa y etapas rotor.",
+    "ui.viewport.scene.turbofan.summary":
+      "Vista de motor con separacion legible del fan, las etapas internas y el eje central.",
+    "ui.viewport.scene.turbofan.analysis_1":
+      "La imagen de referencia destaca una descomposicion por etapas para leer el flujo primario, el rotor fan y la cadena compresor turbina.",
+    "ui.viewport.scene.turbofan.analysis_2":
+      "La reproduccion en la app prioriza volumenes concentricos y separaciones entre modulos para mantener una lectura orientada al mantenimiento.",
+    "ui.viewport.scene.turbofan.analysis_3":
+      "El codigo del viewport aisla las familias visuales utiles para un futuro workbench motor: palas, eje central, carcasa y etapas rotor.",
     "ui.viewport.scene.airframe.title": "Celula transparente",
-    "ui.viewport.scene.airframe.summary": "Vista de celula semi-transparente que expone estructura primaria, piel externa y sistemas internos.",
-    "ui.viewport.scene.airframe.analysis_1": "Las referencias CATIA muestran al mismo tiempo piel, marcos, largueros y sistemas embebidos.",
-    "ui.viewport.scene.airframe.analysis_2": "La escena reproduce esa logica con una carcasa externa ligera y capas internas coloreadas para propulsion y routing.",
-    "ui.viewport.scene.airframe.analysis_3": "Esto sirve como base para futuros workbenches de estructura, integracion de sistemas e inspeccion interna.",
+    "ui.viewport.scene.airframe.summary":
+      "Vista de celula semi-transparente que expone estructura primaria, piel externa y sistemas internos.",
+    "ui.viewport.scene.airframe.analysis_1":
+      "Las referencias CATIA muestran al mismo tiempo piel, marcos, largueros y sistemas embebidos.",
+    "ui.viewport.scene.airframe.analysis_2":
+      "La escena reproduce esa logica con una carcasa externa ligera y capas internas coloreadas para propulsion y routing.",
+    "ui.viewport.scene.airframe.analysis_3":
+      "Esto sirve como base para futuros workbenches de estructura, integracion de sistemas e inspeccion interna.",
     "ui.viewport.scene.wireframe.title": "Wireframe de mantenimiento",
-    "ui.viewport.scene.wireframe.summary": "Vista orientada a inspeccion, acceso de herramientas y lectura de volumenes de mantenimiento.",
-    "ui.viewport.scene.wireframe.analysis_1": "La imagen fuente insiste en la estructura wireframe y las referencias de volumen mas que en el render de material.",
-    "ui.viewport.scene.wireframe.analysis_2": "La reproduccion resalta ejes, diagonales de lectura y una zona de acceso para recuperar un lenguaje CAD de taller.",
-    "ui.viewport.scene.wireframe.analysis_3": "Este preset es una base para vistas de montaje, accesibilidad y verificacion de routing.",
+    "ui.viewport.scene.wireframe.summary":
+      "Vista orientada a inspeccion, acceso de herramientas y lectura de volumenes de mantenimiento.",
+    "ui.viewport.scene.wireframe.analysis_1":
+      "La imagen fuente insiste en la estructura wireframe y las referencias de volumen mas que en el render de material.",
+    "ui.viewport.scene.wireframe.analysis_2":
+      "La reproduccion resalta ejes, diagonales de lectura y una zona de acceso para recuperar un lenguaje CAD de taller.",
+    "ui.viewport.scene.wireframe.analysis_3":
+      "Este preset es una base para vistas de montaje, accesibilidad y verificacion de routing.",
     "ui.viewport.scene.stress.title": "Mapa de tensiones",
-    "ui.viewport.scene.stress.summary": "Visualizacion tipo FEA de una pieza tubular con gradientes de tension y puntos calientes explicitos.",
-    "ui.viewport.scene.stress.analysis_1": "La referencia muestra distribucion de tensiones en una pieza ramificada con fuertes concentraciones alrededor de las uniones.",
-    "ui.viewport.scene.stress.analysis_2": "El viewport reproduce una escala frio-a-caliente y hotspots visibles para las zonas criticas.",
-    "ui.viewport.scene.stress.analysis_3": "Esta escena prepara un futuro render de resultados de solver, leyendas cuantitativas y filtros por rango.",
+    "ui.viewport.scene.stress.summary":
+      "Visualizacion tipo FEA de una pieza tubular con gradientes de tension y puntos calientes explicitos.",
+    "ui.viewport.scene.stress.analysis_1":
+      "La referencia muestra distribucion de tensiones en una pieza ramificada con fuertes concentraciones alrededor de las uniones.",
+    "ui.viewport.scene.stress.analysis_2":
+      "El viewport reproduce una escala frio-a-caliente y hotspots visibles para las zonas criticas.",
+    "ui.viewport.scene.stress.analysis_3":
+      "Esta escena prepara un futuro render de resultados de solver, leyendas cuantitativas y filtros por rango.",
     "ui.viewport.scene.aero.title": "Heatmap aerodinamico",
-    "ui.viewport.scene.aero.summary": "Mapa superficial de flujo que prepara un futuro workbench aero con lectura de apego y separacion.",
-    "ui.viewport.scene.aero.analysis_1": "La referencia colorea una superficie tipo ala por estado de flujo con perturbaciones localizadas.",
-    "ui.viewport.scene.aero.analysis_2": "La reproduccion se centra en la manta principal, las lineas de corriente y dos llamados en zonas de transicion.",
-    "ui.viewport.scene.aero.analysis_3": "Esto sirve como base para overlays CFD mas ricos con presion, velocidad y zonas de flujo separado.",
+    "ui.viewport.scene.aero.summary":
+      "Mapa superficial de flujo que prepara un futuro workbench aero con lectura de apego y separacion.",
+    "ui.viewport.scene.aero.analysis_1":
+      "La referencia colorea una superficie tipo ala por estado de flujo con perturbaciones localizadas.",
+    "ui.viewport.scene.aero.analysis_2":
+      "La reproduccion se centra en la manta principal, las lineas de corriente y dos llamados en zonas de transicion.",
+    "ui.viewport.scene.aero.analysis_3":
+      "Esto sirve como base para overlays CFD mas ricos con presion, velocidad y zonas de flujo separado.",
     "ui.viewport.legend.primary_flow": "Flujo primario",
     "ui.viewport.legend.rotor_stage": "Etapa rotor",
     "ui.viewport.legend.core_shaft": "Eje central",
@@ -685,19 +839,24 @@ const translations = {
     "ui.viewport.legend.flow_attached": "Flujo adherido",
     "ui.viewport.legend.flow_transition": "Zona de transicion",
     "ui.viewport.legend.flow_detached": "Flujo separado",
-    "ui.viewport.caption": "Workbench aeroespacial de referencia conectado al shell desktop para reproducir vistas de motor, estructura, FEA y aero.",
+    "ui.viewport.caption":
+      "Workbench aeroespacial de referencia conectado al shell desktop para reproducir vistas de motor, estructura, FEA y aero.",
     "ui.locale.label": "Idioma",
     "ui.fixture.label": "Proyecto de demostracion",
     "ui.fixture.empty": "Sin fixture",
     "ui.fixture.loading": "Cargando...",
     "ui.problems.none_blocking": "0 bloqueos",
     "ui.status.web_preview": "vista web",
-    "ui.status.tauri": "tauri-rust"
-  }
+    "ui.status.tauri": "tauri-rust",
+  },
 };
 
 export function translate(locale, key, fallback = key) {
-  return translations[locale]?.[key] ?? translations[defaultLocale]?.[key] ?? fallback;
+  return (
+    translations[locale]?.[key] ??
+    translations[defaultLocale]?.[key] ??
+    fallback
+  );
 }
 
 export function hasTranslation(locale, key) {

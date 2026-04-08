@@ -1,8 +1,13 @@
 :root {
   color-scheme: dark;
-  font-family: "Segoe UI", "Segoe UI Variable", Tahoma, Geneva, Verdana, sans-serif;
+  font-family:
+    "Segoe UI", "Segoe UI Variable", Tahoma, Geneva, Verdana, sans-serif;
   background:
-    radial-gradient(circle at top left, rgba(63, 138, 255, 0.12), transparent 32%),
+    radial-gradient(
+      circle at top left,
+      rgba(63, 138, 255, 0.12),
+      transparent 32%
+    ),
     linear-gradient(180deg, #121821 0%, #0b1017 100%);
   color: #e6edf7;
 }
@@ -180,6 +185,20 @@ button {
   color: #8ea2ba;
 }
 
+.command-toast {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin: 10px 12px 0;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(88, 159, 255, 0.24);
+  background: rgba(13, 45, 95, 0.82);
+  color: #e9f3ff;
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.22);
+}
+
 .workspace {
   display: grid;
   grid-template-columns:
@@ -227,7 +246,9 @@ button {
   transform: translateX(-50%);
   border-radius: 999px;
   background: rgba(146, 182, 255, 0.24);
-  transition: background 120ms ease, opacity 120ms ease;
+  transition:
+    background 120ms ease,
+    opacity 120ms ease;
 }
 
 .workspace-resizer:hover::before,
@@ -518,7 +539,10 @@ button {
   color: #d8e6f7;
   padding: 8px 12px;
   cursor: pointer;
-  transition: background 120ms ease, border-color 120ms ease, transform 120ms ease;
+  transition:
+    background 120ms ease,
+    border-color 120ms ease,
+    transform 120ms ease;
 }
 
 .viewport-scene-tab:hover {
@@ -527,7 +551,11 @@ button {
 }
 
 .viewport-scene-tab.active {
-  background: linear-gradient(135deg, rgba(20, 84, 192, 0.42), rgba(19, 184, 204, 0.18));
+  background: linear-gradient(
+    135deg,
+    rgba(20, 84, 192, 0.42),
+    rgba(19, 184, 204, 0.18)
+  );
   border-color: rgba(88, 159, 255, 0.52);
   color: #f3f8ff;
 }

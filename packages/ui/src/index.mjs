@@ -1,26 +1,28 @@
 export {
+  findMenuEntryByCommand,
   getAllMenuCommands,
   getTopLevelMenuLabels,
   localizeMenuModel,
-  visualStudioInspiredMenus
+  visualStudioInspiredMenus,
 } from "./menu-model.mjs";
 export {
   defaultLocale,
   hasTranslation,
   supportedLocales,
-  translate
+  translate,
 } from "./i18n.mjs";
 export {
+  formatShortcutLabel,
   findMenuCommandByShortcut,
   shortcutMatchesEvent,
-  shouldHandleShortcutEvent
+  shouldHandleShortcutEvent,
 } from "./keyboard-shortcuts.mjs";
 export {
   defaultWorkspacePanels,
   getWorkspaceColumnState,
   panelIdFromCommand,
   setWorkspacePanel,
-  toggleWorkspacePanel
+  toggleWorkspacePanel,
 } from "./workspace-layout.mjs";
 export {
   calculateResizedDockWidths,
@@ -28,7 +30,7 @@ export {
   getVisibleSidebarWidth,
   WORKSPACE_COLLAPSED_WIDTH,
   WORKSPACE_RESIZER_WIDTH,
-  workspaceDockWidthLimits
+  workspaceDockWidthLimits,
 } from "./workspace-resize.mjs";
 
 export const uiScaffoldStatus = "menu-model-ready";

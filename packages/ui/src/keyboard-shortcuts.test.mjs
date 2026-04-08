@@ -3,21 +3,22 @@ import test from "node:test";
 
 import { localizeMenuModel } from "./menu-model.mjs";
 import {
+  formatShortcutLabel,
   findMenuCommandByShortcut,
   shortcutMatchesEvent,
-  shouldHandleShortcutEvent
+  shouldHandleShortcutEvent,
 } from "./keyboard-shortcuts.mjs";
 
-test("shortcutMatchesEvent matches modifier shortcuts and function keys", () => {
+test("shortcutMatchesEvent matches Mod shortcuts on Windows and function keys", () => {
   assert.equal(
-    shortcutMatchesEvent("Ctrl+Shift+N", {
+    shortcutMatchesEvent("Mod+Shift+N", {
       key: "N",
       ctrlKey: true,
       shiftKey: true,
       altKey: false,
-      metaKey: false
+      metaKey: false,
     }),
-    true
+    true,
   );
 
   assert.equal(
@@ -26,9 +27,22 @@ test("shortcutMatchesEvent matches modifier shortcuts and function keys", () => 
       ctrlKey: false,
       shiftKey: false,
       altKey: false,
-      metaKey: false
+      metaKey: false,
     }),
-    true
+    true,
+  );
+});
+
+test("shortcutMatchesEvent also matches Mod shortcuts on macOS", () => {
+  assert.equal(
+    shortcutMatchesEvent("Mod+S", {
+      key: "s",
+      ctrlKey: false,
+      shiftKey: false,
+      altKey: false,
+      metaKey: true,
+    }),
+    true,
   );
 });
 
@@ -39,9 +53,9 @@ test("shortcutMatchesEvent ignores unsupported chord shortcuts", () => {
       ctrlKey: true,
       shiftKey: false,
       altKey: false,
-      metaKey: false
+      metaKey: false,
     }),
-    false
+    false,
   );
 });
 
@@ -52,20 +66,43 @@ test("findMenuCommandByShortcut resolves the matching menu command", () => {
     ctrlKey: true,
     shiftKey: false,
     altKey: false,
-    metaKey: false
+    metaKey: false,
   });
 
   assert.deepEqual(match, {
     menuId: "file",
     commandId: "project.open",
-    shortcut: "Ctrl+O"
+    shortcut: "Mod+O",
   });
+});
+
+test("findMenuCommandByShortcut resolves ctrl space for the AI input command", () => {
+  const menuModel = localizeMenuModel("fr");
+  const match = findMenuCommandByShortcut(menuModel, {
+    key: " ",
+    ctrlKey: true,
+    shiftKey: false,
+    altKey: false,
+    metaKey: false,
+  });
+
+  assert.deepEqual(match, {
+    menuId: "ai",
+    commandId: "ai.focus_input",
+    shortcut: "Ctrl+Space",
+  });
+});
+
+test("formatShortcutLabel renders platform aware labels", () => {
+  assert.equal(formatShortcutLabel("Mod+S", "Win32"), "Ctrl+S");
+  assert.equal(formatShortcutLabel("Mod+S", "MacIntel"), "Cmd+S");
+  assert.equal(formatShortcutLabel("Ctrl+Space"), "Ctrl+Space");
 });
 
 test("shouldHandleShortcutEvent keeps function keys and modified keys inside editable controls", () => {
   const textareaTarget = {
     tagName: "TEXTAREA",
-    isContentEditable: false
+    isContentEditable: false,
   };
 
   assert.equal(
@@ -76,9 +113,9 @@ test("shouldHandleShortcutEvent keeps function keys and modified keys inside edi
       metaKey: false,
       repeat: false,
       defaultPrevented: false,
-      target: textareaTarget
+      target: textareaTarget,
     }),
-    true
+    true,
   );
 
   assert.equal(
@@ -89,9 +126,9 @@ test("shouldHandleShortcutEvent keeps function keys and modified keys inside edi
       metaKey: false,
       repeat: false,
       defaultPrevented: false,
-      target: textareaTarget
+      target: textareaTarget,
     }),
-    true
+    true,
   );
 });
 
@@ -106,9 +143,9 @@ test("shouldHandleShortcutEvent ignores plain typing inside editable controls", 
       defaultPrevented: false,
       target: {
         tagName: "INPUT",
-        isContentEditable: false
-      }
+        isContentEditable: false,
+      },
     }),
-    false
+    false,
   );
 });

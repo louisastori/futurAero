@@ -25,18 +25,28 @@ use faero_robotics::{CartesianPose, RobotTarget, validate_sequence};
 use faero_safety::{SafetyInterlock, SafetyStatus, SafetyZone, SafetyZoneKind, evaluate_safety};
 use faero_sim::{SimulationRequest, SimulationStatus, run_simulation};
 use faero_types::{
-    AiSessionLog, ControllerState, ControllerStateMachine, ControlTransition, EntityRecord,
+    AiSessionLog, ControlTransition, ControllerState, ControllerStateMachine, EntityRecord,
     ExternalEndpoint, PluginManifest, ProjectDocument, QosProfile, ScheduledSignalChange,
-    SignalAssignment, SignalComparator, SignalCondition, SignalDefinition, SignalKind,
-    SignalValue, SimulationContactPair, StreamDirection, TelemetryStream, TimingProfile,
+    SignalAssignment, SignalComparator, SignalCondition, SignalDefinition, SignalKind, SignalValue,
+    SimulationContactPair, StreamDirection, TelemetryStream, TimingProfile,
 };
 use serde::Serialize;
-use tauri::State;
+use tauri::{
+    AppHandle, Emitter, Runtime, State,
+    menu::{MenuBuilder, MenuItemBuilder, SubmenuBuilder},
+};
 
 const DEFAULT_FIXTURE_ID: &str = "pick-and-place-demo.faero";
 const UNTITLED_SESSION_ID: &str = "session:untitled";
+const NATIVE_MENU_EVENT_NAME: &str = "futureaero:menu-command";
 
 type SharedWorkspace = Mutex<WorkspaceSession>;
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct NativeMenuCommandPayload {
+    command_id: String,
+}
 
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -341,10 +351,7 @@ impl WorkspaceSession {
             .values()
             .filter(|entity| entity.entity_type == "Signal")
             .filter(|entity| {
-                entity
-                    .data
-                    .get("cellId")
-                    .and_then(|value| value.as_str())
+                entity.data.get("cellId").and_then(|value| value.as_str())
                     == Some(robot_cell.id.as_str())
             })
             .cloned()
@@ -356,10 +363,7 @@ impl WorkspaceSession {
             .values()
             .find(|entity| entity.entity_type == "ControllerModel")
             .filter(|entity| {
-                entity
-                    .data
-                    .get("cellId")
-                    .and_then(|value| value.as_str())
+                entity.data.get("cellId").and_then(|value| value.as_str())
                     == Some(robot_cell.id.as_str())
             })
             .cloned();
@@ -382,10 +386,7 @@ impl WorkspaceSession {
             .values()
             .filter(|entity| entity.entity_type == "Signal")
             .filter(|entity| {
-                entity
-                    .data
-                    .get("cellId")
-                    .and_then(|value| value.as_str())
+                entity.data.get("cellId").and_then(|value| value.as_str())
                     == Some(robot_cell.id.as_str())
             })
             .cloned()
@@ -397,10 +398,7 @@ impl WorkspaceSession {
             .values()
             .find(|entity| entity.entity_type == "ControllerModel")
             .filter(|entity| {
-                entity
-                    .data
-                    .get("cellId")
-                    .and_then(|value| value.as_str())
+                entity.data.get("cellId").and_then(|value| value.as_str())
                     == Some(robot_cell.id.as_str())
             })
             .cloned()
@@ -805,9 +803,7 @@ impl WorkspaceSession {
                     status: "applied".to_string(),
                     message: format!(
                         "cellule robotique ajoutee: {} cibles | {} signaux | {} ms",
-                        summary.target_count,
-                        summary.signal_count,
-                        summary.estimated_cycle_time_ms
+                        summary.target_count, summary.signal_count, summary.estimated_cycle_time_ms
                     ),
                 })
             }
@@ -1628,7 +1624,10 @@ fn sample_safety_interlocks() -> Vec<SafetyInterlock> {
 }
 
 fn robot_cell_token(cell_id: &str) -> String {
-    cell_id.strip_prefix("ent_cell_").unwrap_or(cell_id).to_string()
+    cell_id
+        .strip_prefix("ent_cell_")
+        .unwrap_or(cell_id)
+        .to_string()
 }
 
 fn robot_cell_controller_entity_id(cell_id: &str) -> String {
@@ -1799,10 +1798,7 @@ fn build_robot_cell_support_entities(cell: &EntityRecord) -> Result<Vec<EntityRe
         .map(|signal| {
             sample_entity(
                 "Signal",
-                &robot_cell_signal_entity_id(
-                    &cell.id,
-                    signal.id.trim_start_matches("sig_"),
-                ),
+                &robot_cell_signal_entity_id(&cell.id, signal.id.trim_start_matches("sig_")),
                 &format!("{} / {}", cell.name, signal.name),
                 serde_json::json!({
                     "cellId": cell.id,
@@ -2593,12 +2589,211 @@ fn ai_chat_send_message(
     Ok(response)
 }
 
+fn build_menu_item<R: Runtime>(
+    app: &AppHandle<R>,
+    id: &str,
+    text: &str,
+    accelerator: Option<&str>,
+) -> tauri::Result<tauri::menu::MenuItem<R>> {
+    let builder = if let Some(accelerator) = accelerator {
+        MenuItemBuilder::with_id(id, text).accelerator(accelerator)
+    } else {
+        MenuItemBuilder::with_id(id, text)
+    };
+    builder.build(app)
+}
+
+fn build_native_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<tauri::menu::Menu<R>> {
+    let file_new = build_menu_item(
+        app,
+        "project.create",
+        "New Project",
+        Some("CmdOrCtrl+Shift+N"),
+    )?;
+    let file_open = build_menu_item(app, "project.open", "Open Project", Some("CmdOrCtrl+O"))?;
+    let file_recent = build_menu_item(app, "project.open_recent", "Open Recent", None)?;
+    let file_save = build_menu_item(app, "project.save", "Save", Some("CmdOrCtrl+S"))?;
+    let file_save_all = build_menu_item(
+        app,
+        "project.save_all",
+        "Save All",
+        Some("CmdOrCtrl+Shift+S"),
+    )?;
+    let file_import = build_menu_item(app, "project.import", "Import", None)?;
+    let file_export = build_menu_item(app, "project.export", "Export", None)?;
+    let file_settings = build_menu_item(app, "app.settings", "Settings", None)?;
+    let file_exit = build_menu_item(app, "app.exit", "Exit", None)?;
+    let file_menu = SubmenuBuilder::new(app, "File")
+        .item(&file_new)
+        .item(&file_open)
+        .item(&file_recent)
+        .separator()
+        .item(&file_save)
+        .item(&file_save_all)
+        .separator()
+        .item(&file_import)
+        .item(&file_export)
+        .separator()
+        .item(&file_settings)
+        .item(&file_exit)
+        .build()?;
+
+    let edit_undo = build_menu_item(app, "history.undo", "Undo", Some("CmdOrCtrl+Z"))?;
+    let edit_redo = build_menu_item(app, "history.redo", "Redo", Some("CmdOrCtrl+Y"))?;
+    let edit_cut = build_menu_item(app, "selection.cut", "Cut", Some("CmdOrCtrl+X"))?;
+    let edit_copy = build_menu_item(app, "selection.copy", "Copy", Some("CmdOrCtrl+C"))?;
+    let edit_paste = build_menu_item(app, "selection.paste", "Paste", Some("CmdOrCtrl+V"))?;
+    let edit_delete = build_menu_item(app, "selection.delete", "Delete", Some("Delete"))?;
+    let edit_find = build_menu_item(app, "workspace.find", "Find", Some("CmdOrCtrl+F"))?;
+    let edit_palette = build_menu_item(
+        app,
+        "workspace.command_palette",
+        "Command Palette",
+        Some("CmdOrCtrl+Shift+P"),
+    )?;
+    let edit_menu = SubmenuBuilder::new(app, "Edit")
+        .item(&edit_undo)
+        .item(&edit_redo)
+        .separator()
+        .item(&edit_cut)
+        .item(&edit_copy)
+        .item(&edit_paste)
+        .item(&edit_delete)
+        .separator()
+        .item(&edit_find)
+        .item(&edit_palette)
+        .build()?;
+
+    let view_project_explorer =
+        build_menu_item(app, "view.project_explorer", "Project Explorer", None)?;
+    let view_properties = build_menu_item(app, "view.properties", "Properties", Some("F4"))?;
+    let view_output = build_menu_item(app, "view.output", "Output", None)?;
+    let view_problems = build_menu_item(app, "view.problems", "Problems", None)?;
+    let view_ai = build_menu_item(app, "view.ai_assistant", "AI Assistant", None)?;
+    let view_viewport = build_menu_item(app, "view.viewport_3d", "3D Viewport", None)?;
+    let view_timeline =
+        build_menu_item(app, "view.simulation_timeline", "Simulation Timeline", None)?;
+    let view_telemetry = build_menu_item(app, "view.telemetry_monitor", "Telemetry Monitor", None)?;
+    let view_menu = SubmenuBuilder::new(app, "View")
+        .item(&view_project_explorer)
+        .item(&view_properties)
+        .item(&view_output)
+        .item(&view_problems)
+        .item(&view_ai)
+        .separator()
+        .item(&view_viewport)
+        .item(&view_timeline)
+        .item(&view_telemetry)
+        .build()?;
+
+    let insert_part = build_menu_item(app, "entity.create.part", "Add Part", None)?;
+    let insert_assembly = build_menu_item(app, "entity.create.assembly", "Add Assembly", None)?;
+    let insert_cell = build_menu_item(app, "entity.create.robot_cell", "Add Robot Cell", None)?;
+    let insert_sensor = build_menu_item(app, "entity.create.sensor_rig", "Add Sensor Rig", None)?;
+    let insert_endpoint = build_menu_item(
+        app,
+        "entity.create.external_endpoint",
+        "Add External Endpoint",
+        None,
+    )?;
+    let insert_properties = build_menu_item(
+        app,
+        "project.properties",
+        "Project Properties",
+        Some("Alt+Enter"),
+    )?;
+    let insert_menu = SubmenuBuilder::new(app, "Insert")
+        .item(&insert_part)
+        .item(&insert_assembly)
+        .item(&insert_cell)
+        .item(&insert_sensor)
+        .item(&insert_endpoint)
+        .separator()
+        .item(&insert_properties)
+        .build()?;
+
+    let simulation_start =
+        build_menu_item(app, "simulation.run.start", "Start Simulation", Some("F5"))?;
+    let simulation_stop = build_menu_item(
+        app,
+        "simulation.run.cancel",
+        "Stop Simulation",
+        Some("Shift+F5"),
+    )?;
+    let simulation_step = build_menu_item(
+        app,
+        "simulation.timeline.step",
+        "Step Simulation",
+        Some("F10"),
+    )?;
+    let simulation_regenerate = build_menu_item(
+        app,
+        "build.regenerate_part",
+        "Rebuild Geometry",
+        Some("CmdOrCtrl+B"),
+    )?;
+    let simulation_safety = build_menu_item(app, "analyze.safety", "Safety Analysis", None)?;
+    let simulation_menu = SubmenuBuilder::new(app, "Simulation")
+        .item(&simulation_start)
+        .item(&simulation_stop)
+        .item(&simulation_step)
+        .separator()
+        .item(&simulation_regenerate)
+        .item(&simulation_safety)
+        .build()?;
+
+    let ai_focus = build_menu_item(
+        app,
+        "ai.focus_input",
+        "Focus Local AI Chat",
+        Some("Ctrl+Space"),
+    )?;
+    let ai_panel = build_menu_item(app, "ai.show_panel", "Show AI Assistant", None)?;
+    let ai_explain = build_menu_item(app, "ai.deep_explain.request", "AI Deep Explain", None)?;
+    let ai_menu = SubmenuBuilder::new(app, "AI")
+        .item(&ai_focus)
+        .item(&ai_panel)
+        .item(&ai_explain)
+        .build()?;
+
+    let help_docs = build_menu_item(app, "help.documentation", "Documentation", None)?;
+    let help_openspec = build_menu_item(app, "help.openspec", "OpenSpec", None)?;
+    let help_shortcuts =
+        build_menu_item(app, "help.keyboard_shortcuts", "Keyboard Shortcuts", None)?;
+    let help_about = build_menu_item(app, "help.about", "About FutureAero", None)?;
+    let help_menu = SubmenuBuilder::new(app, "Help")
+        .item(&help_docs)
+        .item(&help_openspec)
+        .item(&help_shortcuts)
+        .item(&help_about)
+        .build()?;
+
+    MenuBuilder::new(app)
+        .item(&file_menu)
+        .item(&edit_menu)
+        .item(&view_menu)
+        .item(&insert_menu)
+        .item(&simulation_menu)
+        .item(&ai_menu)
+        .item(&help_menu)
+        .build()
+}
+
 fn main() {
     let workspace = WorkspaceSession::load_fixture(DEFAULT_FIXTURE_ID)
         .unwrap_or_else(|_| WorkspaceSession::empty("FutureAero Session"));
 
     tauri::Builder::default()
         .manage(Mutex::new(workspace))
+        .menu(build_native_menu)
+        .on_menu_event(|app, event| {
+            let _ = app.emit(
+                NATIVE_MENU_EVENT_NAME,
+                NativeMenuCommandPayload {
+                    command_id: event.id().as_ref().to_string(),
+                },
+            );
+        })
         .invoke_handler(tauri::generate_handler![
             backend_status,
             available_fixture_projects,
