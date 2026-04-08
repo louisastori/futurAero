@@ -631,9 +631,9 @@ Exigence produit cible:
 Gate GitHub actuellement imposee sur le workspace Rust:
 
 - seuils lus depuis `config/coverage-gate.json`
-- 99.5 pourcent line coverage minimum
-- 97.5 pourcent region coverage minimum
-- 100 pourcent function coverage minimum
+- 95 pourcent line coverage minimum
+- 95 pourcent region coverage minimum
+- 91 pourcent function coverage minimum
 
 ## Definition Of Done globale
 

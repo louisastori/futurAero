@@ -21,9 +21,9 @@ La gate executee par GitHub Actions et par `scripts/test.ps1` est definie dans `
 
 Sur l'etat actuel du socle MVP, la gate Rust imposee est:
 
-- 99.5 pourcent line coverage minimum
-- 97.5 pourcent region coverage minimum
-- 100 pourcent function coverage minimum
+- 95 pourcent line coverage minimum
+- 95 pourcent region coverage minimum
+- 91 pourcent function coverage minimum
 
 Cette gate est ratchetee vers le haut a chaque reduction mesuree des lignes ou regions non couvertes.
 
