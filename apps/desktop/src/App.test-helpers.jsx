@@ -12,6 +12,7 @@ import {
 import userEvent from "@testing-library/user-event";
 
 import App from "./App.jsx";
+import { buildFallbackRobotCellBundle } from "./robotCellFallback.js";
 import { localizeMenuModel, translate } from "@futureaero/ui";
 import { aerospaceReferenceScenes } from "@futureaero/viewport";
 
@@ -505,49 +506,7 @@ function createMockBackend() {
         const index = snapshot.entities.length + 1;
         snapshot.entities = [
           ...snapshot.entities,
-          {
-            id: `ent_cell_${index.toString().padStart(3, "0")}`,
-            entityType: "RobotCell",
-            name: `RobotCell-${index.toString().padStart(3, "0")}`,
-            revision: "rev_seed",
-            status: "active",
-            detail: "3 pts | 4 sig | 3491 ms",
-            data: {
-              tags: ["robotics", "simulation", "mvp"],
-              parameterSet: {
-                tcpPayloadKg: 8,
-                estimatedCycleTimeMs: 3491,
-              },
-            },
-            robotCellSummary: {
-              targetCount: 3,
-              pathLengthMm: 896,
-              maxSegmentMm: 470,
-              estimatedCycleTimeMs: 3491,
-              safetyZoneCount: 2,
-              signalCount: 4,
-              controllerTransitionCount: 3,
-              warningCount: 0,
-            },
-          },
-          {
-            id: `ent_sig_${(index + 1).toString().padStart(3, "0")}`,
-            entityType: "Signal",
-            name: "Progress Gate",
-            revision: "rev_seed",
-            status: "active",
-            detail: "sig_progress_gate | 0.62",
-            data: {
-              signalId: "sig_progress_gate",
-              kind: "scalar",
-              currentValue: 0.62,
-              tags: ["control", "simulation"],
-              parameterSet: {
-                unit: "ratio",
-                checkpoints: [0.25, 0.62, 1.0],
-              },
-            },
-          },
+          ...buildFallbackRobotCellBundle(index),
         ];
         snapshot.status.entityCount = snapshot.entities.length;
       } else if (commandId === "simulation.run.start") {
@@ -557,31 +516,7 @@ function createMockBackend() {
         if (!hasRobotCell) {
           snapshot.entities = [
             ...snapshot.entities,
-            {
-              id: "ent_cell_001",
-              entityType: "RobotCell",
-              name: "RobotCell-001",
-              revision: "rev_seed",
-              status: "active",
-              detail: "3 pts | 4 sig | 3491 ms",
-              data: {
-                tags: ["robotics", "simulation", "mvp"],
-                parameterSet: {
-                  tcpPayloadKg: 8,
-                  estimatedCycleTimeMs: 3491,
-                },
-              },
-              robotCellSummary: {
-                targetCount: 3,
-                pathLengthMm: 896,
-                maxSegmentMm: 470,
-                estimatedCycleTimeMs: 3491,
-                safetyZoneCount: 2,
-                signalCount: 4,
-                controllerTransitionCount: 3,
-                warningCount: 0,
-              },
-            },
+            ...buildFallbackRobotCellBundle(snapshot.entities.length + 1),
           ];
         }
         const index = snapshot.entities.length + 1;
@@ -625,31 +560,7 @@ function createMockBackend() {
         if (!hasRobotCell) {
           snapshot.entities = [
             ...snapshot.entities,
-            {
-              id: "ent_cell_001",
-              entityType: "RobotCell",
-              name: "RobotCell-001",
-              revision: "rev_seed",
-              status: "active",
-              detail: "3 pts | 4 sig | 3491 ms",
-              data: {
-                tags: ["robotics", "simulation", "mvp"],
-                parameterSet: {
-                  tcpPayloadKg: 8,
-                  estimatedCycleTimeMs: 3491,
-                },
-              },
-              robotCellSummary: {
-                targetCount: 3,
-                pathLengthMm: 896,
-                maxSegmentMm: 470,
-                estimatedCycleTimeMs: 3491,
-                safetyZoneCount: 2,
-                signalCount: 4,
-                controllerTransitionCount: 3,
-                warningCount: 0,
-              },
-            },
+            ...buildFallbackRobotCellBundle(snapshot.entities.length + 1),
           ];
         }
         const index = snapshot.entities.length + 1;

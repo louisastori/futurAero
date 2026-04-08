@@ -29,7 +29,11 @@ use faero_perception::{
     NominalSceneTarget, PointCloudFrame, calibrate_rig, run_perception, seeded_sensor_rig,
 };
 use faero_plugin_host::validate_manifest;
-use faero_robotics::{CartesianPose, RobotTarget, validate_sequence};
+use faero_robotics::{
+    CartesianPose, EquipmentModel, EquipmentParameterSet, EquipmentType, RobotCellModel,
+    RobotModel, RobotPayloadLimits, RobotSequenceModel, RobotTarget, RobotToolMountRef,
+    RobotWorkspaceBounds, validate_robot_cell_structure, validate_sequence,
+};
 use faero_safety::{SafetyInterlock, SafetyStatus, SafetyZone, SafetyZoneKind, evaluate_safety};
 use faero_sim::{SimulationRequest, SimulationStatus, run_simulation};
 use faero_types::{
@@ -140,10 +144,13 @@ struct AssemblyEntitySummary {
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct RobotCellEntitySummary {
+    scene_assembly_id: Option<String>,
     target_count: usize,
     path_length_mm: f64,
     max_segment_mm: f64,
     estimated_cycle_time_ms: u32,
+    equipment_count: usize,
+    sequence_count: usize,
     safety_zone_count: usize,
     signal_count: usize,
     controller_transition_count: usize,
@@ -406,40 +413,15 @@ impl WorkspaceSession {
         &mut self,
         robot_cell: &EntityRecord,
     ) -> Result<(Vec<EntityRecord>, EntityRecord), String> {
-        let existing_signals = self
-            .graph
-            .document()
-            .nodes
-            .values()
-            .filter(|entity| entity.entity_type == "Signal")
-            .filter(|entity| {
-                entity.data.get("cellId").and_then(|value| value.as_str())
-                    == Some(robot_cell.id.as_str())
-            })
-            .cloned()
-            .collect::<Vec<_>>();
-        let existing_controller = self
-            .graph
-            .document()
-            .nodes
-            .values()
-            .find(|entity| entity.entity_type == "ControllerModel")
-            .filter(|entity| {
-                entity.data.get("cellId").and_then(|value| value.as_str())
-                    == Some(robot_cell.id.as_str())
-            })
-            .cloned();
-
-        if existing_signals.is_empty() || existing_controller.is_none() {
-            for entity in build_robot_cell_support_entities(robot_cell)? {
-                if self.graph.document().nodes.contains_key(&entity.id) {
-                    continue;
-                }
-                self.graph
-                    .apply_command(CoreCommand::CreateEntity(entity))
-                    .map_err(|error| error.to_string())?;
+        for entity in build_robot_cell_support_entities(robot_cell)? {
+            if self.graph.document().nodes.contains_key(&entity.id) {
+                continue;
             }
+            self.graph
+                .apply_command(CoreCommand::CreateEntity(entity))
+                .map_err(|error| error.to_string())?;
         }
+        self.materialize_robot_cell_scene_layout(robot_cell)?;
 
         let signal_entities = self
             .graph
@@ -467,6 +449,50 @@ impl WorkspaceSession {
             .ok_or_else(|| "controller entity missing for robot cell".to_string())?;
 
         Ok((signal_entities, controller_entity))
+    }
+
+    fn materialize_robot_cell_scene_layout(
+        &mut self,
+        robot_cell: &EntityRecord,
+    ) -> Result<(), String> {
+        let fallback_scene_assembly_id = robot_cell_scene_assembly_entity_id(&robot_cell.id);
+        let scene_assembly_id = robot_cell
+            .data
+            .get("sceneAssemblyId")
+            .and_then(|value| value.as_str())
+            .unwrap_or(fallback_scene_assembly_id.as_str())
+            .to_string();
+        let assembly_entity = self
+            .graph
+            .document()
+            .nodes
+            .get(&scene_assembly_id)
+            .cloned()
+            .ok_or_else(|| "scene assembly missing for robot cell".to_string())?;
+        let assembly = serde_json::from_value::<AssemblyData>(assembly_entity.data.clone())
+            .map_err(|error| error.to_string())?;
+        if !assembly.occurrences.is_empty() {
+            return Ok(());
+        }
+
+        for occurrence in robot_cell_scene_occurrences(&robot_cell.id) {
+            self.graph
+                .apply_command(CoreCommand::AddAssemblyOccurrence {
+                    assembly_id: scene_assembly_id.clone(),
+                    occurrence,
+                })
+                .map_err(|error| error.to_string())?;
+        }
+        for mate in robot_cell_scene_mates() {
+            self.graph
+                .apply_command(CoreCommand::AddAssemblyMate {
+                    assembly_id: scene_assembly_id.clone(),
+                    mate,
+                })
+                .map_err(|error| error.to_string())?;
+        }
+
+        Ok(())
     }
 
     fn update_entity_properties(
@@ -1144,8 +1170,11 @@ impl WorkspaceSession {
                     command_id: command_id.to_string(),
                     status: "applied".to_string(),
                     message: format!(
-                        "cellule robotique ajoutee: {} cibles | {} signaux | {} ms",
-                        summary.target_count, summary.signal_count, summary.estimated_cycle_time_ms
+                        "cellule robotique ajoutee: {} cibles | {} equipements | {} signaux | {} ms",
+                        summary.target_count,
+                        summary.equipment_count,
+                        summary.signal_count,
+                        summary.estimated_cycle_time_ms
                     ),
                 })
             }
@@ -2256,6 +2285,34 @@ fn robot_cell_token(cell_id: &str) -> String {
         .to_string()
 }
 
+fn robot_cell_scene_assembly_entity_id(cell_id: &str) -> String {
+    format!("ent_asm_cell_{}", robot_cell_token(cell_id))
+}
+
+fn robot_cell_part_entity_id(cell_id: &str, part_kind: &str) -> String {
+    format!("ent_part_{}_{}", part_kind, robot_cell_token(cell_id))
+}
+
+fn robot_cell_occurrence_id(part_kind: &str) -> String {
+    format!("occ_{}_001", part_kind)
+}
+
+fn robot_cell_robot_entity_id(cell_id: &str) -> String {
+    format!("ent_robot_{}", robot_cell_token(cell_id))
+}
+
+fn robot_cell_equipment_entity_id(cell_id: &str, equipment_kind: &str) -> String {
+    format!("ent_{}_{}", equipment_kind, robot_cell_token(cell_id))
+}
+
+fn robot_cell_sequence_entity_id(cell_id: &str) -> String {
+    format!("ent_seq_{}", robot_cell_token(cell_id))
+}
+
+fn robot_cell_safety_zone_entity_id(cell_id: &str, zone_suffix: &str) -> String {
+    format!("ent_zone_{}_{}", robot_cell_token(cell_id), zone_suffix)
+}
+
 fn robot_cell_controller_entity_id(cell_id: &str) -> String {
     format!("ent_ctrl_{}", robot_cell_token(cell_id))
 }
@@ -2397,6 +2454,205 @@ fn robot_cell_contact_pairs(cell_id: &str) -> Vec<SimulationContactPair> {
     ]
 }
 
+fn robot_cell_model(
+    cell_id: &str,
+    safety_zones: &[SafetyZone],
+) -> RobotCellModel {
+    RobotCellModel {
+        id: cell_id.to_string(),
+        scene_assembly_id: robot_cell_scene_assembly_entity_id(cell_id),
+        robot_ids: vec![robot_cell_robot_entity_id(cell_id)],
+        equipment_ids: vec![
+            robot_cell_equipment_entity_id(cell_id, "conveyor"),
+            robot_cell_equipment_entity_id(cell_id, "fixture"),
+            robot_cell_equipment_entity_id(cell_id, "tool"),
+        ],
+        safety_zone_ids: safety_zones
+            .iter()
+            .map(|zone| match zone.kind {
+                SafetyZoneKind::Warning => robot_cell_safety_zone_entity_id(cell_id, "warning"),
+                SafetyZoneKind::ProtectiveStop | SafetyZoneKind::LidarProtective => {
+                    robot_cell_safety_zone_entity_id(cell_id, "protective")
+                }
+            })
+            .collect(),
+        sequence_ids: vec![robot_cell_sequence_entity_id(cell_id)],
+        controller_model_ids: vec![robot_cell_controller_entity_id(cell_id)],
+    }
+}
+
+fn robot_cell_robot_model(cell_id: &str) -> RobotModel {
+    RobotModel {
+        id: robot_cell_robot_entity_id(cell_id),
+        cell_id: cell_id.to_string(),
+        kinematic_chain: vec![
+            "base".to_string(),
+            "shoulder".to_string(),
+            "wrist".to_string(),
+            "tool".to_string(),
+        ],
+        joint_ids: vec!["joint_axis_001".to_string()],
+        tool_mount_ref: RobotToolMountRef {
+            equipment_id: robot_cell_equipment_entity_id(cell_id, "tool"),
+            role: "tool".to_string(),
+        },
+        workspace_bounds: RobotWorkspaceBounds {
+            reach_radius_mm: 1_450.0,
+            vertical_span_mm: 1_900.0,
+        },
+        payload_limits: RobotPayloadLimits {
+            nominal_kg: 8.0,
+            max_kg: 12.0,
+        },
+        calibration_state: "seeded".to_string(),
+    }
+}
+
+fn robot_cell_equipment_models(cell_id: &str) -> Vec<EquipmentModel> {
+    vec![
+        EquipmentModel {
+            id: robot_cell_equipment_entity_id(cell_id, "conveyor"),
+            cell_id: cell_id.to_string(),
+            equipment_type: EquipmentType::Conveyor,
+            assembly_occurrence_id: robot_cell_occurrence_id("conveyor"),
+            parameter_set: EquipmentParameterSet {
+                width_mm: 850.0,
+                height_mm: 220.0,
+                depth_mm: 600.0,
+                nominal_speed_mm_s: Some(320),
+            },
+            io_port_ids: vec![robot_cell_signal_entity_id(cell_id, "cycle_start")],
+        },
+        EquipmentModel {
+            id: robot_cell_equipment_entity_id(cell_id, "fixture"),
+            cell_id: cell_id.to_string(),
+            equipment_type: EquipmentType::Workstation,
+            assembly_occurrence_id: robot_cell_occurrence_id("fixture"),
+            parameter_set: EquipmentParameterSet {
+                width_mm: 640.0,
+                height_mm: 180.0,
+                depth_mm: 480.0,
+                nominal_speed_mm_s: None,
+            },
+            io_port_ids: vec![robot_cell_signal_entity_id(cell_id, "progress_gate")],
+        },
+        EquipmentModel {
+            id: robot_cell_equipment_entity_id(cell_id, "tool"),
+            cell_id: cell_id.to_string(),
+            equipment_type: EquipmentType::Gripper,
+            assembly_occurrence_id: robot_cell_occurrence_id("tool"),
+            parameter_set: EquipmentParameterSet {
+                width_mm: 110.0,
+                height_mm: 80.0,
+                depth_mm: 140.0,
+                nominal_speed_mm_s: None,
+            },
+            io_port_ids: vec![robot_cell_signal_entity_id(cell_id, "payload_released")],
+        },
+    ]
+}
+
+fn robot_cell_sequence_model(
+    cell_id: &str,
+    targets: &[RobotTarget],
+    validation: &faero_robotics::SequenceValidation,
+) -> RobotSequenceModel {
+    RobotSequenceModel {
+        id: robot_cell_sequence_entity_id(cell_id),
+        cell_id: cell_id.to_string(),
+        robot_id: robot_cell_robot_entity_id(cell_id),
+        target_ids: targets
+            .iter()
+            .map(|target| format!("target_{}", target.id))
+            .collect(),
+        path_length_mm: validation.path_length_mm,
+        estimated_cycle_time_ms: validation.estimated_cycle_time_ms,
+    }
+}
+
+fn robot_cell_scene_parts(cell_id: &str) -> Result<Vec<EntityRecord>, String> {
+    let definitions = [
+        ("robot", "RobotBase", 520.0, 640.0, 420.0),
+        ("conveyor", "Conveyor", 850.0, 220.0, 600.0),
+        ("fixture", "Workstation", 640.0, 180.0, 480.0),
+        ("tool", "Gripper", 110.0, 80.0, 140.0),
+    ];
+    definitions
+        .into_iter()
+        .map(|(kind, label, width_mm, height_mm, depth_mm)| {
+            let id = robot_cell_part_entity_id(cell_id, kind);
+            build_parametric_part_entity(
+                &id,
+                &format!("{} / {}", robot_cell_token(cell_id), label),
+                width_mm,
+                height_mm,
+                depth_mm,
+            )
+            .map(|(entity, _)| entity)
+        })
+        .collect()
+}
+
+fn robot_cell_scene_occurrences(cell_id: &str) -> Vec<AssemblyOccurrence> {
+    vec![
+        AssemblyOccurrence {
+            id: robot_cell_occurrence_id("robot"),
+            definition_entity_id: robot_cell_part_entity_id(cell_id, "robot"),
+            transform: AssemblyTransform::default(),
+        },
+        AssemblyOccurrence {
+            id: robot_cell_occurrence_id("conveyor"),
+            definition_entity_id: robot_cell_part_entity_id(cell_id, "conveyor"),
+            transform: AssemblyTransform {
+                x_mm: 620.0,
+                y_mm: 120.0,
+                ..AssemblyTransform::default()
+            },
+        },
+        AssemblyOccurrence {
+            id: robot_cell_occurrence_id("fixture"),
+            definition_entity_id: robot_cell_part_entity_id(cell_id, "fixture"),
+            transform: AssemblyTransform {
+                x_mm: 980.0,
+                y_mm: -140.0,
+                ..AssemblyTransform::default()
+            },
+        },
+        AssemblyOccurrence {
+            id: robot_cell_occurrence_id("tool"),
+            definition_entity_id: robot_cell_part_entity_id(cell_id, "tool"),
+            transform: AssemblyTransform {
+                x_mm: 120.0,
+                z_mm: 260.0,
+                ..AssemblyTransform::default()
+            },
+        },
+    ]
+}
+
+fn robot_cell_scene_mates() -> Vec<AssemblyMateConstraint> {
+    vec![
+        AssemblyMateConstraint {
+            id: "mate_robot_conveyor".to_string(),
+            left_occurrence_id: robot_cell_occurrence_id("robot"),
+            right_occurrence_id: robot_cell_occurrence_id("conveyor"),
+            mate_type: AssemblyMateType::Offset { distance_mm: 620.0 },
+        },
+        AssemblyMateConstraint {
+            id: "mate_conveyor_fixture".to_string(),
+            left_occurrence_id: robot_cell_occurrence_id("conveyor"),
+            right_occurrence_id: robot_cell_occurrence_id("fixture"),
+            mate_type: AssemblyMateType::Offset { distance_mm: 360.0 },
+        },
+        AssemblyMateConstraint {
+            id: "mate_robot_tool".to_string(),
+            left_occurrence_id: robot_cell_occurrence_id("robot"),
+            right_occurrence_id: robot_cell_occurrence_id("tool"),
+            mate_type: AssemblyMateType::Offset { distance_mm: 120.0 },
+        },
+    ]
+}
+
 fn build_robot_cell_support_entities(cell: &EntityRecord) -> Result<Vec<EntityRecord>, String> {
     let safety = cell
         .data
@@ -2416,35 +2672,130 @@ fn build_robot_cell_support_entities(cell: &EntityRecord) -> Result<Vec<EntityRe
             .ok_or_else(|| "robot cell safety interlocks missing".to_string())?,
     )
     .map_err(|error| error.to_string())?;
+    let targets = serde_json::from_value::<Vec<RobotTarget>>(
+        cell.data
+            .get("targets")
+            .cloned()
+            .ok_or_else(|| "robot cell targets missing".to_string())?,
+    )
+    .map_err(|error| error.to_string())?;
+    let validation = validate_sequence(&targets).map_err(|error| error.to_string())?;
     let safety_clear = !evaluate_safety(&zones, &interlocks, "robot.move").inhibited;
     let signal_definitions = robot_cell_signal_definitions(safety_clear);
     let controller = robot_cell_controller_state_machine(&cell.id);
-    let mut entities = signal_definitions
-        .iter()
-        .map(|signal| {
-            sample_entity(
-                "Signal",
-                &robot_cell_signal_entity_id(&cell.id, signal.id.trim_start_matches("sig_")),
-                &format!("{} / {}", cell.name, signal.name),
-                serde_json::json!({
-                    "cellId": cell.id,
-                    "signalId": signal.id,
-                    "kind": match &signal.kind {
-                        SignalKind::Boolean => "boolean",
-                        SignalKind::Scalar => "scalar",
-                        SignalKind::Text => "text",
-                    },
-                    "initialValue": signal.initial_value.clone(),
-                    "currentValue": signal.initial_value.clone(),
-                    "tags": signal.tags.clone(),
-                    "parameterSet": {
-                        "currentValue": signal.initial_value.clone(),
-                        "unit": signal.unit.clone(),
-                    }
-                }),
-            )
+    let structure = robot_cell_model(&cell.id, &zones);
+    let robot_model = robot_cell_robot_model(&cell.id);
+    let equipment_models = robot_cell_equipment_models(&cell.id);
+    let sequence_model = robot_cell_sequence_model(&cell.id, &targets, &validation);
+    let structure_summary = validate_robot_cell_structure(
+        &structure,
+        std::slice::from_ref(&robot_model),
+        &equipment_models,
+        std::slice::from_ref(&sequence_model),
+    )
+    .map_err(|error| error.to_string())?;
+    let mut entities = vec![sample_entity(
+        "Assembly",
+        &structure.scene_assembly_id,
+        &format!("{} / Scene", cell.name),
+        serde_json::to_value(AssemblyData {
+            tags: vec!["robotics".to_string(), "scene".to_string(), "mvp".to_string()],
+            ..AssemblyData::default()
         })
-        .collect::<Vec<_>>();
+        .map_err(|error| error.to_string())?,
+    )];
+    entities.extend(robot_cell_scene_parts(&cell.id)?);
+    entities.push(sample_entity(
+        "RobotModel",
+        &robot_model.id,
+        &format!("{} / Robot", cell.name),
+        serde_json::to_value(&robot_model).map_err(|error| error.to_string())?,
+    ));
+    entities.extend(equipment_models.iter().map(|model| {
+        let label = match model.equipment_type {
+            EquipmentType::Conveyor => "Conveyor",
+            EquipmentType::Workstation => "Workstation",
+            EquipmentType::Gripper => "Gripper",
+        };
+        sample_entity(
+            "EquipmentModel",
+            &model.id,
+            &format!("{} / {}", cell.name, label),
+            serde_json::to_value(model).expect("equipment model should serialize"),
+        )
+    }));
+    entities.extend(zones.iter().map(|zone| {
+        let zone_suffix = match zone.kind {
+            SafetyZoneKind::Warning => "warning",
+            SafetyZoneKind::ProtectiveStop | SafetyZoneKind::LidarProtective => "protective",
+        };
+        sample_entity(
+            "SafetyZoneModel",
+            &robot_cell_safety_zone_entity_id(&cell.id, zone_suffix),
+            &format!("{} / {}", cell.name, zone.id),
+            serde_json::json!({
+                "id": robot_cell_safety_zone_entity_id(&cell.id, zone_suffix),
+                "cellId": cell.id,
+                "zoneId": zone.id,
+                "zoneKind": match zone.kind {
+                    SafetyZoneKind::Warning => "warning",
+                    SafetyZoneKind::ProtectiveStop => "protective_stop",
+                    SafetyZoneKind::LidarProtective => "lidar_protective",
+                },
+                "active": zone.active,
+                "interlockIds": interlocks
+                    .iter()
+                    .filter(|interlock| interlock.source_zone_id == zone.id)
+                    .map(|interlock| interlock.id.clone())
+                    .collect::<Vec<_>>()
+            }),
+        )
+    }));
+    entities.push(sample_entity(
+        "RobotSequence",
+        &sequence_model.id,
+        &format!("{} / Sequence", cell.name),
+        serde_json::json!({
+            "id": sequence_model.id,
+            "cellId": sequence_model.cell_id,
+            "robotId": sequence_model.robot_id,
+            "targetIds": sequence_model.target_ids,
+            "targets": targets,
+            "pathLengthMm": sequence_model.path_length_mm,
+            "estimatedCycleTimeMs": sequence_model.estimated_cycle_time_ms,
+            "targetCount": validation.target_count,
+            "structureSummary": {
+                "robotCount": structure_summary.robot_count,
+                "equipmentCount": structure_summary.equipment_count,
+                "safetyZoneCount": structure_summary.safety_zone_count,
+                "sequenceCount": structure_summary.sequence_count,
+                "controllerCount": structure_summary.controller_count
+            }
+        }),
+    ));
+    entities.extend(signal_definitions.iter().map(|signal| {
+        sample_entity(
+            "Signal",
+            &robot_cell_signal_entity_id(&cell.id, signal.id.trim_start_matches("sig_")),
+            &format!("{} / {}", cell.name, signal.name),
+            serde_json::json!({
+                "cellId": cell.id,
+                "signalId": signal.id,
+                "kind": match &signal.kind {
+                    SignalKind::Boolean => "boolean",
+                    SignalKind::Scalar => "scalar",
+                    SignalKind::Text => "text",
+                },
+                "initialValue": signal.initial_value.clone(),
+                "currentValue": signal.initial_value.clone(),
+                "tags": signal.tags.clone(),
+                "parameterSet": {
+                    "currentValue": signal.initial_value.clone(),
+                    "unit": signal.unit.clone(),
+                }
+            }),
+        )
+    }));
     entities.push(sample_entity(
         "ControllerModel",
         &robot_cell_controller_entity_id(&cell.id),
@@ -2518,13 +2869,26 @@ fn build_robot_cell_entity(
     let validation = validate_sequence(&targets).map_err(|error| error.to_string())?;
     let safety_zones = sample_safety_zones();
     let safety_interlocks = sample_safety_interlocks();
-    let safety_zone_count = safety_zones.len();
+    let structure = robot_cell_model(id, &safety_zones);
+    let robot_model = robot_cell_robot_model(id);
+    let equipment_models = robot_cell_equipment_models(id);
+    let sequence_model = robot_cell_sequence_model(id, &targets, &validation);
+    let structure_summary = validate_robot_cell_structure(
+        &structure,
+        std::slice::from_ref(&robot_model),
+        &equipment_models,
+        std::slice::from_ref(&sequence_model),
+    )
+    .map_err(|error| error.to_string())?;
     let summary = RobotCellEntitySummary {
+        scene_assembly_id: Some(structure.scene_assembly_id.clone()),
         target_count: validation.target_count,
         path_length_mm: validation.path_length_mm,
         max_segment_mm: validation.max_segment_mm,
         estimated_cycle_time_ms: validation.estimated_cycle_time_ms,
-        safety_zone_count,
+        equipment_count: structure_summary.equipment_count,
+        sequence_count: structure_summary.sequence_count,
+        safety_zone_count: structure_summary.safety_zone_count,
         signal_count: 4,
         controller_transition_count: 3,
         warning_count: validation.warning_count,
@@ -2541,15 +2905,25 @@ fn build_robot_cell_entity(
             "tags": ["robotics", "simulation", "mvp"],
             "parameterSet": {
                 "tcpPayloadKg": 8.0,
-                "estimatedCycleTimeMs": summary.estimated_cycle_time_ms
+                "estimatedCycleTimeMs": summary.estimated_cycle_time_ms,
+                "equipmentCount": summary.equipment_count,
+                "sequenceCount": summary.sequence_count
             },
+            "id": structure.id,
+            "sceneAssemblyId": structure.scene_assembly_id,
+            "robotIds": structure.robot_ids,
+            "equipmentIds": structure.equipment_ids,
+            "safetyZoneIds": structure.safety_zone_ids,
+            "sequenceIds": structure.sequence_ids,
+            "controllerModelIds": structure.controller_model_ids,
             "targets": targets,
             "sequenceValidation": {
                 "targetCount": summary.target_count,
                 "pathLengthMm": summary.path_length_mm,
                 "maxSegmentMm": summary.max_segment_mm,
                 "estimatedCycleTimeMs": summary.estimated_cycle_time_ms,
-                "warningCount": summary.warning_count
+                "warningCount": summary.warning_count,
+                "sequenceEntityId": sequence_model.id
             },
             "control": {
                 "signalCount": summary.signal_count,
@@ -2568,6 +2942,13 @@ fn build_robot_cell_entity(
                 "interlockCount": safety_interlocks.len(),
                 "zones": safety_zones,
                 "interlocks": safety_interlocks
+            },
+            "structureSummary": {
+                "robotCount": structure_summary.robot_count,
+                "equipmentCount": structure_summary.equipment_count,
+                "safetyZoneCount": structure_summary.safety_zone_count,
+                "sequenceCount": structure_summary.sequence_count,
+                "controllerCount": structure_summary.controller_count
             }
         }),
     );
@@ -3272,10 +3653,27 @@ fn robot_cell_summary_from_entity(entity: &EntityRecord) -> Option<RobotCellEnti
     let safety = entity.data.get("safety")?;
     let control = entity.data.get("control");
     Some(RobotCellEntitySummary {
+        scene_assembly_id: entity
+            .data
+            .get("sceneAssemblyId")
+            .and_then(|value| value.as_str())
+            .map(str::to_string),
         target_count: validation.get("targetCount")?.as_u64()? as usize,
         path_length_mm: number_from_value(validation, "pathLengthMm")?,
         max_segment_mm: number_from_value(validation, "maxSegmentMm")?,
         estimated_cycle_time_ms: validation.get("estimatedCycleTimeMs")?.as_u64()? as u32,
+        equipment_count: entity
+            .data
+            .get("equipmentIds")
+            .and_then(|value| value.as_array())
+            .map(|entries| entries.len())
+            .unwrap_or(0),
+        sequence_count: entity
+            .data
+            .get("sequenceIds")
+            .and_then(|value| value.as_array())
+            .map(|entries| entries.len())
+            .unwrap_or(0),
         safety_zone_count: safety.get("zoneCount")?.as_u64()? as usize,
         signal_count: control
             .and_then(|value| value.get("signalCount"))
@@ -3580,9 +3978,17 @@ fn format_assembly_entity_detail(summary: &AssemblyEntitySummary) -> String {
 }
 
 fn format_robot_cell_entity_detail(summary: &RobotCellEntitySummary) -> String {
+    let scene = summary
+        .scene_assembly_id
+        .as_deref()
+        .unwrap_or("scene");
     format!(
-        "{} pts | {} sig | {} ms",
-        summary.target_count, summary.signal_count, summary.estimated_cycle_time_ms
+        "{} pts | {} equip | {} sig | {} | {} ms",
+        summary.target_count,
+        summary.equipment_count,
+        summary.signal_count,
+        scene,
+        summary.estimated_cycle_time_ms
     )
 }
 
@@ -4346,12 +4752,66 @@ mod tests {
         assert_eq!(summary.target_count, 3);
         assert!(summary.path_length_mm > 850.0);
         assert!(summary.estimated_cycle_time_ms > 3_000);
+        assert_eq!(summary.equipment_count, 3);
+        assert_eq!(summary.sequence_count, 1);
+        assert_eq!(summary.scene_assembly_id.as_deref(), Some("ent_asm_cell_001"));
+        assert_eq!(robot_cell.data["sceneAssemblyId"], "ent_asm_cell_001");
+        assert_eq!(
+            robot_cell
+                .data["equipmentIds"]
+                .as_array()
+                .map(|entries| entries.len()),
+            Some(3)
+        );
+        assert_eq!(
+            robot_cell
+                .data["sequenceIds"]
+                .as_array()
+                .map(|entries| entries.len()),
+            Some(1)
+        );
+        assert!(snapshot
+            .entities
+            .iter()
+            .any(|entity| entity.entity_type == "Assembly" && entity.id == "ent_asm_cell_001"));
+        assert!(snapshot
+            .entities
+            .iter()
+            .any(|entity| entity.entity_type == "RobotModel" && entity.id == "ent_robot_001"));
+        assert_eq!(
+            snapshot
+                .entities
+                .iter()
+                .filter(|entity| entity.entity_type == "EquipmentModel")
+                .count(),
+            3
+        );
+        assert!(snapshot
+            .entities
+            .iter()
+            .any(|entity| entity.entity_type == "RobotSequence" && entity.id == "ent_seq_001"));
+        assert_eq!(
+            snapshot
+                .entities
+                .iter()
+                .filter(|entity| entity.entity_type == "SafetyZoneModel")
+                .count(),
+            2
+        );
         assert!(
             robot_cell
                 .detail
                 .as_ref()
-                .is_some_and(|detail| detail.contains("pts"))
+                .is_some_and(|detail| detail.contains("equip"))
         );
+        assert!(snapshot.recent_activity.iter().any(|entry| {
+            entry.channel == "event"
+                && entry.kind == "entity.created"
+                && entry.target_id.as_deref() == Some("ent_ctrl_001")
+        }));
+        assert!(snapshot.recent_activity.iter().any(|entry| {
+            entry.channel == "event" && entry.kind == "assembly.solved"
+        }));
     }
 
     #[test]

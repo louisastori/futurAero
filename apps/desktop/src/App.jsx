@@ -29,6 +29,7 @@ import {
   defaultAerospaceSceneId,
   getAerospaceScene,
 } from "@futureaero/viewport";
+import { buildFallbackRobotCellBundle } from "./robotCellFallback.js";
 
 const FALLBACK_FIXTURES = [
   { id: "pick-and-place-demo.faero", projectName: "Pick And Place Demo" },
@@ -957,6 +958,10 @@ async function executeWorkspaceCommand(commandId, currentSnapshot) {
 
   if (commandId === "entity.create.robot_cell") {
     const index = currentSnapshot.entities.length + 1;
+    const robotCellBundle = buildFallbackRobotCellBundle(index);
+    const robotCell = robotCellBundle.find(
+      (entity) => entity.entityType === "RobotCell",
+    );
     return {
       snapshot: {
         ...appendFallbackActivity(
@@ -967,41 +972,14 @@ async function executeWorkspaceCommand(commandId, currentSnapshot) {
         ),
         status: {
           ...currentSnapshot.status,
-          entityCount: currentSnapshot.entities.length + 1,
+          entityCount: currentSnapshot.entities.length + robotCellBundle.length,
         },
-        entities: [
-          ...currentSnapshot.entities,
-          {
-            id: `ent_cell_${String(index).padStart(3, "0")}`,
-            entityType: "RobotCell",
-            name: `RobotCell-${String(index).padStart(3, "0")}`,
-            revision: "rev_seed",
-            status: "active",
-            detail: "3 pts | 4 sig | 3491 ms",
-            data: {
-              tags: ["robotics", "simulation", "mvp"],
-              parameterSet: {
-                tcpPayloadKg: 8,
-                estimatedCycleTimeMs: 3491,
-              },
-            },
-            robotCellSummary: {
-              targetCount: 3,
-              pathLengthMm: 896,
-              maxSegmentMm: 470,
-              estimatedCycleTimeMs: 3491,
-              safetyZoneCount: 2,
-              signalCount: 4,
-              controllerTransitionCount: 3,
-              warningCount: 0,
-            },
-          },
-        ],
+        entities: [...currentSnapshot.entities, ...robotCellBundle],
       },
       result: {
         commandId,
         status: "applied",
-        message: "cellule robotique ajoutee dans l apercu web",
+        message: `cellule robotique et ${robotCell?.robotCellSummary?.equipmentCount ?? 0} equipements ajoutes dans l apercu web`,
       },
     };
   }
@@ -1012,31 +990,9 @@ async function executeWorkspaceCommand(commandId, currentSnapshot) {
     );
     const nextEntities = [...currentSnapshot.entities];
     if (robotCells.length === 0) {
-      nextEntities.push({
-        id: "ent_cell_001",
-        entityType: "RobotCell",
-        name: "RobotCell-001",
-        revision: "rev_seed",
-        status: "active",
-        detail: "3 pts | 4 sig | 3491 ms",
-        data: {
-          tags: ["robotics", "simulation", "mvp"],
-          parameterSet: {
-            tcpPayloadKg: 8,
-            estimatedCycleTimeMs: 3491,
-          },
-        },
-        robotCellSummary: {
-          targetCount: 3,
-          pathLengthMm: 896,
-          maxSegmentMm: 470,
-          estimatedCycleTimeMs: 3491,
-          safetyZoneCount: 2,
-          signalCount: 4,
-          controllerTransitionCount: 3,
-          warningCount: 0,
-        },
-      });
+      nextEntities.push(
+        ...buildFallbackRobotCellBundle(nextEntities.length + 1),
+      );
     }
 
     const runIndex = nextEntities.length + 1;
@@ -1094,31 +1050,9 @@ async function executeWorkspaceCommand(commandId, currentSnapshot) {
   if (commandId === "analyze.safety") {
     const nextEntities = [...currentSnapshot.entities];
     if (!nextEntities.some((entity) => entity.robotCellSummary)) {
-      nextEntities.push({
-        id: "ent_cell_001",
-        entityType: "RobotCell",
-        name: "RobotCell-001",
-        revision: "rev_seed",
-        status: "active",
-        detail: "3 pts | 4 sig | 3491 ms",
-        data: {
-          tags: ["robotics", "simulation", "mvp"],
-          parameterSet: {
-            tcpPayloadKg: 8,
-            estimatedCycleTimeMs: 3491,
-          },
-        },
-        robotCellSummary: {
-          targetCount: 3,
-          pathLengthMm: 896,
-          maxSegmentMm: 470,
-          estimatedCycleTimeMs: 3491,
-          safetyZoneCount: 2,
-          signalCount: 4,
-          controllerTransitionCount: 3,
-          warningCount: 0,
-        },
-      });
+      nextEntities.push(
+        ...buildFallbackRobotCellBundle(nextEntities.length + 1),
+      );
     }
 
     const reportIndex = nextEntities.length + 1;
@@ -1599,7 +1533,7 @@ function latestParametricPartFromSnapshot(snapshot) {
 }
 
 function formatRobotCellSummary(locale, robotCellSummary) {
-  return `${robotCellSummary.targetCount} pts | ${formatDecimal(locale, robotCellSummary.pathLengthMm, 0)} mm | ${robotCellSummary.estimatedCycleTimeMs} ms`;
+  return `${formatDecimal(locale, robotCellSummary.targetCount, 0)} pts | ${formatDecimal(locale, robotCellSummary.equipmentCount, 0)} equip | ${formatDecimal(locale, robotCellSummary.estimatedCycleTimeMs, 0)} ms`;
 }
 
 function latestRobotCellFromSnapshot(snapshot) {
@@ -3582,12 +3516,23 @@ export default function App({ backend = defaultDesktopBackend }) {
                           )}
                         </div>
                         <div className="muted">
-                          {entity.robotCellSummary.safetyZoneCount}{" "}
+                          <span data-robot-cell-scene={entity.id}>
+                            {entity.robotCellSummary.sceneAssemblyId}
+                          </span>{" "}
+                          | {entity.robotCellSummary.safetyZoneCount}{" "}
                           {t("ui.property.safety_zones", "zones safety")} |{" "}
                           {entity.robotCellSummary.warningCount}{" "}
                           {t("ui.property.warnings", "warning(s)")}
                         </div>
                         <div className="property-inline-metrics">
+                          <span data-robot-cell-equipment={entity.id}>
+                            {t("ui.property.equipment", "Equipements")}{" "}
+                            {entity.robotCellSummary.equipmentCount}
+                          </span>
+                          <span data-robot-cell-sequences={entity.id}>
+                            {t("ui.property.sequences", "Sequences")}{" "}
+                            {entity.robotCellSummary.sequenceCount}
+                          </span>
                           <span>
                             {t("ui.property.path_length", "Trajet")}{" "}
                             {formatDecimal(

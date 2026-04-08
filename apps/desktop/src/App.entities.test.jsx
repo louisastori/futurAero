@@ -153,7 +153,7 @@ describe("App entity and simulation flows", () => {
     });
   });
 
-  test("creating a robot cell surfaces path and timing metrics in properties", async () => {
+  test("creating a robot cell surfaces structure and timing metrics in properties", async () => {
     const { user } = await renderApp();
 
     await user.click(screen.getByRole("button", { name: "Insertion" }));
@@ -171,6 +171,21 @@ describe("App entity and simulation flows", () => {
           .querySelector('[data-robot-cell-targets="ent_cell_002"]')
           ?.textContent?.includes("3"),
       );
+      assert.ok(
+        document
+          .querySelector('[data-robot-cell-equipment="ent_cell_002"]')
+          ?.textContent?.includes("3"),
+      );
+      assert.ok(
+        document
+          .querySelector('[data-robot-cell-scene="ent_cell_002"]')
+          ?.textContent?.includes("ent_asm_cell_002"),
+      );
+      assert.ok(document.querySelector('[data-entity-select="ent_robot_002"]'));
+      assert.ok(
+        document.querySelector('[data-entity-select="ent_conveyor_002"]'),
+      );
+      assert.ok(document.querySelector('[data-entity-select="ent_seq_002"]'));
     });
   });
 
@@ -221,12 +236,14 @@ describe("App entity and simulation flows", () => {
 
     await waitFor(() => {
       assert.ok(screen.getByText("Runs de simulation"));
-      assert.ok(
-        document.querySelector('[data-simulation-run-summary="ent_run_003"]'),
+      const runSummary = document.querySelector(
+        '[data-simulation-run-summary^="ent_run_"]',
       );
+      assert.ok(runSummary);
+      const runId = runSummary?.getAttribute("data-simulation-run-summary");
       assert.ok(
         document
-          .querySelector('[data-simulation-run-collisions="ent_run_003"]')
+          .querySelector(`[data-simulation-run-collisions="${runId}"]`)
           ?.textContent?.includes("0"),
       );
       assert.equal(
@@ -268,12 +285,14 @@ describe("App entity and simulation flows", () => {
 
     await waitFor(() => {
       assert.ok(screen.getByText("Rapports safety"));
-      assert.ok(
-        document.querySelector('[data-safety-report-summary="ent_safe_003"]'),
+      const reportSummary = document.querySelector(
+        '[data-safety-report-summary^="ent_safe_"]',
       );
+      assert.ok(reportSummary);
+      const reportId = reportSummary?.getAttribute("data-safety-report-summary");
       assert.ok(
         document
-          .querySelector('[data-safety-report-blocks="ent_safe_003"]')
+          .querySelector(`[data-safety-report-blocks="${reportId}"]`)
           ?.textContent?.includes("0"),
       );
       assert.equal(
