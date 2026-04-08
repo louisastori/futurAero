@@ -233,12 +233,7 @@ pub fn chat_with_project(
                     document,
                     profile: effective_profile,
                 };
-                match send_ollama_chat(
-                    &client,
-                    &config,
-                    &model,
-                    &prompt,
-                ) {
+                match send_ollama_chat(&client, &config, &model, &prompt) {
                     Ok(answer) => {
                         let warnings = runtime.warning.clone().into_iter().collect();
                         AiChatResponse {
@@ -448,7 +443,10 @@ fn available_profiles() -> Vec<String> {
     ]
 }
 
-fn resolve_profile_selection(models: &[String], requested_profile: Option<&str>) -> ProfileSelection {
+fn resolve_profile_selection(
+    models: &[String],
+    requested_profile: Option<&str>,
+) -> ProfileSelection {
     let requested = AiProfilePreset::from_requested(requested_profile);
     if models.is_empty() {
         return ProfileSelection {
@@ -506,7 +504,9 @@ fn resolve_profile_selection(models: &[String], requested_profile: Option<&str>)
 }
 
 fn has_large_local_model(models: &[String], minimum_size_b: u32) -> bool {
-    models.iter().any(|model| model_size_b(model).is_some_and(|size| size >= minimum_size_b))
+    models
+        .iter()
+        .any(|model| model_size_b(model).is_some_and(|size| size >= minimum_size_b))
 }
 
 fn model_size_b(model: &str) -> Option<u32> {
@@ -608,7 +608,11 @@ fn build_ollama_messages(prompt: &ChatPromptContext<'_>) -> Vec<OllamaChatMessag
     messages
 }
 
-fn build_system_prompt(locale: &str, document: &ProjectDocument, profile: AiProfilePreset) -> String {
+fn build_system_prompt(
+    locale: &str,
+    document: &ProjectDocument,
+    profile: AiProfilePreset,
+) -> String {
     format!(
         "You are FutureAero Local AI, a local-only assistant for CAD, robotics, simulation, commissioning, integration and safety engineering.\n\
 Use only the provided project context.\n\
@@ -1005,7 +1009,12 @@ fn build_structured_explain(
         } else {
             AiRiskLevel::Low
         };
-        proposed_commands.extend(build_run_suggestion_commands(document, run, collision_count, blocked));
+        proposed_commands.extend(build_run_suggestion_commands(
+            document,
+            run,
+            collision_count,
+            blocked,
+        ));
     } else {
         limitations.push(
             "Le modele n a trouve ni run de simulation ni rapport safety persiste.".to_string(),
@@ -1069,10 +1078,7 @@ fn build_structured_explain(
         risk_level,
         limitations,
         critique_passes,
-        proposed_commands: proposed_commands
-            .into_iter()
-            .take(4)
-            .collect(),
+        proposed_commands: proposed_commands.into_iter().take(4).collect(),
         explanation,
     }
 }
@@ -1094,7 +1100,10 @@ fn critique_structured_explain(
         adjustments.push("demand additional local artifacts before applying changes".to_string());
         confidence_delta -= 0.08;
     }
-    if limitations.iter().any(|limitation| limitation.contains("Aucun run")) {
+    if limitations
+        .iter()
+        .any(|limitation| limitation.contains("Aucun run"))
+    {
         issues.push("aucun run de simulation local".to_string());
         adjustments.push("prefer simulation.run.start before deeper explanation".to_string());
         confidence_delta -= 0.12;
@@ -1145,10 +1154,13 @@ fn critique_structured_explain(
                 "Le second regard releve une couverture inegale entre simulation et safety."
                     .to_string()
             } else {
-                "Le second regard ne releve pas d incoherence majeure entre artefacts."
-                    .to_string()
+                "Le second regard ne releve pas d incoherence majeure entre artefacts.".to_string()
             },
-            confidence_delta: if consistency_issue.is_some() { -0.04 } else { 0.0 },
+            confidence_delta: if consistency_issue.is_some() {
+                -0.04
+            } else {
+                0.0
+            },
             issues: consistency_issue.into_iter().collect(),
             adjustments: vec!["cross-check safety and simulation artifacts".to_string()],
         });
@@ -1183,9 +1195,7 @@ fn build_safety_suggestion_commands(
 ) -> Vec<AiProposedCommand> {
     let mut commands = Vec::new();
 
-    if blocked
-        && let Some(signal) = find_signal_entity(document, "sig_safety_clear")
-    {
+    if blocked && let Some(signal) = find_signal_entity(document, "sig_safety_clear") {
         commands.push(AiProposedCommand {
             kind: "entity.properties.update".to_string(),
             target_id: Some(signal.id.clone()),
@@ -1218,9 +1228,7 @@ fn build_run_suggestion_commands(
 ) -> Vec<AiProposedCommand> {
     let mut commands = Vec::new();
 
-    if blocked
-        && let Some(signal) = find_signal_entity(document, "sig_progress_gate")
-    {
+    if blocked && let Some(signal) = find_signal_entity(document, "sig_progress_gate") {
         commands.push(AiProposedCommand {
             kind: "entity.properties.update".to_string(),
             target_id: Some(signal.id.clone()),
@@ -1265,11 +1273,7 @@ fn find_signal_entity<'a>(
 ) -> Option<&'a faero_types::EntityRecord> {
     document.nodes.values().find(|entity| {
         entity.entity_type == "Signal"
-            && entity
-                .data
-                .get("signalId")
-                .and_then(|value| value.as_str())
-                == Some(signal_id)
+            && entity.data.get("signalId").and_then(|value| value.as_str()) == Some(signal_id)
     })
 }
 
@@ -1811,10 +1815,12 @@ mod tests {
 
         let degraded = resolve_profile_selection(&small_models, Some("furnace"));
         assert_eq!(degraded.profile, AiProfilePreset::Balanced);
-        assert!(degraded
-            .warning
-            .as_deref()
-            .is_some_and(|warning| warning.contains("degraded")));
+        assert!(
+            degraded
+                .warning
+                .as_deref()
+                .is_some_and(|warning| warning.contains("degraded"))
+        );
 
         let max_profile = resolve_profile_selection(&large_models, Some("max"));
         assert_eq!(max_profile.profile, AiProfilePreset::Max);

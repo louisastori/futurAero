@@ -378,11 +378,15 @@ fn write_perception_artifacts(
     root: &Path,
     nodes: &BTreeMap<String, EntityRecord>,
 ) -> Result<(), StorageError> {
-    for node in nodes.values().filter(|node| node.entity_type == "PerceptionRun") {
+    for node in nodes
+        .values()
+        .filter(|node| node.entity_type == "PerceptionRun")
+    {
         let run_root = root.join("perception/runs").join(&node.id);
         fs::create_dir_all(&run_root)?;
         write_json_value(
-            root.join("perception/runs").join(format!("{}.json", node.id)),
+            root.join("perception/runs")
+                .join(format!("{}.json", node.id)),
             &serde_json::json!({
                 "id": node.id,
                 "summaryRef": format!("perception/runs/{}/summary.json", node.id),
@@ -423,7 +427,10 @@ fn write_commissioning_artifacts(
         if let Some(summary) = node.data.get("summary") {
             write_json_value(session_root.join("summary.json"), summary)?;
         }
-        write_jsonl_array_artifact(session_root.join("captures.jsonl"), node.data.get("captures"))?;
+        write_jsonl_array_artifact(
+            session_root.join("captures.jsonl"),
+            node.data.get("captures"),
+        )?;
         write_jsonl_array_artifact(
             session_root.join("adjustments.jsonl"),
             node.data.get("adjustments"),
@@ -1164,7 +1171,8 @@ mod tests {
     }
 
     #[test]
-    fn save_project_writes_simulation_perception_commissioning_optimization_and_ai_artifact_files() {
+    fn save_project_writes_simulation_perception_commissioning_optimization_and_ai_artifact_files()
+    {
         let dir = tempdir().expect("tempdir should be available");
         let project_root = dir.path().join("artifacted.faero");
         let document = sample_document_with_simulation_and_ai();
@@ -1216,7 +1224,11 @@ mod tests {
                 .join("ai/suggestions/ent_ai_suggestion_001.json")
                 .exists()
         );
-        assert!(project_root.join("perception/runs/ent_perc_001.json").exists());
+        assert!(
+            project_root
+                .join("perception/runs/ent_perc_001.json")
+                .exists()
+        );
         assert!(
             project_root
                 .join("perception/runs/ent_perc_001/occupancy-map.json")

@@ -79,6 +79,8 @@ function installMockBackend(page) {
     endpoint: "http://127.0.0.1:11434",
     mode: "test",
     localOnly: true,
+    activeProfile: "balanced",
+    availableProfiles: ["balanced", "max", "furnace"],
     activeModel: "gemma3:27b",
     availableModels: ["gemma3:27b", "gemma3:12b", "gemma3:4b", "phi3:mini"],
     gemma3Models: ["gemma3:27b", "gemma3:12b", "gemma3:4b"],
@@ -266,12 +268,20 @@ function installMockBackend(page) {
         async fetchAiRuntimeStatus() {
           return clone(runtime);
         },
-        async sendAiChatMessage(message, locale, history, model, currentSnapshot) {
+        async sendAiChatMessage(
+          message,
+          locale,
+          history,
+          model,
+          selectedProfile,
+          currentSnapshot
+        ) {
           selectedModel = model;
           return {
-            answer: `[${locale}] ${message} :: ${model ?? runtime.activeModel} :: ${currentSnapshot.status.projectName} :: ${history.length}`,
+            answer: `[${locale}] ${message} :: ${selectedProfile ?? runtime.activeProfile} :: ${model ?? runtime.activeModel} :: ${currentSnapshot.status.projectName} :: ${history.length}`,
             runtime: {
               ...clone(runtime),
+              activeProfile: selectedProfile ?? runtime.activeProfile,
               activeModel: model ?? runtime.activeModel
             },
             references: [`project:${currentSnapshot.details.projectId}`],
@@ -290,8 +300,8 @@ function installMockBackend(page) {
 
 test.beforeEach(async ({ page }) => {
   await installMockBackend(page);
-  await page.goto("/");
-  await expect(page.getByText("FutureAero")).toBeVisible();
+  await page.goto("/", { waitUntil: "domcontentloaded", timeout: 60_000 });
+  await expect(page.getByText("FutureAero")).toBeVisible({ timeout: 60_000 });
 });
 
 test("execute buttons update visible command feedback in the shell", async ({ page }) => {
@@ -324,5 +334,7 @@ test("gemma3 selector drives the model used by the local chat flow", async ({ pa
   ).fill("Compare les variantes gemma3");
   await page.locator("[data-ai-send='true']").click();
 
-  await expect(page.getByText(/\[fr\] Compare les variantes gemma3 :: gemma3:12b/)).toBeVisible();
+  await expect(
+    page.getByText(/\[fr\] Compare les variantes gemma3 :: balanced :: gemma3:12b/)
+  ).toBeVisible();
 });

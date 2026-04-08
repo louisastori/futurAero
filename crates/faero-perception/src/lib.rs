@@ -301,10 +301,9 @@ pub fn compare_observed_scene(
         .iter()
         .enumerate()
         .map(|(index, target)| {
-            let deviation_mm = ((1.0 - average_coverage) * 12.0
-                + average_obstacles
-                + index as f32 * 0.75)
-                .max(0.0);
+            let deviation_mm =
+                ((1.0 - average_coverage) * 12.0 + average_obstacles + index as f32 * 0.75)
+                    .max(0.0);
             SceneDeviation {
                 id: format!("dev_{index:03}"),
                 target_id: target.id.clone(),
@@ -377,8 +376,16 @@ mod tests {
     fn seeded_rig_contains_multiple_sensor_kinds() {
         let rig = seeded_sensor_rig("rig_001", "Demo Rig");
         assert_eq!(rig.mounts.len(), 3);
-        assert!(rig.mounts.iter().any(|mount| mount.sensor_kind == SensorKind::Lidar3d));
-        assert!(rig.mounts.iter().any(|mount| mount.sensor_kind == SensorKind::SafetyLidar));
+        assert!(
+            rig.mounts
+                .iter()
+                .any(|mount| mount.sensor_kind == SensorKind::Lidar3d)
+        );
+        assert!(
+            rig.mounts
+                .iter()
+                .any(|mount| mount.sensor_kind == SensorKind::SafetyLidar)
+        );
     }
 
     #[test]
@@ -396,10 +403,8 @@ mod tests {
     fn runs_perception_and_produces_occupancy_and_comparison_artifacts() {
         let rig = seeded_sensor_rig("rig_001", "Demo Rig");
         let calibration = calibrate_rig(&rig, 2.5, 0.4).expect("calibration should succeed");
-        let run =
-            run_perception(&rig, &calibration, &sample_frames(), &sample_targets()).expect(
-                "perception run should succeed",
-            );
+        let run = run_perception(&rig, &calibration, &sample_frames(), &sample_targets())
+            .expect("perception run should succeed");
 
         assert_eq!(run.frame_count, 2);
         assert_eq!(run.total_point_count, 2700);
@@ -426,7 +431,12 @@ mod tests {
             Err(PerceptionError::InvalidSyncSkew)
         );
         assert_eq!(
-            run_perception(&rig, &calibrate_rig(&rig, 1.0, 0.1).expect("profile"), &[], &[]),
+            run_perception(
+                &rig,
+                &calibrate_rig(&rig, 1.0, 0.1).expect("profile"),
+                &[],
+                &[]
+            ),
             Err(PerceptionError::EmptyDataset)
         );
         assert_eq!(
@@ -450,9 +460,11 @@ mod tests {
         let comparison = compare_observed_scene(&sample_frames(), &sample_targets());
 
         assert_eq!(comparison.deviations.len(), 2);
-        assert!(comparison
-            .deviations
-            .iter()
-            .all(|deviation| !deviation.target_id.is_empty()));
+        assert!(
+            comparison
+                .deviations
+                .iter()
+                .all(|deviation| !deviation.target_id.is_empty())
+        );
     }
 }

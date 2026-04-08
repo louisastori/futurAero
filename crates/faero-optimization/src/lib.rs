@@ -150,16 +150,20 @@ pub fn run_study(study: &OptimizationStudy) -> Result<OptimizationRunReport, Opt
     if study.candidates.is_empty() {
         return Err(OptimizationError::EmptyStudy);
     }
-    if study.variables.iter().any(|variable| {
-        variable.minimum > variable.current || variable.current > variable.maximum
-    }) {
+    if study
+        .variables
+        .iter()
+        .any(|variable| variable.minimum > variable.current || variable.current > variable.maximum)
+    {
         return Err(OptimizationError::InvalidVariableBounds);
     }
 
     let ranked_candidates = rank_candidates(&study.candidates)?;
     Ok(OptimizationRunReport {
         candidate_count: study.candidates.len(),
-        best_candidate_id: ranked_candidates.first().map(|candidate| candidate.id.clone()),
+        best_candidate_id: ranked_candidates
+            .first()
+            .map(|candidate| candidate.id.clone()),
         ranked_candidates,
     })
 }
@@ -238,10 +242,12 @@ mod tests {
         assert_eq!(report.candidate_count, 3);
         assert!(report.best_candidate_id.is_some());
         assert_eq!(report.ranked_candidates.len(), 3);
-        assert!(report
-            .ranked_candidates
-            .iter()
-            .any(|candidate| candidate.recommendation == "apply"));
+        assert!(
+            report
+                .ranked_candidates
+                .iter()
+                .any(|candidate| candidate.recommendation == "apply")
+        );
     }
 
     #[test]
