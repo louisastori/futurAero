@@ -3,6 +3,7 @@ export const defaultWorkspacePanels = {
   properties: true,
   commandSurface: true,
   viewport: true,
+  simulationTimeline: true,
   aiAssistant: true,
   output: true,
   problems: true
@@ -14,7 +15,8 @@ const viewCommandToPanelId = {
   "view.output": "output",
   "view.problems": "problems",
   "view.ai_assistant": "aiAssistant",
-  "view.viewport_3d": "viewport"
+  "view.viewport_3d": "viewport",
+  "view.simulation_timeline": "simulationTimeline"
 };
 
 export function panelIdFromCommand(commandId) {
@@ -46,6 +48,10 @@ export function setWorkspacePanel(panelState, panelId, visible) {
 export function getWorkspaceColumnState(panelState) {
   return {
     leftExpanded: panelState.projectExplorer || panelState.properties,
-    rightExpanded: panelState.aiAssistant || panelState.output || panelState.problems
+    rightExpanded:
+      panelState.simulationTimeline ||
+      panelState.aiAssistant ||
+      panelState.output ||
+      panelState.problems
   };
 }

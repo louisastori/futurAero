@@ -1,12 +1,17 @@
 import { useEffect, useRef, useState } from "react";
 
 import {
+  buildEntityInspectorSchema,
+  buildInspectorDraftFromSchema,
   calculateResizedDockWidths,
+  coerceInspectorDraftValue,
   defaultWorkspaceDockWidths,
   defaultWorkspacePanels,
   defaultLocale,
   findMenuEntryByCommand,
   findMenuCommandByShortcut,
+  findInspectorFieldByPath,
+  flattenEditableInspectorFields,
   formatShortcutLabel,
   getWorkspaceColumnState,
   getVisibleSidebarWidth,
@@ -1278,9 +1283,42 @@ async function sendAiChatMessage(
     runtime: FALLBACK_AI_STATUS,
     references: buildFallbackAiReferences(snapshot),
     structured: buildFallbackStructuredExplain(snapshot, message),
+    suggestionId: null,
     warnings: [FALLBACK_AI_STATUS.warning],
     source: "web-preview",
   };
+}
+
+function setNestedDraftValue(target, path, value) {
+  const segments = path.split(".").filter(Boolean);
+  if (segments.length === 0) {
+    return target;
+  }
+
+  let current = target;
+  for (const segment of segments.slice(0, -1)) {
+    if (
+      typeof current[segment] !== "object" ||
+      current[segment] === null ||
+      Array.isArray(current[segment])
+    ) {
+      current[segment] = {};
+    }
+    current = current[segment];
+  }
+  current[segments[segments.length - 1]] = value;
+  return target;
+}
+
+function valueAtPath(source, path) {
+  return path
+    .split(".")
+    .filter(Boolean)
+    .reduce(
+      (current, segment) =>
+        current && typeof current === "object" ? current[segment] : undefined,
+      source,
+    );
 }
 
 async function updateEntityProperties(payload, currentSnapshot) {
@@ -1306,26 +1344,36 @@ async function updateEntityProperties(payload, currentSnapshot) {
   }
 
   const currentEntity = currentSnapshot.entities[index];
-  const nextData = {
-    ...(currentEntity.data ?? {}),
-    tags: payload.tags,
-    parameterSet: payload.parameters,
-  };
-  let nextEntity = {
-    ...currentEntity,
-    name: payload.name,
-    data: nextData,
-  };
+  let nextEntity = structuredClone(currentEntity);
+  const changes = payload.changes ?? {};
+  if (typeof changes.name === "string" && changes.name.trim().length > 0) {
+    nextEntity.name = changes.name.trim();
+  }
+  if (!nextEntity.data || typeof nextEntity.data !== "object") {
+    nextEntity.data = {};
+  }
+  if (Array.isArray(changes.tags)) {
+    nextEntity.data.tags = changes.tags;
+  }
+  for (const [path, value] of Object.entries(changes)) {
+    if (path === "name" || path === "tags") {
+      continue;
+    }
+    setNestedDraftValue(nextEntity.data, path, value);
+  }
 
   if (nextEntity.partGeometry) {
     const widthMm = Number(
-      payload.parameters.widthMm ?? nextEntity.partGeometry.widthMm,
+      valueAtPath(nextEntity.data, "parameterSet.widthMm") ??
+        nextEntity.partGeometry.widthMm,
     );
     const heightMm = Number(
-      payload.parameters.heightMm ?? nextEntity.partGeometry.heightMm,
+      valueAtPath(nextEntity.data, "parameterSet.heightMm") ??
+        nextEntity.partGeometry.heightMm,
     );
     const depthMm = Number(
-      payload.parameters.depthMm ?? nextEntity.partGeometry.depthMm,
+      valueAtPath(nextEntity.data, "parameterSet.depthMm") ??
+        nextEntity.partGeometry.depthMm,
     );
     const areaMm2 = widthMm * heightMm;
     const volumeMm3 = areaMm2 * depthMm;
@@ -1349,12 +1397,7 @@ async function updateEntityProperties(payload, currentSnapshot) {
   if (nextEntity.entityType === "Signal") {
     nextEntity = {
       ...nextEntity,
-      detail: `${nextData.signalId ?? "signal"} | ${String(payload.parameters.currentValue ?? nextData.currentValue ?? "false")}`,
-      data: {
-        ...nextData,
-        currentValue:
-          payload.parameters.currentValue ?? nextData.currentValue ?? false,
-      },
+      detail: `${nextEntity.data.signalId ?? "signal"} | ${String(nextEntity.data.currentValue ?? "false")}`,
     };
   }
 
@@ -1378,12 +1421,60 @@ async function updateEntityProperties(payload, currentSnapshot) {
   };
 }
 
+async function applyAiSuggestion(suggestionId, currentSnapshot) {
+  const response = await invokeBackend("workspace_apply_ai_suggestion", {
+    suggestionId,
+  });
+  if (response) {
+    return response;
+  }
+
+  return {
+    snapshot: appendFallbackActivity(
+      currentSnapshot,
+      "system",
+      "ai.suggestion.applied",
+      suggestionId,
+    ),
+    result: {
+      commandId: "ai.suggestion.apply",
+      status: "notice",
+      message: `suggestion ${suggestionId} marquee comme appliquee dans l apercu web`,
+    },
+  };
+}
+
+async function rejectAiSuggestion(suggestionId, currentSnapshot) {
+  const response = await invokeBackend("workspace_reject_ai_suggestion", {
+    suggestionId,
+  });
+  if (response) {
+    return response;
+  }
+
+  return {
+    snapshot: appendFallbackActivity(
+      currentSnapshot,
+      "system",
+      "ai.suggestion.rejected",
+      suggestionId,
+    ),
+    result: {
+      commandId: "ai.suggestion.reject",
+      status: "notice",
+      message: `suggestion ${suggestionId} rejetee dans l apercu web`,
+    },
+  };
+}
+
 const defaultDesktopBackend = {
   fetchWorkspaceBootstrap,
   loadWorkspaceFixture,
   executeWorkspaceCommand,
   regenerateLatestPart,
   updateEntityProperties,
+  applyAiSuggestion,
+  rejectAiSuggestion,
   fetchAiRuntimeStatus,
   sendAiChatMessage,
 };
@@ -1452,48 +1543,135 @@ function latestSafetyReportFromSnapshot(snapshot) {
   return safetyReports[safetyReports.length - 1] ?? null;
 }
 
-function isScalarInspectorValue(value) {
-  return (
-    typeof value === "string" ||
-    typeof value === "number" ||
-    typeof value === "boolean"
-  );
-}
-
-function inspectorParameterEntries(entity) {
-  const parameterSet = entity?.data?.parameterSet;
-  if (
-    !parameterSet ||
-    typeof parameterSet !== "object" ||
-    Array.isArray(parameterSet)
-  ) {
-    return [];
+function formatInspectorValue(value) {
+  if (typeof value === "boolean") {
+    return value ? "true" : "false";
   }
 
-  return Object.entries(parameterSet).filter(([, value]) =>
-    isScalarInspectorValue(value),
-  );
+  if (typeof value === "number") {
+    return String(value);
+  }
+
+  if (typeof value === "string") {
+    return value;
+  }
+
+  if (value === null || value === undefined) {
+    return "null";
+  }
+
+  return JSON.stringify(value, null, 2);
 }
 
 function buildInspectorDraft(entity) {
-  return {
-    name: entity?.name ?? "",
-    tags: Array.isArray(entity?.data?.tags) ? entity.data.tags.join(", ") : "",
-    parameters: Object.fromEntries(inspectorParameterEntries(entity)),
-  };
+  return buildInspectorDraftFromSchema(buildEntityInspectorSchema(entity));
 }
 
-function coerceInspectorParameterValue(rawValue, originalValue) {
-  if (typeof originalValue === "number") {
-    const parsed = Number(rawValue);
-    return Number.isFinite(parsed) ? parsed : null;
+function timelineSeverityRank(kind) {
+  if (kind === "collision") {
+    return 0;
+  }
+  if (kind === "signal") {
+    return 1;
+  }
+  if (kind === "controller") {
+    return 2;
+  }
+  return 3;
+}
+
+function buildSimulationTimelineEvents(runEntity) {
+  if (!runEntity?.data) {
+    return [];
   }
 
-  if (typeof originalValue === "boolean") {
-    return Boolean(rawValue);
+  const timelineSamples = Array.isArray(runEntity.data.timelineSamples)
+    ? runEntity.data.timelineSamples
+    : [];
+  const signalSamples = Array.isArray(runEntity.data.signalSamples)
+    ? runEntity.data.signalSamples
+    : [];
+  const controllerStateSamples = Array.isArray(runEntity.data.controllerStateSamples)
+    ? runEntity.data.controllerStateSamples
+    : [];
+  const contacts = Array.isArray(runEntity.data.contacts)
+    ? runEntity.data.contacts
+    : [];
+
+  const events = [
+    ...contacts.map((contact) => ({
+      id: `collision-${contact.stepIndex}-${contact.pairId}`,
+      kind: "collision",
+      title: `${contact.leftEntityId} x ${contact.rightEntityId}`,
+      summary: `${contact.overlapMm} mm | ${contact.severity}`,
+      timestampMs: contact.timestampMs,
+      stepIndex: contact.stepIndex,
+      payload: contact,
+    })),
+    ...signalSamples
+      .filter((sample) => sample.stepIndex > 0)
+      .map((sample) => ({
+        id: `signal-${sample.stepIndex}-${sample.signalId}-${sample.reason}`,
+        kind: "signal",
+        title: sample.signalId,
+        summary: `${formatInspectorValue(sample.value)} | ${sample.reason}`,
+        timestampMs: sample.timestampMs,
+        stepIndex: sample.stepIndex,
+        payload: sample,
+      })),
+    ...controllerStateSamples
+      .filter((sample) => sample.stepIndex > 0)
+      .map((sample) => ({
+        id: `controller-${sample.stepIndex}-${sample.stateId}`,
+        kind: "controller",
+        title: sample.stateName,
+        summary: `${sample.stateId} | ${sample.reason}`,
+        timestampMs: sample.timestampMs,
+        stepIndex: sample.stepIndex,
+        payload: sample,
+      })),
+    ...timelineSamples.map((sample) => ({
+      id: `timeline-${sample.stepIndex}`,
+      kind: "timeline",
+      title: `step ${sample.stepIndex}`,
+      summary: `${sample.trackingErrorMm} mm | speed ${sample.speedScale}`,
+      timestampMs: sample.timestampMs,
+      stepIndex: sample.stepIndex,
+      payload: sample,
+    })),
+  ];
+
+  return events.sort((left, right) => {
+    if (left.timestampMs !== right.timestampMs) {
+      return left.timestampMs - right.timestampMs;
+    }
+    if (left.stepIndex !== right.stepIndex) {
+      return left.stepIndex - right.stepIndex;
+    }
+    return timelineSeverityRank(left.kind) - timelineSeverityRank(right.kind);
+  });
+}
+
+function criticalTimelineEvent(events) {
+  return (
+    events.find((event) => event.kind === "collision") ??
+    events.find((event) => event.kind === "signal") ??
+    events[0] ??
+    null
+  );
+}
+
+function summarizeAiProposedCommand(command) {
+  if (!command) {
+    return "";
   }
 
-  return String(rawValue ?? "").trim();
+  const target = command.targetId ? ` | ${command.targetId}` : "";
+  const payload =
+    command.payload && Object.keys(command.payload).length > 0
+      ? ` | ${JSON.stringify(command.payload)}`
+      : "";
+  return `${command.kind}${target}${payload}`;
 }
 
 function formatStructuredConfidence(value) {
@@ -1627,6 +1805,8 @@ export default function App({ backend = defaultDesktopBackend }) {
   const [dockWidths, setDockWidths] = useState(defaultWorkspaceDockWidths);
   const [dragSide, setDragSide] = useState(null);
   const [selectedEntityId, setSelectedEntityId] = useState(null);
+  const [selectedSimulationRunId, setSelectedSimulationRunId] = useState(null);
+  const [selectedTimelineEventId, setSelectedTimelineEventId] = useState(null);
   const [inspectorDraft, setInspectorDraft] = useState(
     buildInspectorDraft(null),
   );
@@ -1663,10 +1843,23 @@ export default function App({ backend = defaultDesktopBackend }) {
     (entity) => entity.safetyReportSummary,
   );
   const latestSafetyReport = latestSafetyReportFromSnapshot(projectSnapshot);
+  const selectedSimulationRun =
+    simulationRuns.find((entity) => entity.id === selectedSimulationRunId) ??
+    latestSimulationRun ??
+    null;
+  const simulationTimelineEvents = buildSimulationTimelineEvents(
+    selectedSimulationRun,
+  );
+  const focusedTimelineEvent =
+    simulationTimelineEvents.find(
+      (event) => event.id === selectedTimelineEventId,
+    ) ??
+    criticalTimelineEvent(simulationTimelineEvents);
   const selectedEntity =
     projectSnapshot.entities.find((entity) => entity.id === selectedEntityId) ??
     projectSnapshot.entities[projectSnapshot.entities.length - 1] ??
     null;
+  const inspectorSchema = buildEntityInspectorSchema(selectedEntity);
   const fixtureOptions =
     selectedFixtureId &&
     !fixtureProjects.some((fixture) => fixture.id === selectedFixtureId)
@@ -1764,14 +1957,32 @@ export default function App({ backend = defaultDesktopBackend }) {
     }));
   }
 
-  function handleInspectorParameterChange(key, value) {
-    setInspectorDraft((previous) => ({
+  function setAiSuggestionStatus(suggestionId, nextStatus) {
+    if (!suggestionId) {
+      return;
+    }
+
+    setAiMessages((previous) =>
+      previous.map((entry) =>
+        entry.suggestionId === suggestionId
+          ? { ...entry, suggestionStatus: nextStatus }
+          : entry,
+      ),
+    );
+  }
+
+  function focusTimelineEvent(runId, eventId) {
+    if (runId) {
+      setSelectedSimulationRunId(runId);
+    }
+    if (eventId) {
+      setSelectedTimelineEventId(eventId);
+    }
+    setPanelState((previous) => ({
       ...previous,
-      parameters: {
-        ...previous.parameters,
-        [key]: value,
-      },
+      simulationTimeline: true,
     }));
+    setActiveMenuId("simulation");
   }
 
   function enqueueOpenSpecAutoPrompt(commandId, snapshot) {
@@ -1800,35 +2011,37 @@ export default function App({ backend = defaultDesktopBackend }) {
       return;
     }
 
-    const nextName = inspectorDraft.name.trim();
-    if (!nextName) {
-      setInspectorError(
-        t(
-          "ui.property.invalid_name",
-          "Le nom de l entite doit rester non vide.",
-        ),
+    const changes = {};
+    for (const field of flattenEditableInspectorFields(inspectorSchema)) {
+      const effectiveField =
+        selectedEntity.entityType === "Signal" && field.path === "currentValue"
+          ? {
+              ...field,
+              fieldType:
+                inspectorDraft.kind === "text"
+                  ? "string"
+                  : inspectorDraft.kind === "scalar"
+                    ? "number"
+                    : "boolean",
+            }
+          : field;
+      const result = coerceInspectorDraftValue(
+        inspectorDraft[field.path],
+        effectiveField,
       );
-      return;
-    }
-
-    const nextParameters = {};
-    for (const [key, originalValue] of inspectorParameterEntries(
-      selectedEntity,
-    )) {
-      const coercedValue = coerceInspectorParameterValue(
-        inspectorDraft.parameters[key],
-        originalValue,
-      );
-      if (coercedValue === null) {
+      if (!result.ok) {
         setInspectorError(
           t(
             "ui.property.invalid_parameter",
-            `Le parametre ${key} contient une valeur invalide.`,
+            `Le parametre ${field.label} contient une valeur invalide.`,
           ),
         );
+        if (result.error) {
+          setInspectorError(result.error);
+        }
         return;
       }
-      nextParameters[key] = coercedValue;
+      changes[field.path] = result.value;
     }
 
     setInspectorBusy(true);
@@ -1837,12 +2050,7 @@ export default function App({ backend = defaultDesktopBackend }) {
       const response = await backend.updateEntityProperties(
         {
           entityId: selectedEntity.id,
-          name: nextName,
-          tags: inspectorDraft.tags
-            .split(",")
-            .map((entry) => entry.trim())
-            .filter(Boolean),
-          parameters: nextParameters,
+          changes,
         },
         projectSnapshot,
       );
@@ -1859,6 +2067,74 @@ export default function App({ backend = defaultDesktopBackend }) {
     } finally {
       setInspectorBusy(false);
     }
+  }
+
+  async function handleAiSuggestionApply(suggestionId) {
+    if (!suggestionId || aiBusy) {
+      return;
+    }
+
+    setAiBusy(true);
+    try {
+      const response = await backend.applyAiSuggestion(
+        suggestionId,
+        projectSnapshot,
+      );
+      setProjectSnapshot(response.snapshot);
+      applyCommandFeedback(response.result);
+      setAiSuggestionStatus(suggestionId, "applied");
+    } finally {
+      setAiBusy(false);
+    }
+  }
+
+  async function handleAiSuggestionReject(suggestionId) {
+    if (!suggestionId || aiBusy) {
+      return;
+    }
+
+    setAiBusy(true);
+    try {
+      const response = await backend.rejectAiSuggestion(
+        suggestionId,
+        projectSnapshot,
+      );
+      setProjectSnapshot(response.snapshot);
+      applyCommandFeedback(response.result);
+      setAiSuggestionStatus(suggestionId, "rejected");
+    } finally {
+      setAiBusy(false);
+    }
+  }
+
+  function handleTimelineStep() {
+    if (simulationTimelineEvents.length === 0) {
+      applyCommandFeedback({
+        commandId: "simulation.timeline.step",
+        status: "notice",
+        message: t(
+          "ui.timeline.no_events",
+          "Aucun evenement de timeline disponible pour avancer d un pas.",
+        ),
+      });
+      return;
+    }
+
+    const currentIndex = simulationTimelineEvents.findIndex(
+      (event) => event.id === focusedTimelineEvent?.id,
+    );
+    const nextEvent =
+      simulationTimelineEvents[
+        currentIndex >= 0
+          ? (currentIndex + 1) % simulationTimelineEvents.length
+          : 0
+      ];
+    focusTimelineEvent(selectedSimulationRun?.id, nextEvent.id);
+    applyCommandFeedback({
+      commandId: "simulation.timeline.step",
+      status: "applied",
+      message: `${nextEvent.kind} | step ${nextEvent.stepIndex} | t=${nextEvent.timestampMs} ms`,
+    });
   }
 
   function applyCommandFeedback(result) {
@@ -1998,6 +2274,40 @@ export default function App({ backend = defaultDesktopBackend }) {
   }, [
     projectSnapshot.entities.map((entity) => entity.id).join("|"),
     selectedEntityId,
+  ]);
+
+  useEffect(() => {
+    const runIds = simulationRuns.map((entity) => entity.id);
+    if (runIds.includes(selectedSimulationRunId)) {
+      return;
+    }
+
+    setSelectedSimulationRunId(runIds[runIds.length - 1] ?? null);
+  }, [
+    simulationRuns.map((entity) => entity.id).join("|"),
+    selectedSimulationRunId,
+  ]);
+
+  useEffect(() => {
+    if (simulationTimelineEvents.length === 0) {
+      setSelectedTimelineEventId(null);
+      return;
+    }
+
+    const stillExists = simulationTimelineEvents.some(
+      (event) => event.id === selectedTimelineEventId,
+    );
+    if (stillExists) {
+      return;
+    }
+
+    setSelectedTimelineEventId(
+      criticalTimelineEvent(simulationTimelineEvents)?.id ?? null,
+    );
+  }, [
+    selectedSimulationRun?.id,
+    selectedTimelineEventId,
+    simulationTimelineEvents.map((event) => event.id).join("|"),
   ]);
 
   useEffect(() => {
@@ -2207,6 +2517,11 @@ export default function App({ backend = defaultDesktopBackend }) {
       return;
     }
 
+    if (commandId === "simulation.timeline.step") {
+      handleTimelineStep();
+      return;
+    }
+
     const panelId = panelIdFromCommand(commandId);
     if (panelId) {
       const willBeVisible = !panelState[panelId];
@@ -2341,6 +2656,8 @@ export default function App({ backend = defaultDesktopBackend }) {
       content: trimmedMessage,
       references: [],
       structured: null,
+      suggestionId: null,
+      suggestionStatus: null,
       warnings: [],
       source: options.source ?? "user",
     };
@@ -2365,6 +2682,12 @@ export default function App({ backend = defaultDesktopBackend }) {
           content: response.answer,
           references: response.references ?? [],
           structured: response.structured ?? null,
+          suggestionId: response.suggestionId ?? null,
+          suggestionStatus:
+            response.suggestionId &&
+            (response.structured?.proposedCommands?.length ?? 0) > 0
+              ? "pending"
+              : null,
           warnings: response.warnings ?? [],
           source: response.source,
         },
@@ -2380,6 +2703,8 @@ export default function App({ backend = defaultDesktopBackend }) {
           ),
           references: [],
           structured: null,
+          suggestionId: null,
+          suggestionStatus: null,
           warnings: [],
           source: "error",
         },
@@ -2393,6 +2718,141 @@ export default function App({ backend = defaultDesktopBackend }) {
   async function handleAiSubmit(event) {
     event.preventDefault();
     await submitAiMessage(aiDraft);
+  }
+
+  function renderInspectorField(field, depth = 0) {
+    if (!field) {
+      return null;
+    }
+
+    if (field.children?.length > 0) {
+      return (
+        <div
+          key={field.path}
+          className="property-field-group"
+          data-entity-field-group={field.path}
+          style={{ "--property-depth": depth }}
+        >
+          <div className="subsection-label">{field.label}</div>
+          <div className="property-field-children">
+            {field.children.map((child) => renderInspectorField(child, depth + 1))}
+          </div>
+        </div>
+      );
+    }
+
+    const fieldLabel =
+      field.path === "name"
+        ? t("ui.property.entity_name", "Nom")
+        : field.path === "tags"
+          ? t("ui.property.entity_tags", "Tags")
+          : field.label;
+    const effectiveFieldType =
+      selectedEntity?.entityType === "Signal" && field.path === "currentValue"
+        ? inspectorDraft.kind === "text"
+          ? "string"
+          : inspectorDraft.kind === "scalar"
+            ? "number"
+            : "boolean"
+        : field.fieldType;
+    const inputId = `${selectedEntity?.id ?? "entity"}-${field.path}`;
+    const draftValue =
+      inspectorDraft[field.path] ??
+      (field.fieldType === "boolean" ? false : formatInspectorValue(field.value));
+
+    let control = (
+      <div className="muted" data-entity-field-readonly={field.path}>
+        {formatInspectorValue(field.value)}
+      </div>
+    );
+
+    if (field.editable) {
+      if (effectiveFieldType === "boolean") {
+        control = (
+          <input
+            id={inputId}
+            type="checkbox"
+            aria-label={fieldLabel}
+            data-entity-field-input={field.path}
+            data-entity-name-input={field.path === "name" ? selectedEntity?.id : undefined}
+            data-entity-tags-input={field.path === "tags" ? selectedEntity?.id : undefined}
+            checked={Boolean(draftValue)}
+            onChange={(event) =>
+              handleInspectorChange(field.path, event.target.checked)
+            }
+          />
+        );
+      } else if (effectiveFieldType === "enum") {
+        control = (
+          <select
+            id={inputId}
+            className="shell-select"
+            aria-label={fieldLabel}
+            data-entity-field-input={field.path}
+            value={draftValue ?? ""}
+            onChange={(event) =>
+              handleInspectorChange(field.path, event.target.value)
+            }
+          >
+            {field.options.map((option) => (
+              <option key={option} value={option}>
+                {option}
+              </option>
+            ))}
+          </select>
+        );
+      } else if (effectiveFieldType === "list") {
+        control = (
+          <textarea
+            id={inputId}
+            className="assistant-input property-array-input"
+            aria-label={fieldLabel}
+            data-entity-field-input={field.path}
+            rows={4}
+            value={draftValue ?? "[]"}
+            onChange={(event) =>
+              handleInspectorChange(field.path, event.target.value)
+            }
+          />
+        );
+      } else {
+        control = (
+          <input
+            id={inputId}
+            className="shell-select shell-input"
+            type={effectiveFieldType === "number" ? "number" : "text"}
+            min={field.minimum ?? undefined}
+            step={effectiveFieldType === "number" ? "any" : undefined}
+            aria-label={fieldLabel}
+            data-entity-field-input={field.path}
+            data-entity-name-input={field.path === "name" ? selectedEntity?.id : undefined}
+            data-entity-tags-input={field.path === "tags" ? selectedEntity?.id : undefined}
+            value={draftValue ?? ""}
+            onChange={(event) =>
+              handleInspectorChange(field.path, event.target.value)
+            }
+          />
+        );
+      }
+    }
+
+    return (
+      <label
+        key={field.path}
+        className="control-group property-control property-field-row"
+        data-entity-field-path={field.path}
+        style={{ "--property-depth": depth }}
+      >
+        <span>
+          {fieldLabel}
+          {field.required ? " *" : ""}
+        </span>
+        {control}
+        {field.editable && field.minimum !== null ? (
+          <div className="muted">{`min ${field.minimum}`}</div>
+        ) : null}
+      </label>
+    );
   }
 
   return (
@@ -2690,90 +3150,28 @@ export default function App({ backend = defaultDesktopBackend }) {
                       {t("ui.property.revision", "Revision")}{" "}
                       {selectedEntity.revision}
                     </div>
-                    <div className="property-editor-grid">
-                      <label className="control-group property-control">
-                        <span>{t("ui.property.entity_name", "Nom")}</span>
-                        <input
-                          className="shell-select shell-input"
-                          aria-label={t("ui.property.entity_name", "Nom")}
-                          data-entity-name-input={selectedEntity.id}
-                          value={inspectorDraft.name}
-                          onChange={(event) =>
-                            handleInspectorChange("name", event.target.value)
-                          }
-                        />
-                      </label>
-                      <label className="control-group property-control">
-                        <span>{t("ui.property.entity_tags", "Tags")}</span>
-                        <input
-                          className="shell-select shell-input"
-                          aria-label={t("ui.property.entity_tags", "Tags")}
-                          data-entity-tags-input={selectedEntity.id}
-                          value={inspectorDraft.tags}
-                          onChange={(event) =>
-                            handleInspectorChange("tags", event.target.value)
-                          }
-                        />
-                      </label>
-                    </div>
-
-                    {inspectorParameterEntries(selectedEntity).length > 0 ? (
-                      <div className="property-editor-grid">
-                        {inspectorParameterEntries(selectedEntity).map(
-                          ([key, value]) => (
-                            <label
-                              key={key}
-                              className="control-group property-control"
-                            >
-                              <span>{key}</span>
-                              {typeof value === "boolean" ? (
-                                <input
-                                  type="checkbox"
-                                  aria-label={key}
-                                  data-entity-parameter={key}
-                                  checked={Boolean(
-                                    inspectorDraft.parameters[key],
-                                  )}
-                                  onChange={(event) =>
-                                    handleInspectorParameterChange(
-                                      key,
-                                      event.target.checked,
-                                    )
-                                  }
-                                />
-                              ) : (
-                                <input
-                                  className="shell-select shell-input"
-                                  type={
-                                    typeof value === "number"
-                                      ? "number"
-                                      : "text"
-                                  }
-                                  step={
-                                    typeof value === "number"
-                                      ? "any"
-                                      : undefined
-                                  }
-                                  aria-label={key}
-                                  data-entity-parameter={key}
-                                  value={inspectorDraft.parameters[key] ?? ""}
-                                  onChange={(event) =>
-                                    handleInspectorParameterChange(
-                                      key,
-                                      event.target.value,
-                                    )
-                                  }
-                                />
+                    {inspectorSchema.sections.length > 0 ? (
+                      <div className="property-schema-sections">
+                        {inspectorSchema.sections.map((section) => (
+                          <div
+                            key={section.id}
+                            className="property-editor-card"
+                            data-entity-section={section.id}
+                          >
+                            <div className="subsection-label">{section.label}</div>
+                            <div className="property-editor-grid">
+                              {section.fields.map((field) =>
+                                renderInspectorField(field),
                               )}
-                            </label>
-                          ),
-                        )}
+                            </div>
+                          </div>
+                        ))}
                       </div>
                     ) : (
                       <p className="muted">
                         {t(
                           "ui.property.no_generic_parameters",
-                          "Aucun parametre scalaire editable pour l entite selectionnee.",
+                          "Aucun schema exploitable pour l entite selectionnee.",
                         )}
                       </p>
                     )}
@@ -3301,6 +3699,139 @@ export default function App({ backend = defaultDesktopBackend }) {
           }
         >
           <Panel
+            panelId="simulationTimeline"
+            title={t("ui.panel.simulation_timeline", "Timeline de simulation")}
+            accent={
+              selectedSimulationRun?.simulationRunSummary
+                ? `${selectedSimulationRun.simulationRunSummary.status} | F10`
+                : "F10"
+            }
+            collapsed={!panelState.simulationTimeline}
+            onToggle={() => togglePanel("simulationTimeline")}
+            toggleLabel={panelToggleLabel("simulationTimeline")}
+          >
+            <div className="stack-block">
+              {simulationRuns.length > 0 ? (
+                <>
+                  <div className="assistant-message-tags">
+                    {[...simulationRuns].reverse().slice(0, 4).map((run) => (
+                      <button
+                        key={run.id}
+                        type="button"
+                        className={
+                          run.id === selectedSimulationRun?.id
+                            ? "assistant-starter is-active"
+                            : "assistant-starter"
+                        }
+                        data-simulation-run-select={run.id}
+                        onClick={() => focusTimelineEvent(run.id, null)}
+                      >
+                        {run.name}
+                      </button>
+                    ))}
+                  </div>
+
+                  {focusedTimelineEvent ? (
+                    <div
+                      className="result-card"
+                      data-simulation-timeline-focus={focusedTimelineEvent.id}
+                    >
+                      <strong>{focusedTimelineEvent.title}</strong>
+                      <div className="command-id">
+                        {focusedTimelineEvent.kind} | step{" "}
+                        {focusedTimelineEvent.stepIndex} | t=
+                        {focusedTimelineEvent.timestampMs} ms
+                      </div>
+                      <div className="muted">{focusedTimelineEvent.summary}</div>
+                      <div className="property-editor-actions">
+                        <button
+                          className="run-button"
+                          type="button"
+                          data-simulation-jump-critical="true"
+                          onClick={() => {
+                            const criticalEvent = criticalTimelineEvent(
+                              simulationTimelineEvents,
+                            );
+                            if (!criticalEvent) {
+                              return;
+                            }
+                            focusTimelineEvent(
+                              selectedSimulationRun?.id,
+                              criticalEvent.id,
+                            );
+                            applyCommandFeedback({
+                              commandId: "simulation.timeline.jump_critical",
+                              status: "applied",
+                              message: `${criticalEvent.kind} | step ${criticalEvent.stepIndex} | t=${criticalEvent.timestampMs} ms`,
+                            });
+                          }}
+                        >
+                          {t(
+                            "ui.timeline.jump_critical",
+                            "Aller a l instant critique",
+                          )}
+                        </button>
+                        <button
+                          className="run-button"
+                          type="button"
+                          data-simulation-step="true"
+                          onClick={handleTimelineStep}
+                        >
+                          {t("ui.timeline.step", "Pas suivant")}
+                        </button>
+                      </div>
+                    </div>
+                  ) : null}
+
+                  <ul className="command-list simulation-timeline-list">
+                    {simulationTimelineEvents.map((event) => (
+                      <li
+                        key={event.id}
+                        className={
+                          event.id === focusedTimelineEvent?.id
+                            ? "command-row is-last-command"
+                            : "command-row"
+                        }
+                      >
+                        <div>
+                          <strong>{event.title}</strong>
+                          <div className="command-id">
+                            {event.kind} | step {event.stepIndex} | t=
+                            {event.timestampMs} ms
+                          </div>
+                          <div className="muted">{event.summary}</div>
+                        </div>
+                        <div className="command-actions">
+                          <button
+                            className="run-button"
+                            type="button"
+                            data-simulation-event={event.id}
+                            onClick={() =>
+                              focusTimelineEvent(
+                                selectedSimulationRun?.id,
+                                event.id,
+                              )
+                            }
+                          >
+                            {t("ui.timeline.focus", "Focus")}
+                          </button>
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                </>
+              ) : (
+                <p className="muted">
+                  {t(
+                    "ui.timeline.no_runs",
+                    "Aucun run persiste a afficher dans la timeline.",
+                  )}
+                </p>
+              )}
+            </div>
+          </Panel>
+
+          <Panel
             panelId="aiAssistant"
             title={t("ui.panel.ai_assistant", "Assistant IA local")}
             accent={assistantAccent(locale, aiRuntime)}
@@ -3446,6 +3977,84 @@ export default function App({ backend = defaultDesktopBackend }) {
                                   </span>
                                 ),
                               )}
+                            </div>
+                              ) : null}
+                          {entry.structured.limitations?.length > 0 ? (
+                            <div className="assistant-warning-list">
+                              {entry.structured.limitations.map((limitation) => (
+                                <div key={limitation} className="muted">
+                                  {limitation}
+                                </div>
+                              ))}
+                            </div>
+                          ) : null}
+                          {entry.structured.proposedCommands?.length > 0 ? (
+                            <div
+                              className="property-card-list"
+                              data-ai-suggestion-preview={
+                                entry.suggestionId ?? "preview-only"
+                              }
+                            >
+                              {entry.structured.proposedCommands.map(
+                                (command, commandIndex) => (
+                                  <div
+                                    key={`${entry.suggestionId ?? "preview"}-${command.kind}-${commandIndex}`}
+                                    className="result-card"
+                                    data-ai-proposed-command={command.kind}
+                                  >
+                                    <strong>{command.kind}</strong>
+                                    <div className="muted">
+                                      {summarizeAiProposedCommand(command)}
+                                    </div>
+                                  </div>
+                                ),
+                              )}
+                              {entry.suggestionId ? (
+                                <div className="property-editor-actions">
+                                  <button
+                                    className="run-button"
+                                    type="button"
+                                    data-ai-apply-suggestion={entry.suggestionId}
+                                    disabled={
+                                      aiBusy || entry.suggestionStatus === "applied"
+                                    }
+                                    onClick={() =>
+                                      handleAiSuggestionApply(entry.suggestionId)
+                                    }
+                                  >
+                                    {entry.suggestionStatus === "applied"
+                                      ? t(
+                                          "ui.ai.suggestion_applied",
+                                          "Suggestion appliquee",
+                                        )
+                                      : t(
+                                          "ui.ai.apply_suggestion",
+                                          "Appliquer la suggestion",
+                                        )}
+                                  </button>
+                                  <button
+                                    className="run-button"
+                                    type="button"
+                                    data-ai-reject-suggestion={entry.suggestionId}
+                                    disabled={
+                                      aiBusy || entry.suggestionStatus === "rejected"
+                                    }
+                                    onClick={() =>
+                                      handleAiSuggestionReject(entry.suggestionId)
+                                    }
+                                  >
+                                    {entry.suggestionStatus === "rejected"
+                                      ? t(
+                                          "ui.ai.suggestion_rejected",
+                                          "Suggestion rejetee",
+                                        )
+                                      : t(
+                                          "ui.ai.reject_suggestion",
+                                          "Rejeter",
+                                        )}
+                                  </button>
+                                </div>
+                              ) : null}
                             </div>
                           ) : null}
                         </div>

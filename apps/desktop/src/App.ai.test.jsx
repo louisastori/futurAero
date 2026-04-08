@@ -25,4 +25,56 @@ describe("App local AI flows", () => {
       );
     });
   });
+
+  test("structured AI suggestions can be previewed, applied and rejected explicitly", async () => {
+    const { user } = await renderApp();
+
+    const textarea = screen.getByPlaceholderText(
+      "Pose une question sur le projet courant, la simulation, l integration ou la safety...",
+    );
+    await user.type(textarea, "Propose un changement applicable");
+    await user.click(document.querySelector('[data-ai-send="true"]'));
+
+    await waitFor(() => {
+      assert.ok(document.querySelector("[data-ai-suggestion-preview]"));
+      assert.ok(
+        document.querySelector(
+          '[data-ai-proposed-command="entity.properties.update"]',
+        ),
+      );
+      assert.ok(document.querySelector("[data-ai-apply-suggestion]"));
+    });
+
+    await user.click(document.querySelector("[data-ai-apply-suggestion]"));
+
+    await waitFor(() => {
+      assert.equal(
+        document
+          .querySelector("[data-command-feedback]")
+          ?.getAttribute("data-command-feedback"),
+        "ai.suggestion.apply",
+      );
+      assert.ok(screen.getByText("Suggestion appliquee"));
+    });
+
+    await user.type(textarea, "Propose encore un changement");
+    await user.click(document.querySelector('[data-ai-send="true"]'));
+
+    await waitFor(() => {
+      assert.equal(document.querySelectorAll("[data-ai-reject-suggestion]").length >= 1, true);
+    });
+
+    const rejectButtons = document.querySelectorAll("[data-ai-reject-suggestion]");
+    await user.click(rejectButtons[rejectButtons.length - 1]);
+
+    await waitFor(() => {
+      assert.equal(
+        document
+          .querySelector("[data-command-feedback]")
+          ?.getAttribute("data-command-feedback"),
+        "ai.suggestion.reject",
+      );
+      assert.ok(screen.getByText("Suggestion rejetee"));
+    });
+  });
 });

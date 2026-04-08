@@ -1,7 +1,8 @@
 use std::{env, time::Duration};
 
 use faero_types::{
-    AiContextReference, AiRiskLevel, AiStructuredExplain, ExternalEndpoint, ProjectDocument,
+    AiContextReference, AiProposedCommand, AiRiskLevel, AiStructuredExplain, ExternalEndpoint,
+    ProjectDocument,
 };
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
@@ -42,6 +43,7 @@ pub struct AiChatResponse {
     pub runtime: AiRuntimeStatus,
     pub references: Vec<String>,
     pub structured: Option<AiStructuredExplain>,
+    pub suggestion_id: Option<String>,
     pub warnings: Vec<String>,
     pub source: String,
 }
@@ -184,6 +186,7 @@ pub fn chat_with_project(
                             runtime,
                             references,
                             structured: structured.clone(),
+                            suggestion_id: None,
                             warnings,
                             source: "ollama-local".to_string(),
                         }
@@ -611,6 +614,7 @@ fn build_structured_explain(document: &ProjectDocument, message: &str) -> AiStru
     );
     let mut confidence = 0.58;
     let mut risk_level = AiRiskLevel::Low;
+    let mut proposed_commands = Vec::new();
 
     if let Some(report) = latest_safety.filter(|_| asks_about_safety || !asks_about_collision) {
         let blocked = report
@@ -686,6 +690,7 @@ fn build_structured_explain(document: &ProjectDocument, message: &str) -> AiStru
         } else {
             AiRiskLevel::Medium
         };
+        proposed_commands.extend(build_safety_suggestion_commands(document, report, blocked));
     } else if let Some(run) = latest_run {
         let collision_count = run
             .data
@@ -796,10 +801,18 @@ fn build_structured_explain(document: &ProjectDocument, message: &str) -> AiStru
         } else {
             AiRiskLevel::Low
         };
+        proposed_commands.extend(build_run_suggestion_commands(document, run, collision_count, blocked));
     } else {
         limitations.push(
             "Le modele n a trouve ni run de simulation ni rapport safety persiste.".to_string(),
         );
+        if latest_robot_cell.is_some() {
+            proposed_commands.push(AiProposedCommand {
+                kind: "simulation.run.start".to_string(),
+                target_id: latest_robot_cell.as_ref().map(|entity| entity.id.clone()),
+                payload: serde_json::json!({}),
+            });
+        }
     }
 
     if latest_run.is_none() {
@@ -834,9 +847,128 @@ fn build_structured_explain(document: &ProjectDocument, message: &str) -> AiStru
         confidence,
         risk_level,
         limitations,
-        proposed_commands: Vec::new(),
+        proposed_commands: proposed_commands
+            .into_iter()
+            .take(4)
+            .collect(),
         explanation,
     }
+}
+
+fn build_safety_suggestion_commands(
+    document: &ProjectDocument,
+    report: &faero_types::EntityRecord,
+    blocked: bool,
+) -> Vec<AiProposedCommand> {
+    let mut commands = Vec::new();
+
+    if blocked
+        && let Some(signal) = find_signal_entity(document, "sig_safety_clear")
+    {
+        commands.push(AiProposedCommand {
+            kind: "entity.properties.update".to_string(),
+            target_id: Some(signal.id.clone()),
+            payload: serde_json::json!({
+                "changes": {
+                    "currentValue": true
+                }
+            }),
+        });
+    }
+
+    commands.push(AiProposedCommand {
+        kind: "analyze.safety".to_string(),
+        target_id: report
+            .data
+            .get("robotCellId")
+            .and_then(|value| value.as_str())
+            .map(str::to_string),
+        payload: serde_json::json!({}),
+    });
+
+    dedupe_commands(commands)
+}
+
+fn build_run_suggestion_commands(
+    document: &ProjectDocument,
+    run: &faero_types::EntityRecord,
+    collision_count: u64,
+    blocked: bool,
+) -> Vec<AiProposedCommand> {
+    let mut commands = Vec::new();
+
+    if blocked
+        && let Some(signal) = find_signal_entity(document, "sig_progress_gate")
+    {
+        commands.push(AiProposedCommand {
+            kind: "entity.properties.update".to_string(),
+            target_id: Some(signal.id.clone()),
+            payload: serde_json::json!({
+                "changes": {
+                    "currentValue": 1.0
+                }
+            }),
+        });
+    }
+
+    if collision_count > 0
+        && let Some(signal) = find_signal_entity(document, "sig_cycle_start")
+    {
+        commands.push(AiProposedCommand {
+            kind: "entity.properties.update".to_string(),
+            target_id: Some(signal.id.clone()),
+            payload: serde_json::json!({
+                "changes": {
+                    "currentValue": false
+                }
+            }),
+        });
+    }
+
+    commands.push(AiProposedCommand {
+        kind: "simulation.run.start".to_string(),
+        target_id: run
+            .data
+            .get("robotCellId")
+            .and_then(|value| value.as_str())
+            .map(str::to_string),
+        payload: serde_json::json!({}),
+    });
+
+    dedupe_commands(commands)
+}
+
+fn find_signal_entity<'a>(
+    document: &'a ProjectDocument,
+    signal_id: &str,
+) -> Option<&'a faero_types::EntityRecord> {
+    document.nodes.values().find(|entity| {
+        entity.entity_type == "Signal"
+            && entity
+                .data
+                .get("signalId")
+                .and_then(|value| value.as_str())
+                == Some(signal_id)
+    })
+}
+
+fn dedupe_commands(commands: Vec<AiProposedCommand>) -> Vec<AiProposedCommand> {
+    let mut seen = Vec::<String>::new();
+    let mut deduped = Vec::new();
+    for command in commands {
+        let key = format!(
+            "{}|{}|{}",
+            command.kind,
+            command.target_id.clone().unwrap_or_default(),
+            command.payload
+        );
+        if seen.iter().any(|entry| entry == &key) {
+            continue;
+        }
+        seen.push(key);
+        deduped.push(command);
+    }
+    deduped
 }
 
 fn latest_entity_by_type<'a>(
@@ -874,6 +1006,7 @@ fn fallback_response(
         runtime,
         references,
         structured,
+        suggestion_id: None,
         warnings,
         source,
     }
@@ -2050,5 +2183,63 @@ mod tests {
         drop(stream);
         let response = client.join().expect("client should join");
         assert!(response.contains("418 Mock"));
+    }
+
+    #[test]
+    fn structured_explain_proposes_commands_for_blocked_runs() {
+        let mut document = sample_document();
+        document.nodes.insert(
+            "ent_sig_001".to_string(),
+            EntityRecord {
+                id: "ent_sig_001".to_string(),
+                entity_type: "Signal".to_string(),
+                name: "Progress Gate".to_string(),
+                revision: "rev_seed".to_string(),
+                status: "active".to_string(),
+                data: serde_json::json!({
+                    "signalId": "sig_progress_gate",
+                    "kind": "scalar",
+                    "currentValue": 0.62,
+                    "parameterSet": {
+                        "unit": "ratio"
+                    }
+                }),
+            },
+        );
+        document.nodes.insert(
+            "ent_run_001".to_string(),
+            EntityRecord {
+                id: "ent_run_001".to_string(),
+                entity_type: "SimulationRun".to_string(),
+                name: "Run Demo".to_string(),
+                revision: "rev_seed".to_string(),
+                status: "active".to_string(),
+                data: serde_json::json!({
+                    "robotCellId": "ent_cell_001",
+                    "summary": {
+                        "collisionCount": 0,
+                        "blockedSequenceDetected": true,
+                        "blockedStateId": "transfer",
+                        "cycleTimeMs": 3497
+                    },
+                    "contacts": []
+                }),
+            },
+        );
+
+        let explain = build_structured_explain(&document, "explique le blocage");
+
+        assert!(
+            explain
+                .proposed_commands
+                .iter()
+                .any(|command| command.kind == "entity.properties.update")
+        );
+        assert!(
+            explain
+                .proposed_commands
+                .iter()
+                .any(|command| command.kind == "simulation.run.start")
+        );
     }
 }

@@ -67,6 +67,10 @@ function createSnapshot({
             widthMm: 120,
             heightMm: 80,
             depthMm: 10,
+            quality: {
+              toleranceMm: 0.4,
+            },
+            checkpoints: [120, 80, 10],
           },
         },
         partGeometry: {
@@ -144,6 +148,7 @@ function createMockBackend() {
   let snapshot = createSnapshot();
   let activityCounter = 2;
   let lastSelectedModel = null;
+  let suggestionCounter = 1;
 
   function clone(value) {
     return structuredClone(value);
@@ -160,6 +165,158 @@ function createMockBackend() {
       },
       ...snapshot.recentActivity,
     ].slice(0, 12);
+  }
+
+  function setNestedValue(target, path, value) {
+    const segments = path.split(".").filter(Boolean);
+    if (segments.length === 0) {
+      return target;
+    }
+
+    let current = target;
+    for (const segment of segments.slice(0, -1)) {
+      if (
+        typeof current[segment] !== "object" ||
+        current[segment] === null ||
+        Array.isArray(current[segment])
+      ) {
+        current[segment] = {};
+      }
+      current = current[segment];
+    }
+    current[segments[segments.length - 1]] = value;
+    return target;
+  }
+
+  function valueAtPath(source, path) {
+    return path
+      .split(".")
+      .filter(Boolean)
+      .reduce(
+        (current, segment) =>
+          current && typeof current === "object" ? current[segment] : undefined,
+        source,
+      );
+  }
+
+  function buildTimelineArtifacts() {
+    return {
+      timelineSamples: [
+        { stepIndex: 0, timestampMs: 0, trackingErrorMm: 0.11, speedScale: 0.82 },
+        { stepIndex: 1, timestampMs: 320, trackingErrorMm: 0.14, speedScale: 0.86 },
+        { stepIndex: 2, timestampMs: 710, trackingErrorMm: 0.19, speedScale: 0.93 },
+      ],
+      signalSamples: [
+        {
+          stepIndex: 0,
+          timestampMs: 0,
+          signalId: "sig_cycle_start",
+          value: false,
+          reason: "initial_value",
+        },
+        {
+          stepIndex: 1,
+          timestampMs: 320,
+          signalId: "sig_cycle_start",
+          value: true,
+          reason: "simulation.run.start",
+        },
+      ],
+      controllerStateSamples: [
+        {
+          stepIndex: 0,
+          timestampMs: 0,
+          stateId: "idle",
+          stateName: "Idle",
+          reason: "initial_state",
+        },
+        {
+          stepIndex: 2,
+          timestampMs: 710,
+          stateId: "transfer",
+          stateName: "Transfer",
+          reason: "pick completed",
+        },
+      ],
+      contacts: [],
+    };
+  }
+
+  function applyEntityChanges(payload) {
+    const entityIndex = snapshot.entities.findIndex(
+      (entity) => entity.id === payload.entityId,
+    );
+    assert.notEqual(entityIndex, -1);
+
+    let next = clone(snapshot.entities[entityIndex]);
+    const changes = payload.changes ?? {};
+    if (typeof changes.name === "string" && changes.name.trim().length > 0) {
+      next.name = changes.name.trim();
+    }
+    if (!next.data || typeof next.data !== "object") {
+      next.data = {};
+    }
+    if (Array.isArray(changes.tags)) {
+      next.data.tags = changes.tags;
+    }
+    for (const [path, value] of Object.entries(changes)) {
+      if (path === "name" || path === "tags") {
+        continue;
+      }
+      setNestedValue(next.data, path, value);
+    }
+
+    if (next.partGeometry) {
+      const widthMm = Number(
+        valueAtPath(next.data, "parameterSet.widthMm") ?? next.partGeometry.widthMm,
+      );
+      const heightMm = Number(
+        valueAtPath(next.data, "parameterSet.heightMm") ?? next.partGeometry.heightMm,
+      );
+      const depthMm = Number(
+        valueAtPath(next.data, "parameterSet.depthMm") ?? next.partGeometry.depthMm,
+      );
+      const areaMm2 = widthMm * heightMm;
+      const volumeMm3 = areaMm2 * depthMm;
+      const estimatedMassGrams = volumeMm3 * 0.0027;
+      next = {
+        ...next,
+        detail: `${widthMm.toFixed(1)} x ${heightMm.toFixed(1)} x ${depthMm.toFixed(1)} mm | ${estimatedMassGrams.toFixed(1)} g`,
+        partGeometry: {
+          ...next.partGeometry,
+          widthMm,
+          heightMm,
+          depthMm,
+          perimeterMm: 2 * (widthMm + heightMm),
+          areaMm2,
+          volumeMm3,
+          estimatedMassGrams,
+        },
+      };
+    }
+
+    if (next.entityType === "Signal") {
+      next = {
+        ...next,
+        detail: `${next.data.signalId ?? "signal"} | ${String(next.data.currentValue ?? false)}`,
+      };
+    }
+
+    next.revision = `rev_${String(activityCounter).padStart(4, "0")}`;
+
+    snapshot.entities = snapshot.entities.map((entity, index) =>
+      index === entityIndex ? next : entity,
+    );
+    pushActivity("entity.properties.updated", payload.entityId);
+
+    return {
+      snapshot: clone(snapshot),
+      result: {
+        commandId: "entity.properties.update",
+        status: "applied",
+        message: `updated ${payload.entityId}`,
+      },
+    };
   }
 
   return {
@@ -212,6 +369,10 @@ function createMockBackend() {
                 widthMm: 132.0,
                 heightMm: 86.0,
                 depthMm: 12.0,
+                quality: {
+                  toleranceMm: 0.4,
+                },
+                checkpoints: [132, 86, 12],
               },
             },
             partGeometry: {
@@ -313,6 +474,24 @@ function createMockBackend() {
               warningCount: 0,
             },
           },
+          {
+            id: `ent_sig_${(index + 1).toString().padStart(3, "0")}`,
+            entityType: "Signal",
+            name: "Progress Gate",
+            revision: "rev_seed",
+            status: "active",
+            detail: "sig_progress_gate | 0.62",
+            data: {
+              signalId: "sig_progress_gate",
+              kind: "scalar",
+              currentValue: 0.62,
+              tags: ["control", "simulation"],
+              parameterSet: {
+                unit: "ratio",
+                checkpoints: [0.25, 0.62, 1.0],
+              },
+            },
+          },
         ];
         snapshot.status.entityCount = snapshot.entities.length;
       } else if (commandId === "simulation.run.start") {
@@ -350,6 +529,7 @@ function createMockBackend() {
           ];
         }
         const index = snapshot.entities.length + 1;
+        const artifacts = buildTimelineArtifacts();
         snapshot.entities = [
           ...snapshot.entities,
           {
@@ -365,6 +545,7 @@ function createMockBackend() {
                 seed: 308,
                 stepCount: 12,
               },
+              ...artifacts,
             },
             simulationRunSummary: {
               status: "completed",
@@ -515,58 +696,7 @@ function createMockBackend() {
       };
     },
     async updateEntityProperties(payload) {
-      const entityIndex = snapshot.entities.findIndex(
-        (entity) => entity.id === payload.entityId,
-      );
-      assert.notEqual(entityIndex, -1);
-
-      const current = snapshot.entities[entityIndex];
-      let next = {
-        ...current,
-        name: payload.name,
-        data: {
-          ...(current.data ?? {}),
-          tags: payload.tags,
-          parameterSet: payload.parameters,
-        },
-      };
-
-      if (next.partGeometry) {
-        const widthMm = Number(payload.parameters.widthMm);
-        const heightMm = Number(payload.parameters.heightMm);
-        const depthMm = Number(payload.parameters.depthMm);
-        const areaMm2 = widthMm * heightMm;
-        const volumeMm3 = areaMm2 * depthMm;
-        const estimatedMassGrams = volumeMm3 * 0.0027;
-        next = {
-          ...next,
-          detail: `${widthMm.toFixed(1)} x ${heightMm.toFixed(1)} x ${depthMm.toFixed(1)} mm | ${estimatedMassGrams.toFixed(1)} g`,
-          partGeometry: {
-            ...next.partGeometry,
-            widthMm,
-            heightMm,
-            depthMm,
-            perimeterMm: 2 * (widthMm + heightMm),
-            areaMm2,
-            volumeMm3,
-            estimatedMassGrams,
-          },
-        };
-      }
-
-      snapshot.entities = snapshot.entities.map((entity, index) =>
-        index === entityIndex ? next : entity,
-      );
-      pushActivity("entity.properties.updated", payload.entityId);
-
-      return {
-        snapshot: clone(snapshot),
-        result: {
-          commandId: "entity.properties.update",
-          status: "applied",
-          message: `updated ${payload.entityId}`,
-        },
-      };
+      return applyEntityChanges(payload);
     },
     async fetchAiRuntimeStatus() {
       return clone(runtime);
@@ -579,6 +709,7 @@ function createMockBackend() {
       currentSnapshot,
     ) {
       lastSelectedModel = selectedModel;
+      const suggestionId = `ent_ai_suggestion_${String(suggestionCounter++).padStart(3, "0")}`;
       return {
         answer: `[${locale}] ${message} :: ${selectedModel ?? runtime.activeModel} :: ${currentSnapshot.status.projectName} :: ${history.length}`,
         runtime: {
@@ -598,11 +729,60 @@ function createMockBackend() {
           confidence: 0.82,
           riskLevel: "medium",
           limitations: ["Mock backend structure la reponse localement."],
-          proposedCommands: [],
+          proposedCommands: [
+            {
+              kind: "entity.properties.update",
+              targetId: currentSnapshot.entities[0]?.id ?? null,
+              payload: {
+                changes: {
+                  "parameterSet.widthMm": 140,
+                  "parameterSet.quality.toleranceMm": 0.35,
+                  "parameterSet.checkpoints": [140, 90, 20],
+                },
+              },
+            },
+            {
+              kind: "simulation.run.start",
+              targetId: null,
+              payload: {},
+            },
+          ],
           explanation: [`Historique recu: ${history.length}`],
         },
+        suggestionId,
         warnings: [],
         source: "mock-backend",
+      };
+    },
+    async applyAiSuggestion(suggestionId) {
+      const command = {
+        entityId: "ent_001",
+        changes: {
+          "parameterSet.widthMm": 140,
+          "parameterSet.quality.toleranceMm": 0.35,
+          "parameterSet.checkpoints": [140, 90, 20],
+        },
+      };
+      applyEntityChanges(command);
+      pushActivity("ai.suggestion.applied", suggestionId);
+      return {
+        snapshot: clone(snapshot),
+        result: {
+          commandId: "ai.suggestion.apply",
+          status: "applied",
+          message: `applied ${suggestionId}`,
+        },
+      };
+    },
+    async rejectAiSuggestion(suggestionId) {
+      pushActivity("ai.suggestion.rejected", suggestionId);
+      return {
+        snapshot: clone(snapshot),
+        result: {
+          commandId: "ai.suggestion.reject",
+          status: "applied",
+          message: `rejected ${suggestionId}`,
+        },
       };
     },
     getLastSelectedModel() {

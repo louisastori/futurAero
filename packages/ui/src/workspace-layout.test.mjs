@@ -16,6 +16,10 @@ test("view commands map to the expected workspace panels", () => {
   assert.equal(panelIdFromCommand("view.problems"), "problems");
   assert.equal(panelIdFromCommand("view.ai_assistant"), "aiAssistant");
   assert.equal(panelIdFromCommand("view.viewport_3d"), "viewport");
+  assert.equal(
+    panelIdFromCommand("view.simulation_timeline"),
+    "simulationTimeline"
+  );
   assert.equal(panelIdFromCommand("view.jobs"), null);
 });
 
@@ -47,6 +51,7 @@ test("column state reports when left or right docks are fully collapsed", () => 
   });
   const rightClosed = getWorkspaceColumnState({
     ...defaultWorkspacePanels,
+    simulationTimeline: false,
     aiAssistant: false,
     output: false,
     problems: false

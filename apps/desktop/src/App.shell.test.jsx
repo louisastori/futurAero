@@ -39,6 +39,7 @@ describe("App shell chrome", () => {
       { panelId: "properties", text: "Proprietes" },
       { panelId: "commandSurface", text: "Surface de commandes" },
       { panelId: "viewport", text: "Viewport 3D" },
+      { panelId: "simulationTimeline", text: "Timeline de simulation" },
       { panelId: "aiAssistant", text: "Assistant IA local" },
       { panelId: "output", text: "Sortie" },
       { panelId: "problems", text: "Problemes" },
@@ -78,6 +79,7 @@ describe("App shell chrome", () => {
       ["view.problems", "problems"],
       ["view.ai_assistant", "aiAssistant"],
       ["view.viewport_3d", "viewport"],
+      ["view.simulation_timeline", "simulationTimeline"],
     ]);
 
     for (const menu of menus) {

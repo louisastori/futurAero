@@ -32,5 +32,12 @@ export {
   WORKSPACE_RESIZER_WIDTH,
   workspaceDockWidthLimits,
 } from "./workspace-resize.mjs";
+export {
+  buildEntityInspectorSchema,
+  buildInspectorDraftFromSchema,
+  coerceInspectorDraftValue,
+  findInspectorFieldByPath,
+  flattenEditableInspectorFields,
+} from "./property-inspector.mjs";
 
 export const uiScaffoldStatus = "menu-model-ready";

@@ -437,6 +437,11 @@ button {
   background: rgba(255, 255, 255, 0.04);
 }
 
+.property-schema-sections {
+  display: grid;
+  gap: 10px;
+}
+
 .property-editor-grid {
   display: grid;
   gap: 10px;
@@ -447,9 +452,25 @@ button {
   min-width: 0;
 }
 
+.property-field-group,
+.property-field-row {
+  padding-left: calc(var(--property-depth, 0) * 10px);
+}
+
+.property-field-children {
+  display: grid;
+  gap: 10px;
+}
+
+.property-array-input {
+  min-height: 96px;
+}
+
 .property-editor-actions {
   display: flex;
   justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
 .property-inline-metrics {
@@ -749,6 +770,11 @@ button {
   cursor: pointer;
 }
 
+.assistant-starter.is-active {
+  background: rgba(88, 159, 255, 0.16);
+  border-color: rgba(88, 159, 255, 0.34);
+}
+
 .assistant-starter:disabled {
   opacity: 0.6;
   cursor: wait;
@@ -788,6 +814,11 @@ button {
   border-radius: 12px;
   background: rgba(255, 255, 255, 0.04);
   border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.simulation-timeline-list {
+  max-height: 360px;
+  overflow: auto;
 }
 
 @media (max-width: 1100px) {

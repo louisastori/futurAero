@@ -67,7 +67,7 @@ describe("App entity and simulation flows", () => {
     });
   });
 
-  test("generic inspector edits the selected entity name, tags and parameters", async () => {
+  test("generic inspector edits the selected entity name, nested parameters and list values", async () => {
     const { user } = await renderApp();
 
     await user.click(screen.getByRole("button", { name: "Insertion" }));
@@ -88,12 +88,16 @@ describe("App entity and simulation flows", () => {
     const widthInput = screen.getByLabelText("widthMm");
     const heightInput = screen.getByLabelText("heightMm");
     const depthInput = screen.getByLabelText("depthMm");
+    const toleranceInput = screen.getByLabelText("toleranceMm");
+    const checkpointsInput = screen.getByLabelText("checkpoints");
 
     fireEvent.change(nameInput, { target: { value: "Part-Edited-002" } });
     fireEvent.change(tagsInput, { target: { value: "edited, qa" } });
     fireEvent.change(widthInput, { target: { value: "210" } });
     fireEvent.change(heightInput, { target: { value: "95" } });
     fireEvent.change(depthInput, { target: { value: "18" } });
+    fireEvent.change(toleranceInput, { target: { value: "0.25" } });
+    fireEvent.change(checkpointsInput, { target: { value: "[210, 95, 18]" } });
     await user.click(
       document.querySelector('[data-entity-save="ent_part_002"]'),
     );
@@ -104,6 +108,8 @@ describe("App entity and simulation flows", () => {
           ?.textContent,
         "Part-Edited-002",
       );
+      assert.equal(screen.getByLabelText("toleranceMm").value, "0.25");
+      assert.equal(screen.getByLabelText("checkpoints").value, "[\n  210,\n  95,\n  18\n]");
       assert.ok(
         document.querySelector('[data-parametric-part-summary="ent_part_002"]'),
       );
@@ -114,6 +120,36 @@ describe("App entity and simulation flows", () => {
         "entity.properties.update",
       );
       assert.ok(screen.getAllByText("Part-Edited-002").length >= 2);
+    });
+  });
+
+  test("simulation timeline panel exposes signal and controller events from persisted artifacts", async () => {
+    const { user } = await renderApp();
+
+    await user.click(screen.getByRole("button", { name: "Simulation" }));
+    await user.click(
+      document.querySelector('[data-command-id="simulation.run.start"]'),
+    );
+
+    await waitFor(() => {
+      assert.ok(
+        document.querySelector('[data-simulation-timeline-focus]'),
+      );
+      assert.ok(
+        Array.from(document.querySelectorAll("[data-simulation-event]")).length >=
+          3,
+      );
+    });
+
+    await user.click(document.querySelector('[data-simulation-step="true"]'));
+
+    await waitFor(() => {
+      assert.equal(
+        document
+          .querySelector("[data-command-feedback]")
+          ?.getAttribute("data-command-feedback"),
+        "simulation.timeline.step",
+      );
     });
   });
 
@@ -134,6 +170,43 @@ describe("App entity and simulation flows", () => {
         document
           .querySelector('[data-robot-cell-targets="ent_cell_002"]')
           ?.textContent?.includes("3"),
+      );
+    });
+  });
+
+  test("signal inspector edits enum kind and typed current value", async () => {
+    const { user } = await renderApp();
+
+    await user.click(screen.getByRole("button", { name: "Insertion" }));
+    await user.click(
+      document.querySelector('[data-command-id="entity.create.robot_cell"]'),
+    );
+
+    await waitFor(() => {
+      assert.ok(document.querySelector('[data-entity-select^="ent_sig_"]'));
+    });
+
+    await user.click(document.querySelector('[data-entity-select^="ent_sig_"]'));
+
+    const kindSelect = screen.getByLabelText("kind");
+    const currentValueInput = screen.getByLabelText("currentValue");
+    const checkpointsInput = screen.getByLabelText("checkpoints");
+
+    await user.selectOptions(kindSelect, "text");
+    fireEvent.change(currentValueInput, { target: { value: "ready" } });
+    fireEvent.change(checkpointsInput, { target: { value: '["ready", "done"]' } });
+    await user.click(
+      document.querySelector('[data-entity-save^="ent_sig_"]'),
+    );
+
+    await waitFor(() => {
+      assert.equal(screen.getByLabelText("kind").value, "text");
+      assert.equal(screen.getByLabelText("currentValue").value, "ready");
+      assert.equal(
+        document
+          .querySelector("[data-command-feedback]")
+          ?.getAttribute("data-command-feedback"),
+        "entity.properties.update",
       );
     });
   });

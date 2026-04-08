@@ -259,9 +259,7 @@ struct PartRegenerationInput {
 #[serde(rename_all = "camelCase")]
 struct EntityPropertyUpdateInput {
     entity_id: String,
-    name: String,
-    tags: Vec<String>,
-    parameters: serde_json::Value,
+    changes: serde_json::Value,
 }
 
 #[derive(Debug)]
@@ -411,10 +409,6 @@ impl WorkspaceSession {
         &mut self,
         payload: &EntityPropertyUpdateInput,
     ) -> Result<CommandResult, String> {
-        let name = payload.name.trim();
-        if name.is_empty() {
-            return Err("le nom ne peut pas etre vide".to_string());
-        }
         let entity = self
             .graph
             .document()
@@ -422,58 +416,107 @@ impl WorkspaceSession {
             .get(&payload.entity_id)
             .cloned()
             .ok_or_else(|| format!("entite introuvable: {}", payload.entity_id))?;
-        let parameters = payload
-            .parameters
+        let changes = payload
+            .changes
             .as_object()
             .cloned()
-            .ok_or_else(|| "les parametres doivent former un objet JSON".to_string())?;
-        let normalized_tags = payload
-            .tags
-            .iter()
-            .map(|tag| tag.trim())
-            .filter(|tag| !tag.is_empty())
+            .ok_or_else(|| "les changements doivent former un objet JSON".to_string())?;
+        let next_name = changes
+            .get("name")
+            .and_then(|value| value.as_str())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
             .map(str::to_string)
-            .collect::<Vec<_>>();
+            .unwrap_or_else(|| entity.name.clone());
+        if next_name.trim().is_empty() {
+            return Err("le nom ne peut pas etre vide".to_string());
+        }
+
+        let current_tags = entity
+            .data
+            .get("tags")
+            .and_then(|value| value.as_array())
+            .map(|entries| {
+                entries
+                    .iter()
+                    .filter_map(|value| value.as_str().map(str::to_string))
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        let normalized_tags = if let Some(tags_value) = changes.get("tags") {
+            tags_value
+                .as_array()
+                .ok_or_else(|| "tags doit rester un tableau".to_string())?
+                .iter()
+                .filter_map(|value| value.as_str().map(str::trim))
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        } else {
+            current_tags
+        };
 
         if entity.entity_type == "Part" {
             let current = part_geometry_summary_from_entity(&entity)
                 .ok_or_else(|| "piece parametrique invalide".to_string())?;
-            let width_mm = parameters
-                .get("widthMm")
-                .and_then(|value| value.as_f64())
+            let width_mm = extract_f64_change(&changes, "parameterSet.widthMm")
                 .unwrap_or(current.width_mm);
-            let height_mm = parameters
-                .get("heightMm")
-                .and_then(|value| value.as_f64())
+            let height_mm = extract_f64_change(&changes, "parameterSet.heightMm")
                 .unwrap_or(current.height_mm);
-            let depth_mm = parameters
-                .get("depthMm")
-                .and_then(|value| value.as_f64())
+            let depth_mm = extract_f64_change(&changes, "parameterSet.depthMm")
                 .unwrap_or(current.depth_mm);
+            validate_positive_dimension("parameterSet.widthMm", width_mm)?;
+            validate_positive_dimension("parameterSet.heightMm", height_mm)?;
+            validate_positive_dimension("parameterSet.depthMm", depth_mm)?;
             let (mut next_entity, _) =
-                build_parametric_part_entity(&entity.id, name, width_mm, height_mm, depth_mm)?;
+                build_parametric_part_entity(&entity.id, &next_name, width_mm, height_mm, depth_mm)?;
             if let Some(data) = next_entity.data.as_object_mut() {
                 data.insert("tags".to_string(), serde_json::json!(normalized_tags));
+                merge_generic_parameter_changes(data, &entity.data, &changes)?;
+                validate_entity_change_set(&entity, data)?;
             }
             self.graph
                 .apply_command(CoreCommand::ReplaceEntity(next_entity))
                 .map_err(|error| error.to_string())?;
         } else {
             let mut next_entity = entity.clone();
-            next_entity.name = name.to_string();
+            next_entity.name = next_name;
+            if !next_entity.data.is_object() {
+                next_entity.data = serde_json::json!({});
+            }
             if let Some(data) = next_entity.data.as_object_mut() {
                 data.insert("tags".to_string(), serde_json::json!(normalized_tags));
-                data.insert(
-                    "parameterSet".to_string(),
-                    serde_json::Value::Object(parameters.clone()),
-                );
+                apply_data_changes(data, &changes)?;
+                if entity.entity_type == "Signal"
+                    && let Some(kind) = data.get("kind").and_then(|value| value.as_str())
+                {
+                    let current_value_valid = match kind {
+                        "boolean" => data.get("currentValue").is_some_and(|value| value.is_boolean()),
+                        "scalar" => data
+                            .get("currentValue")
+                            .and_then(|value| value.as_f64())
+                            .is_some(),
+                        "text" => data
+                            .get("currentValue")
+                            .and_then(|value| value.as_str())
+                            .is_some(),
+                        _ => false,
+                    };
+                    if !current_value_valid {
+                        data.insert(
+                            "currentValue".to_string(),
+                            default_signal_value_for_kind(kind),
+                        );
+                    }
+                }
+                validate_entity_change_set(&entity, data)?;
             }
             self.graph
-                .apply_command(CoreCommand::ReplaceEntity(next_entity))
+                .apply_command(CoreCommand::ReplaceEntity(next_entity.clone()))
                 .map_err(|error| error.to_string())?;
 
             if entity.entity_type == "Signal"
-                && let Some(current_value) = parameters.get("currentValue")
+                && let Some(current_value) = next_entity.data.get("currentValue")
             {
                 let parsed_value = serde_json::from_value::<SignalValue>(current_value.clone())
                     .map_err(|error| error.to_string())?;
@@ -498,7 +541,7 @@ impl WorkspaceSession {
         &mut self,
         message: &str,
         response: &AiChatResponse,
-    ) -> Result<(), String> {
+    ) -> Result<String, String> {
         let suggestion_id = format!("ent_ai_suggestion_{:03}", self.graph.entity_count() + 1);
         let session_entity = self.latest_entity_of_type("AiSession");
         let (session_id, mut created_suggestion_ids, accepted_suggestion_ids, session_entity_id) =
@@ -615,20 +658,196 @@ impl WorkspaceSession {
                 "contextRefs": structured.context_refs.clone(),
                 "confidence": structured.confidence,
                 "riskLevel": risk_level,
+                "reviewStatus": "pending",
                 "limitations": structured.limitations.clone(),
                 "proposedCommands": structured.proposed_commands.clone(),
                 "explanation": structured.explanation.clone(),
                 "tags": ["ai", "explain", "local"],
                 "parameterSet": {
                     "confidence": structured.confidence,
-                    "referenceCount": response.references.len()
+                    "referenceCount": response.references.len(),
+                    "proposedCommandCount": structured.proposed_commands.len()
                 }
             }),
         );
         self.graph
             .apply_command(CoreCommand::CreateEntity(suggestion_record))
             .map_err(|error| error.to_string())?;
-        self.push_system_activity("ai.suggestion.created", Some(suggestion_id));
+        self.push_system_activity("ai.suggestion.created", Some(suggestion_id.clone()));
+        Ok(suggestion_id)
+    }
+
+    fn apply_ai_suggestion(&mut self, suggestion_id: &str) -> Result<CommandResult, String> {
+        let suggestion = self
+            .graph
+            .document()
+            .nodes
+            .get(suggestion_id)
+            .cloned()
+            .ok_or_else(|| format!("suggestion IA introuvable: {suggestion_id}"))?;
+        if suggestion.entity_type != "AiSuggestion" {
+            return Err(format!("entite {suggestion_id} n est pas une suggestion IA"));
+        }
+        let proposed_commands = suggestion
+            .data
+            .get("proposedCommands")
+            .cloned()
+            .ok_or_else(|| "aucune commande proposee".to_string())
+            .and_then(|value| {
+                serde_json::from_value::<Vec<faero_types::AiProposedCommand>>(value)
+                    .map_err(|error| error.to_string())
+            })?;
+        if proposed_commands.is_empty() {
+            return Err("aucune commande proposee".to_string());
+        }
+
+        let mut applied_kinds = Vec::new();
+        let mut applied_messages = Vec::new();
+        for command in proposed_commands {
+            match command.kind.as_str() {
+                "entity.properties.update" => {
+                    let target_id = command
+                        .target_id
+                        .clone()
+                        .ok_or_else(|| "entity.properties.update exige targetId".to_string())?;
+                    let changes = command
+                        .payload
+                        .get("changes")
+                        .cloned()
+                        .unwrap_or_else(|| command.payload.clone());
+                    let result = self.update_entity_properties(&EntityPropertyUpdateInput {
+                        entity_id: target_id,
+                        changes,
+                    })?;
+                    applied_kinds.push(command.kind.clone());
+                    applied_messages.push(result.message);
+                }
+                other => {
+                    let result = self.execute_command(other)?;
+                    applied_kinds.push(other.to_string());
+                    applied_messages.push(result.message);
+                }
+            }
+        }
+
+        self.update_ai_suggestion_review_state(suggestion_id, "accepted", &applied_kinds)?;
+        self.push_system_activity("ai.suggestion.applied", Some(suggestion_id.to_string()));
+
+        Ok(CommandResult {
+            command_id: "ai.suggestion.apply".to_string(),
+            status: "applied".to_string(),
+            message: format!(
+                "suggestion {} appliquee: {}",
+                suggestion_id,
+                applied_messages.join(" | ")
+            ),
+        })
+    }
+
+    fn reject_ai_suggestion(&mut self, suggestion_id: &str) -> Result<CommandResult, String> {
+        self.update_ai_suggestion_review_state(suggestion_id, "rejected", &[])?;
+        self.push_system_activity("ai.suggestion.rejected", Some(suggestion_id.to_string()));
+        Ok(CommandResult {
+            command_id: "ai.suggestion.reject".to_string(),
+            status: "applied".to_string(),
+            message: format!("suggestion {} rejetee sans effet de bord", suggestion_id),
+        })
+    }
+
+    fn update_ai_suggestion_review_state(
+        &mut self,
+        suggestion_id: &str,
+        review_status: &str,
+        applied_command_kinds: &[String],
+    ) -> Result<(), String> {
+        let suggestion = self
+            .graph
+            .document()
+            .nodes
+            .get(suggestion_id)
+            .cloned()
+            .ok_or_else(|| format!("suggestion IA introuvable: {suggestion_id}"))?;
+        let mut updated_suggestion = suggestion.clone();
+        if let Some(data) = updated_suggestion.data.as_object_mut() {
+            data.insert(
+                "reviewStatus".to_string(),
+                serde_json::Value::String(review_status.to_string()),
+            );
+            data.insert(
+                "appliedCommandKinds".to_string(),
+                serde_json::json!(applied_command_kinds),
+            );
+            if let Some(parameter_set) = data
+                .entry("parameterSet")
+                .or_insert_with(|| serde_json::json!({}))
+                .as_object_mut()
+            {
+                parameter_set.insert(
+                    "appliedCommandCount".to_string(),
+                    serde_json::json!(applied_command_kinds.len()),
+                );
+            }
+        }
+        self.graph
+            .apply_command(CoreCommand::ReplaceEntity(updated_suggestion))
+            .map_err(|error| error.to_string())?;
+
+        let session_id = suggestion
+            .data
+            .get("sessionId")
+            .and_then(|value| value.as_str())
+            .map(str::to_string);
+        if review_status == "accepted"
+            && let Some(session_id) = session_id
+        {
+            self.accept_suggestion_in_session(&session_id, suggestion_id)?;
+        }
+
+        Ok(())
+    }
+
+    fn accept_suggestion_in_session(
+        &mut self,
+        session_id: &str,
+        suggestion_id: &str,
+    ) -> Result<(), String> {
+        let Some(session_entity) = self
+            .graph
+            .document()
+            .nodes
+            .values()
+            .find(|entity| entity.entity_type == "AiSession")
+            .filter(|entity| {
+                entity.data.get("sessionId").and_then(|value| value.as_str()) == Some(session_id)
+            })
+            .cloned()
+        else {
+            return Ok(());
+        };
+
+        let mut updated = session_entity.clone();
+        if let Some(data) = updated.data.as_object_mut() {
+            let mut accepted_ids = data
+                .get("acceptedSuggestionIds")
+                .and_then(|value| value.as_array())
+                .map(|entries| {
+                    entries
+                        .iter()
+                        .filter_map(|value| value.as_str().map(str::to_string))
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            if !accepted_ids.iter().any(|entry| entry == suggestion_id) {
+                accepted_ids.push(suggestion_id.to_string());
+            }
+            data.insert(
+                "acceptedSuggestionIds".to_string(),
+                serde_json::json!(accepted_ids),
+            );
+        }
+        self.graph
+            .apply_command(CoreCommand::ReplaceEntity(updated))
+            .map_err(|error| error.to_string())?;
         Ok(())
     }
 
@@ -2039,6 +2258,7 @@ fn build_simulation_run_entity(
         name,
         serde_json::json!({
             "tags": ["simulation", "artifact", "mvp"],
+            "robotCellId": robot_cell.id.clone(),
             "scenario": {
                 "name": request.scenario_name.clone(),
                 "seed": request.seed,
@@ -2125,6 +2345,7 @@ fn build_safety_report_entity(
         name,
         serde_json::json!({
             "tags": ["safety", "analysis"],
+            "robotCellId": robot_cell.id.clone(),
             "parameterSet": {
                 "attemptedAction": attempted_action
             },
@@ -2151,6 +2372,120 @@ fn number_from_value(value: &serde_json::Value, key: &str) -> Option<f64> {
 
 fn string_from_value(value: &serde_json::Value, key: &str) -> Option<String> {
     Some(value.get(key)?.as_str()?.to_string())
+}
+
+fn extract_f64_change(
+    changes: &serde_json::Map<String, serde_json::Value>,
+    path: &str,
+) -> Option<f64> {
+    changes.get(path).and_then(|value| value.as_f64())
+}
+
+fn validate_positive_dimension(label: &str, value: f64) -> Result<(), String> {
+    if value.is_finite() && value > 0.0 {
+        Ok(())
+    } else {
+        Err(format!("{label} doit rester strictement positif"))
+    }
+}
+
+fn apply_data_changes(
+    data: &mut serde_json::Map<String, serde_json::Value>,
+    changes: &serde_json::Map<String, serde_json::Value>,
+) -> Result<(), String> {
+    for (path, value) in changes {
+        if matches!(path.as_str(), "name" | "tags") {
+            continue;
+        }
+        set_json_path(data, path, value.clone())?;
+    }
+    Ok(())
+}
+
+fn merge_generic_parameter_changes(
+    data: &mut serde_json::Map<String, serde_json::Value>,
+    _existing_data: &serde_json::Value,
+    changes: &serde_json::Map<String, serde_json::Value>,
+) -> Result<(), String> {
+    apply_data_changes(data, changes)
+}
+
+fn set_json_path(
+    root: &mut serde_json::Map<String, serde_json::Value>,
+    path: &str,
+    value: serde_json::Value,
+) -> Result<(), String> {
+    let segments = path
+        .split('.')
+        .filter(|segment| !segment.trim().is_empty())
+        .collect::<Vec<_>>();
+    if segments.is_empty() {
+        return Err("chemin de propriete vide".to_string());
+    }
+
+    let mut current = root;
+    for segment in &segments[..segments.len() - 1] {
+        let entry = current
+            .entry((*segment).to_string())
+            .or_insert_with(|| serde_json::json!({}));
+        if !entry.is_object() {
+            *entry = serde_json::json!({});
+        }
+        current = entry
+            .as_object_mut()
+            .ok_or_else(|| format!("chemin invalide: {path}"))?;
+    }
+    current.insert(segments[segments.len() - 1].to_string(), value);
+    Ok(())
+}
+
+fn default_signal_value_for_kind(kind: &str) -> serde_json::Value {
+    match kind {
+        "scalar" => serde_json::json!(0.0),
+        "text" => serde_json::json!(""),
+        _ => serde_json::json!(false),
+    }
+}
+
+fn validate_entity_change_set(
+    entity: &EntityRecord,
+    data: &serde_json::Map<String, serde_json::Value>,
+) -> Result<(), String> {
+    if let Some(parameters) = data.get("parameterSet").and_then(|value| value.as_object()) {
+        for dimension in ["widthMm", "heightMm", "depthMm"] {
+            if let Some(value) = parameters.get(dimension).and_then(|value| value.as_f64()) {
+                validate_positive_dimension(&format!("parameterSet.{dimension}"), value)?;
+            }
+        }
+    }
+
+    if entity.entity_type == "Signal" {
+        let kind = data
+            .get("kind")
+            .and_then(|value| value.as_str())
+            .ok_or_else(|| "le signal doit conserver un kind valide".to_string())?;
+        if !matches!(kind, "boolean" | "scalar" | "text") {
+            return Err("le kind du signal doit etre boolean, scalar ou text".to_string());
+        }
+        let current_value = data
+            .get("currentValue")
+            .cloned()
+            .unwrap_or_else(|| default_signal_value_for_kind(kind));
+        match kind {
+            "boolean" if !current_value.is_boolean() => {
+                return Err("currentValue doit rester booleen pour un signal boolean".to_string());
+            }
+            "scalar" if current_value.as_f64().is_none() => {
+                return Err("currentValue doit rester numerique pour un signal scalar".to_string());
+            }
+            "text" if current_value.as_str().is_none() => {
+                return Err("currentValue doit rester texte pour un signal text".to_string());
+            }
+            _ => {}
+        }
+    }
+
+    Ok(())
 }
 
 fn part_geometry_summary_from_entity(entity: &EntityRecord) -> Option<PartGeometrySummary> {
@@ -2556,6 +2891,32 @@ fn workspace_update_entity_properties(
 }
 
 #[tauri::command]
+fn workspace_apply_ai_suggestion(
+    suggestion_id: String,
+    state: State<'_, SharedWorkspace>,
+) -> Result<CommandResponse, String> {
+    let mut session = lock_workspace(&state)?;
+    let result = session.apply_ai_suggestion(&suggestion_id)?;
+    Ok(CommandResponse {
+        snapshot: session.snapshot(),
+        result,
+    })
+}
+
+#[tauri::command]
+fn workspace_reject_ai_suggestion(
+    suggestion_id: String,
+    state: State<'_, SharedWorkspace>,
+) -> Result<CommandResponse, String> {
+    let mut session = lock_workspace(&state)?;
+    let result = session.reject_ai_suggestion(&suggestion_id)?;
+    Ok(CommandResponse {
+        snapshot: session.snapshot(),
+        result,
+    })
+}
+
+#[tauri::command]
 fn ai_runtime_status() -> AiRuntimeStatus {
     query_ai_runtime_status()
 }
@@ -2572,7 +2933,7 @@ fn ai_chat_send_message(
         let session = lock_workspace(&state)?;
         session.graph.document().clone()
     };
-    let response = chat_with_project(
+    let mut response = chat_with_project(
         &document,
         &locale,
         &history,
@@ -2583,7 +2944,8 @@ fn ai_chat_send_message(
 
     {
         let mut session = lock_workspace(&state)?;
-        session.record_ai_response(&message, &response)?;
+        let suggestion_id = session.record_ai_response(&message, &response)?;
+        response.suggestion_id = Some(suggestion_id);
     }
 
     Ok(response)
@@ -2804,6 +3166,8 @@ fn main() {
             workspace_execute_command,
             workspace_regenerate_latest_part,
             workspace_update_entity_properties,
+            workspace_apply_ai_suggestion,
+            workspace_reject_ai_suggestion,
             ai_runtime_status,
             ai_chat_send_message
         ])
@@ -3125,5 +3489,146 @@ mod tests {
                 .iter()
                 .any(|entry| entry.kind == "project.imported")
         );
+    }
+
+    #[test]
+    fn generic_property_updates_handle_signal_enum_and_nested_fields() {
+        let mut session = WorkspaceSession::empty("Session");
+        session
+            .execute_command("entity.create.robot_cell")
+            .expect("robot cell should be created");
+        let signal = session
+            .graph
+            .document()
+            .nodes
+            .values()
+            .find(|entity| entity.entity_type == "Signal")
+            .cloned()
+            .expect("signal should exist");
+
+        let result = session
+            .update_entity_properties(&EntityPropertyUpdateInput {
+                entity_id: signal.id.clone(),
+                changes: serde_json::json!({
+                    "name": "Progress Gate Updated",
+                    "tags": ["control", "edited"],
+                    "kind": "text",
+                    "currentValue": "ready",
+                    "parameterSet.unit": "label",
+                    "parameterSet.thresholds": ["ready", "done"]
+                }),
+            })
+            .expect("signal should update");
+
+        let updated = session
+            .snapshot()
+            .entities
+            .into_iter()
+            .find(|entity| entity.id == signal.id)
+            .expect("updated signal should exist");
+
+        assert_eq!(result.status, "applied");
+        assert_eq!(updated.name, "Progress Gate Updated");
+        assert_eq!(updated.data["kind"], "text");
+        assert_eq!(updated.data["currentValue"], "ready");
+        assert_eq!(updated.data["parameterSet"]["unit"], "label");
+        assert_eq!(updated.data["parameterSet"]["thresholds"][0], "ready");
+    }
+
+    #[test]
+    fn ai_suggestion_apply_and_reject_update_review_state() {
+        let mut session = WorkspaceSession::empty("Session");
+        session
+            .execute_command("entity.create.part")
+            .expect("part should be created");
+        let part = session
+            .latest_parametric_part()
+            .expect("part should be available");
+
+        let response = AiChatResponse {
+            answer: "Suggestion structuree".to_string(),
+            runtime: AiRuntimeStatus {
+                available: true,
+                provider: "ollama".to_string(),
+                endpoint: "http://127.0.0.1:11434".to_string(),
+                mode: "test".to_string(),
+                local_only: true,
+                active_model: Some("gemma3:27b".to_string()),
+                available_models: vec!["gemma3:27b".to_string()],
+                gemma3_models: vec!["gemma3:27b".to_string()],
+                warning: None,
+            },
+            references: vec![format!("entity:{}", part.id)],
+            structured: Some(faero_types::AiStructuredExplain {
+                summary: "Change la piece".to_string(),
+                context_refs: vec![faero_types::AiContextReference {
+                    entity_id: Some(part.id.clone()),
+                    role: "source".to_string(),
+                    path: "parameterSet.widthMm".to_string(),
+                }],
+                confidence: 0.84,
+                risk_level: faero_types::AiRiskLevel::Medium,
+                limitations: vec!["Test backend".to_string()],
+                proposed_commands: vec![faero_types::AiProposedCommand {
+                    kind: "entity.properties.update".to_string(),
+                    target_id: Some(part.id.clone()),
+                    payload: serde_json::json!({
+                        "changes": {
+                            "name": "Bracket-Reviewed",
+                            "parameterSet.widthMm": 150.0,
+                            "parameterSet.heightMm": 90.0,
+                            "parameterSet.depthMm": 12.0
+                        }
+                    }),
+                }],
+                explanation: vec!["La piece doit etre elargie.".to_string()],
+            }),
+            suggestion_id: None,
+            warnings: Vec::new(),
+            source: "test".to_string(),
+        };
+
+        let suggestion_id = session
+            .record_ai_response("applique une correction", &response)
+            .expect("suggestion should persist");
+        let apply_result = session
+            .apply_ai_suggestion(&suggestion_id)
+            .expect("suggestion should apply");
+
+        let snapshot = session.snapshot();
+        let updated_part = snapshot
+            .entities
+            .iter()
+            .find(|entity| entity.id == part.id)
+            .expect("updated part should exist");
+        let applied_suggestion = snapshot
+            .entities
+            .iter()
+            .find(|entity| entity.id == suggestion_id)
+            .expect("applied suggestion should exist");
+
+        assert_eq!(apply_result.command_id, "ai.suggestion.apply");
+        assert_eq!(updated_part.name, "Bracket-Reviewed");
+        assert_eq!(applied_suggestion.data["reviewStatus"], "accepted");
+        assert!(
+            snapshot
+                .recent_activity
+                .iter()
+                .any(|entry| entry.kind == "ai.suggestion.applied")
+        );
+
+        let rejected_id = session
+            .record_ai_response("rejette une correction", &response)
+            .expect("second suggestion should persist");
+        session
+            .reject_ai_suggestion(&rejected_id)
+            .expect("suggestion should reject");
+        let rejected = session
+            .snapshot()
+            .entities
+            .into_iter()
+            .find(|entity| entity.id == rejected_id)
+            .expect("rejected suggestion should exist");
+        assert_eq!(rejected.data["reviewStatus"], "rejected");
     }
 }
