@@ -43,6 +43,14 @@ Ce dossier suit maintenant un flux `spec-driven`:
 - Les changements completes sont archives sous forme de dossiers OpenSpec complets, pas comme gros fichiers uniques.
 - Il n'y a actuellement aucun change actif dans `OpenSpec/changes/`.
 
+## Agent Workflows
+
+- `OpenSpec/changes/` reste la source de verite pour les changements actifs.
+- `OpenSpec/archive/completed/<YYYY-MM>/` contient les changements archives une fois implementes et verifies.
+- `.codex/skills/` contient les skills Codex adaptes a ce depot pour proposer, explorer, appliquer et archiver un change OpenSpec.
+- `.gemini/commands/opsx/` et `.gemini/skills/` exposent le meme flux cote Gemini.
+- Les prompts et skills doivent toujours referencer `OpenSpec/...` dans ce repo, pas `openspec/...`.
+
 ## Specs archivees
 
 - [feat-ui-menus-shortcuts](./archive/completed/2026-04/feat-ui-menus-shortcuts/proposal.md)
