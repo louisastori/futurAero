@@ -77,6 +77,9 @@ Cellule-Demo.faero/
       plg_*.json
     state/
       plugins.json
+  openspec/
+    docs/
+      ops_*.faerospec
   validations/
     report_*.json
   ai/
@@ -159,6 +162,66 @@ Contient:
 - `ai/suggestions/*.json`
 - `assets/*`
 - `logs/*`
+- `openspec/docs/*.faerospec`
+
+## Documents OpenSpec lisibles
+
+Les informations OpenSpec ne doivent pas repliquer les conteneurs binaires internes de CATIA ou d autres CAO vendor quand ces conteneurs ne sont pas lisibles en clair.
+
+FutureAero introduit donc un format texte natif `*.faerospec` stocke dans `openspec/docs/`.
+
+Chaque fichier `*.faerospec` contient:
+
+- un front matter YAML delimite par `---`,
+- un corps Markdown UTF-8,
+- des references explicites vers les entites ou endpoints concernes,
+- un contenu diffable, mergeable et inspectable sans outil proprietaire.
+
+Champs de front matter requis:
+
+- `id`
+- `title`
+- `kind`
+- `status`
+- `bodyFormat`
+- `entityRefs`
+- `externalRefs`
+- `tags`
+- `updatedAt`
+
+Exemple:
+
+```text
+---
+id: ops_pick_layout
+title: Intentions d implantation de cellule
+kind: design_intent
+status: active
+bodyFormat: markdown
+entityRefs:
+  - ent_cell_001
+externalRefs:
+  - ext_robot_001
+tags:
+  - openspec
+  - mvp
+updatedAt: "2026-04-08T08:00:00Z"
+---
+## Intent
+
+La cellule doit rester lisible sans dependre d un format binaire vendor.
+
+## Decisions
+
+- Les hypotheses d implantation sont decrites ici.
+- Les liens vers le graphe projet restent explicites via `entityRefs`.
+```
+
+Regles:
+
+- Un document `*.faerospec` ne stocke jamais de maillage, B-Rep ou donnees de calcul massives.
+- Un import vendor peut conserver son binaire dans `assets/`, mais les decisions utiles a l ingenierie doivent etre miroirisees dans un `*.faerospec`.
+- Le corps Markdown doit rester exploitable meme sans rendu riche.
 
 ## Regles de serialisation
 
@@ -195,6 +258,7 @@ Donnees versionnables:
 - `optimization/studies/*.json`
 - `optimization/runs/*.json`
 - `plugins/manifests/*.json`
+- `openspec/docs/*.faerospec`
 - `perception/calibrations/*.json`
 - `perception/pipelines/*.json`
 - `perception/datasets/*.json`
@@ -268,6 +332,7 @@ Au chargement:
 - Aucun fichier de `cache/` ne doit etre requis pour ouvrir un projet.
 - Aucun chemin absolu local ne doit etre necessaire au fonctionnement du projet.
 - Les assets binaires doivent etre references par hash et manifeste.
+- Les informations d intention, de mapping et de revue ne doivent jamais vivre uniquement dans un binaire vendor opaque si elles pilotent le projet.
 - Les donnees perception volumineuses doivent etre stockees comme assets references et non inline dans les noeuds metier.
 - L'etat d'activation des plugins doit etre separable des manifests pour faciliter audit et rollback.
 
@@ -282,3 +347,4 @@ Le dossier `.faero` peut etre archive en `.faeropkg` pour transfert, mais l'arch
 - Une simulation et une suggestion IA peuvent etre rattachees au meme graphe sans format parallele ad hoc.
 - Une calibration ou un dataset LiDAR peuvent etre attaches au projet sans casser la diffabilite du coeur metier.
 - Un flux Bluetooth, Wi-Fi ou telemetrique peut etre attache au projet via `integration/streams/` sans schema cache hors projet.
+- Un projet peut stocker des notes OpenSpec lisibles en `*.faerospec` sans dependre d un conteneur binaire type CATIA pour comprendre l intention d ingenierie.

@@ -914,6 +914,27 @@ Champs requis:
 - `relativePath`
 - `sizeBytes`
 
+### OpenSpecDocument
+
+Role:
+
+- document d intention, de revue ou de mapping stocke en clair dans le projet,
+- capture les informations que des outils CAO vendor gardent souvent dans des conteneurs binaires peu diffables,
+- relie les decisions humaines aux entites et endpoints du graphe sans les melanger aux donnees transactionnelles coeur.
+
+Champs requis:
+
+- `id`
+- `title`
+- `kind`: `design_intent|review_note|import_mapping|manufacturing_note|safety_case|custom`
+- `status`
+- `bodyFormat`: `markdown`
+- `entityRefs`
+- `externalRefs`
+- `tags`
+- `updatedAt`
+- `content`
+
 ## Invariants de donnees
 
 - Toute entite autre que `Project` doit appartenir a un projet unique.
@@ -928,6 +949,8 @@ Champs requis:
 - Un `SafetyInterlock` ne peut pas referencer des entrees ou actions inexistantes.
 - Un `NetworkCaptureDataset` doit declarer un endpoint source et une base temporelle rejouable.
 - Un `PluginManifest` doit declarer explicitement chaque permission demandee.
+- Un `OpenSpecDocument` reste lisible en clair dans un format texte FutureAero et ne depend jamais d un blob binaire opaque pour etre compris.
+- Un `OpenSpecDocument` documente l intention ou la tracabilite et ne remplace pas les noeuds metier transactionnels du graphe.
 - Les resultats derives comme maillages d'affichage ne sont pas stockes dans les entites metier.
 
 ## Exemple minimal de Part

@@ -51,6 +51,7 @@ Le produit vise un usage proche d'un environnement CAD/CAE industriel, avec un f
 - Des contrats internes entre outils, jobs et moteur.
 - Un modele de simulation oriente "vie reelle" mais traceable.
 - Une spec IA locale orientee actions inspectables.
+- Un format OpenSpec textuel `*.faerospec` pour capturer intentions, mappings et revues sans conteneur binaire opaque.
 - Un backlog et un scaffold de developpement directement exploitables.
 - Une matrice de tests et une definition of done technique.
 - Une couche perception avancee avec LiDAR, calibration et fusion capteurs.
