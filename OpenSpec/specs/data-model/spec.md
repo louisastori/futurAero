@@ -26,6 +26,18 @@ Cette spec canonique capture les exigences stables du modele de donnees partage.
 - **WHEN** ils referencent des schemas, des artefacts ou des entites
 - **THEN** ces references doivent etre explicites dans les donnees et jamais implicites dans un conteneur cache.
 
+### Requirement: Domain Artifact Families Stay Readable
+
+- **GIVEN** des runs de simulation, perception, commissioning, optimisation ou IA
+- **WHEN** le projet `.faero` est persiste
+- **THEN** chaque famille d artefacts doit rester rangee dans un dossier lisible et chargeable sans migration opaque.
+
+### Requirement: Plugin Metadata Stays Declarative
+
+- **GIVEN** un plugin installe dans le projet
+- **WHEN** son manifest est charge, audite ou affiche
+- **THEN** `releaseChannel`, `permissions`, `contributions`, `compatibility` et `signature` doivent rester des donnees explicites dans le modele partage.
+
 ## Supporting References
 
 - [06-Modele-De-Donnees.md](../reference/06-Modele-De-Donnees.md)

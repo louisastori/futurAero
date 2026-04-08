@@ -20,6 +20,18 @@ Cette spec canonique capture les exigences stables du runtime IA locale. Le deta
 - **WHEN** l assistant repond en mode structure
 - **THEN** la sortie doit exposer `summary`, `contextRefs`, `confidence`, `riskLevel`, `limitations`, `proposedCommands` et `explanation`.
 
+### Requirement: Explicit Runtime Profiles
+
+- **GIVEN** un runtime IA locale disponible
+- **WHEN** l utilisateur ou le shell selectionne un profil `balanced`, `max` ou `furnace`
+- **THEN** le runtime actif, le modele retenu et toute degradation due aux ressources locales doivent etre exposes explicitement au shell et aux journaux.
+
+### Requirement: Multi-Pass Internal Critique
+
+- **GIVEN** une sortie IA structuree
+- **WHEN** le runtime construit l explication finale
+- **THEN** il doit pouvoir journaliser des `critiquePasses`, ajuster la confiance finale et conserver le `runtimeProfile` utilise pour produire la reponse.
+
 ### Requirement: Explicit Suggestion Application
 
 - **GIVEN** une suggestion IA contenant des `proposedCommands`

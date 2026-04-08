@@ -27,7 +27,7 @@
 - [x] 5.4 Il reste a decouper d'autres specs canoniques de domaine (`simulation`, `ai`, `data-model`, `safety`) a partir du corpus de reference.
 
 ## 6. Travail Produit Restant
-- [ ] 6.1 Approfondir l'implementation perception et LiDAR par rapport aux specs de reference.
-- [ ] 6.2 Approfondir l'integration industrielle et la connectivite terrain par rapport aux specs de reference.
-- [ ] 6.3 Approfondir les flux commissioning, as-built et optimisation au-dela du slice MVP courant.
-- [ ] 6.4 Durcir le Plugin SDK, l'automatisation des releases et le workflow de promotion des specs canoniques.
+- [x] 6.1 Approfondir l'implementation perception et LiDAR par rapport aux specs de reference.
+- [x] 6.2 Approfondir l'integration industrielle et la connectivite terrain par rapport aux specs de reference.
+- [x] 6.3 Approfondir les flux commissioning, as-built et optimisation au-dela du slice MVP courant.
+- [x] 6.4 Durcir le Plugin SDK, l'automatisation des releases et le workflow de promotion des specs canoniques.
