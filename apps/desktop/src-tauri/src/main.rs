@@ -472,17 +472,17 @@ impl WorkspaceSession {
                 .apply_command(CoreCommand::ReplaceEntity(next_entity))
                 .map_err(|error| error.to_string())?;
 
-            if entity.entity_type == "Signal" {
-                if let Some(current_value) = parameters.get("currentValue") {
-                    let parsed_value = serde_json::from_value::<SignalValue>(current_value.clone())
-                        .map_err(|error| error.to_string())?;
-                    self.graph
-                        .apply_command(CoreCommand::SetSignalValue {
-                            entity_id: entity.id.clone(),
-                            value: parsed_value,
-                        })
-                        .map_err(|error| error.to_string())?;
-                }
+            if entity.entity_type == "Signal"
+                && let Some(current_value) = parameters.get("currentValue")
+            {
+                let parsed_value = serde_json::from_value::<SignalValue>(current_value.clone())
+                    .map_err(|error| error.to_string())?;
+                self.graph
+                    .apply_command(CoreCommand::SetSignalValue {
+                        entity_id: entity.id.clone(),
+                        value: parsed_value,
+                    })
+                    .map_err(|error| error.to_string())?;
             }
         }
 

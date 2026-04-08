@@ -163,8 +163,7 @@ pub fn run_simulation(request: &SimulationRequest) -> Result<SimulationSummary, 
 
         if let (Some(controller), Some(state)) =
             (request.controller.as_ref(), current_state.clone())
-        {
-            if let Some(transition) = controller
+            && let Some(transition) = controller
                 .transitions
                 .iter()
                 .filter(|transition| transition.from_state_id == state.id)
@@ -174,30 +173,29 @@ pub fn run_simulation(request: &SimulationRequest) -> Result<SimulationSummary, 
                         .iter()
                         .all(|condition| signal_condition_matches(condition, &signal_values))
                 })
-            {
-                for assignment in &transition.assignments {
-                    signal_values.insert(assignment.signal_id.clone(), assignment.value.clone());
-                    signal_samples.push(SignalSample {
-                        step_index,
-                        timestamp_ms,
-                        signal_id: assignment.signal_id.clone(),
-                        value: assignment.value.clone(),
-                        reason: format!("transition:{}", transition.id),
-                    });
-                }
-                let next_state = resolve_transition_state(controller, transition)?;
-                controller_state_samples.push(ControllerStateSample {
+        {
+            for assignment in &transition.assignments {
+                signal_values.insert(assignment.signal_id.clone(), assignment.value.clone());
+                signal_samples.push(SignalSample {
                     step_index,
                     timestamp_ms,
-                    state_id: next_state.id.clone(),
-                    state_name: next_state.name.clone(),
-                    reason: transition
-                        .description
-                        .clone()
-                        .unwrap_or_else(|| transition.id.clone()),
+                    signal_id: assignment.signal_id.clone(),
+                    value: assignment.value.clone(),
+                    reason: format!("transition:{}", transition.id),
                 });
-                current_state = Some(next_state);
             }
+            let next_state = resolve_transition_state(controller, transition)?;
+            controller_state_samples.push(ControllerStateSample {
+                step_index,
+                timestamp_ms,
+                state_id: next_state.id.clone(),
+                state_name: next_state.name.clone(),
+                reason: transition
+                    .description
+                    .clone()
+                    .unwrap_or_else(|| transition.id.clone()),
+            });
+            current_state = Some(next_state);
         }
 
         if step_index < sampled_step_count {

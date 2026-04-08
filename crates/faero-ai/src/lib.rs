@@ -612,8 +612,7 @@ fn build_structured_explain(document: &ProjectDocument, message: &str) -> AiStru
     let mut confidence = 0.58;
     let mut risk_level = AiRiskLevel::Low;
 
-    if (asks_about_safety || !asks_about_collision) && latest_safety.is_some() {
-        let report = latest_safety.expect("checked above");
+    if let Some(report) = latest_safety.filter(|_| asks_about_safety || !asks_about_collision) {
         let blocked = report
             .data
             .get("summary")
