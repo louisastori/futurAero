@@ -24,7 +24,7 @@
 - [x] 5.1 Les specs stables de la racine ont ete migrees vers `OpenSpec/specs/reference/`.
 - [x] 5.2 Une premiere spec canonique systeme a ete promue dans `OpenSpec/specs/system/spec.md`.
 - [x] 5.3 `OpenSpec/changes/` est reserve aux changements actifs et le corpus long-form est traite comme reference.
-- [ ] 5.4 Il reste a decouper d'autres specs canoniques de domaine (`simulation`, `ai`, `data-model`, `safety`) a partir du corpus de reference.
+- [x] 5.4 Il reste a decouper d'autres specs canoniques de domaine (`simulation`, `ai`, `data-model`, `safety`) a partir du corpus de reference.
 
 ## 6. Travail Produit Restant
 - [ ] 6.1 Approfondir l'implementation perception et LiDAR par rapport aux specs de reference.
