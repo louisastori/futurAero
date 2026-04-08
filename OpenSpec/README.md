@@ -2,8 +2,13 @@
 
 Statut: draft-initial
 
-Ce dossier pose la base de specification d'un logiciel desktop d'ingenierie assistee par IA locale.
-Le produit vise un usage proche d'un environnement CAD/CAE industriel, avec un focus ajoute sur la robotisation, le jumeau numerique et la preparation a l'implementation reelle.
+Ce dossier suit maintenant un flux `spec-driven`:
+
+- `specs/`: specs stables et documents de reference.
+- `changes/`: changements actifs, proposes puis promus.
+- `archive/`: specs retirees du flux actif apres implementation et verification.
+- `config.yaml`: configuration du moteur OpenSpec.
+- `tool-manifest.yaml` et `tools/`: decomposition outillage et dependances.
 
 ## Principes directeurs
 
@@ -15,89 +20,27 @@ Le produit vise un usage proche d'un environnement CAD/CAE industriel, avec un f
 
 ## Ordre de lecture
 
-1. [01-Vision-Produit.md](./01-Vision-Produit.md)
-2. [02-Exigences-Systeme.md](./02-Exigences-Systeme.md)
-3. [03-Architecture-Desktop-IA-Locale.md](./03-Architecture-Desktop-IA-Locale.md)
-4. [04-Moteur-Simulation-Reel.md](./04-Moteur-Simulation-Reel.md)
-5. [05-Roadmap-MVP.md](./05-Roadmap-MVP.md)
-6. [06-Modele-De-Donnees.md](./06-Modele-De-Donnees.md)
-7. [07-Format-De-Projet.md](./07-Format-De-Projet.md)
-8. [08-Architecture-Technique.md](./08-Architecture-Technique.md)
-9. [09-Contrats-Internes.md](./09-Contrats-Internes.md)
-10. [10-Spec-Simulation-Detaillee.md](./10-Spec-Simulation-Detaillee.md)
-11. [11-Spec-IA-Locale.md](./11-Spec-IA-Locale.md)
-12. [12-Backlog-Dev-Ready.md](./12-Backlog-Dev-Ready.md)
-13. [13-Plan-Repo-Et-Scaffold.md](./13-Plan-Repo-Et-Scaffold.md)
-14. [14-Schemas-Commandes-Evenements.md](./14-Schemas-Commandes-Evenements.md)
-15. [15-Matrice-De-Tests-Et-Definition-Of-Done.md](./15-Matrice-De-Tests-Et-Definition-Of-Done.md)
-16. [16-Spec-Perception-Lidar-Et-Fusion-Capteurs.md](./16-Spec-Perception-Lidar-Et-Fusion-Capteurs.md)
-17. [17-Spec-IA-Ultra-Locale.md](./17-Spec-IA-Ultra-Locale.md)
-18. [18-Spec-Integration-Industrielle.md](./18-Spec-Integration-Industrielle.md)
-19. [19-Spec-Safety-Zones-Interlocks-Lidar-Securite.md](./19-Spec-Safety-Zones-Interlocks-Lidar-Securite.md)
-20. [20-Spec-As-Built-Vs-As-Designed-Et-Commissioning.md](./20-Spec-As-Built-Vs-As-Designed-Et-Commissioning.md)
-21. [21-Spec-Optimization-Engine.md](./21-Spec-Optimization-Engine.md)
-22. [22-Spec-Plugin-SDK.md](./22-Spec-Plugin-SDK.md)
-23. [23-Politique-De-Tests-Et-Couverture-100.md](./23-Politique-De-Tests-Et-Couverture-100.md)
-24. [24-Spec-Connectivite-Sans-Fil-Et-Telemetrie.md](./24-Spec-Connectivite-Sans-Fil-Et-Telemetrie.md)
-25. [tool-manifest.yaml](./tool-manifest.yaml)
-26. Dossier [tools](./tools)
+1. [specs/system/spec.md](./specs/system/spec.md)
+2. [specs/reference/README.md](./specs/reference/README.md)
+3. [changes/init-mvp-futureaero/proposal.md](./changes/init-mvp-futureaero/proposal.md)
+4. [changes/init-mvp-futureaero/design.md](./changes/init-mvp-futureaero/design.md)
+5. [changes/init-mvp-futureaero/tasks.md](./changes/init-mvp-futureaero/tasks.md)
+6. [archive/README.md](./archive/README.md)
 
-## Ce que couvre cette premiere base
+## Regles de rangement
 
-- Le cadrage produit et les limites du MVP.
-- Les exigences fonctionnelles et non fonctionnelles.
-- Une architecture cible pour une application desktop a forte composante native.
-- Un modele de donnees et un format projet diffables.
-- Des contrats internes entre outils, jobs et moteur.
-- Un modele de simulation oriente "vie reelle" mais traceable.
-- Une spec IA locale orientee actions inspectables.
-- Un format OpenSpec textuel `*.faerospec` pour capturer intentions, mappings et revues sans conteneur binaire opaque.
-- Un backlog et un scaffold de developpement directement exploitables.
-- Une matrice de tests et une definition of done technique.
-- Une couche perception avancee avec LiDAR, calibration et fusion capteurs.
-- Une strategie IA locale ultra-haute performance orientee workstation et multi-modeles.
-- Une integration industrielle native avec ROS2, OPC UA, PLC et robots.
-- Une connectivite terrain filaire et sans fil avec Bluetooth, Wi-Fi, MQTT, WebSocket, TCP/UDP et serial.
-- Une couche safety avec zones, interlocks et LiDAR securite.
-- Un workflow commissioning et as-built vs as-designed.
-- Un moteur d'optimisation multi-objectifs.
-- Un SDK plugins extensible et isole.
-- Une politique de tests avec cible de couverture a 100%.
-- Un workspace desktop avec menus inspires de Visual Studio et commandes reliees au pipeline interne.
-- Un shell desktop interactif avec session backend, snapshots de projet et execution de commandes depuis l espace de travail.
-- Un panneau de discussion IA locale dans le shell desktop, branche a Ollama local avec contexte projet et fallback local explicite.
-- Un viewport de references aeronautiques reproduisant dans le shell des scenes inspirees de vues moteur, cellule, wireframe, FEA et aero.
-- Un premier noyau code pour geometry, assembly, sim, perception, robotics, safety, commissioning et optimization afin d enlever les crates vides du workspace.
-- Un premier flux CAO parametrique reel `rectangle -> extrusion -> volume -> masse` expose dans le backend desktop et visible dans le panneau Proprietes.
-- Une premiere edition parametrique de piece dans le shell desktop avec changement de dimensions et regeneration backend testee.
-- Un premier flux d assemblage reel avec occurrences, mates explicites et solve report visible dans les donnees de session.
-- Un premier flux robotique reel avec cibles cartesiennes, longueur de trajectoire et temps de cycle exposes dans le shell desktop.
-- Un premier run de simulation deterministe avec resume de collisions, erreur de suivi, energie et timeline visible dans la session.
-- Un premier rapport safety reel avec zones typees, interlocks explicites et statut `clear|warning|blocked` visible dans le shell desktop.
-- Un cadre GitHub explicite pour branch protections, PR, checks requis et releases.
-- Un premier decoupage des outils a programmer.
-- Un workflow GitHub avec remote canonique, PR, checks obligatoires et pipeline GitHub Actions.
+- Les anciens fichiers `01..24` ne vivent plus a la racine.
+- Les specs stables longues sont migrees dans [specs/reference/](./specs/reference/README.md).
+- Les specs canoniques courtes promues depuis `changes/` vivent dans `specs/<domaine>/spec.md`.
+- Une spec n'est archivee que lorsqu'elle sort du flux actif et qu'une implementation de reference existe.
+
+## Notes de migration
+
+- Le corpus numerote `01..24` a ete converti en documentation de reference sous `OpenSpec/specs/reference/`.
+- Le premier point d'entree canonique est maintenant [specs/system/spec.md](./specs/system/spec.md).
+- Les specs archivees restent sous `OpenSpec/archive/completed/<annee-mois>/`.
 
 ## Specs archivees
 
-Les specs sorties du flux actif apres implementation et verification sont deplacees dans `OpenSpec/archive/completed/<annee-mois>/`.
-
 - [25-Spec-UI-Workspace-Et-Menus.md](./archive/completed/2026-04/25-Spec-UI-Workspace-Et-Menus.md)
 - [26-Spec-GitHub-PR-Et-Releases.md](./archive/completed/2026-04/26-Spec-GitHub-PR-Et-Releases.md)
-
-## Ce que cette base ne tranche pas encore
-
-- Le choix final du noyau geometrique.
-- Le detail des formats d'import/export industriels.
-- Le niveau de precision physique requis par secteur.
-- Le choix final des premiers vendors robots, PLC et bus terrain.
-- Le choix final des profils de securite, pairing et discovery par transport sans fil.
-- Les regles finales de protection de branche GitHub et de publication des releases.
-
-## Definition de white-box dans ce projet
-
-- Les contraintes de conception sont visibles et editees.
-- Les hypotheses de simulation sont versionnees.
-- Les suggestions IA citent leurs sources internes au projet.
-- Les actions proposees par l'IA peuvent etre rejouees ou refusees et ne modifient rien de facon silencieuse.
-- Les resultats critiques peuvent etre relies a une chaine de causes lisible par un ingenieur.

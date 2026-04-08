@@ -6,9 +6,9 @@ Implementation de reference:
 
 - `.github/workflows/ci.yml`
 - `README.md`
-- `OpenSpec/13-Plan-Repo-Et-Scaffold.md`
-- `OpenSpec/15-Matrice-De-Tests-Et-Definition-Of-Done.md`
-- `OpenSpec/23-Politique-De-Tests-Et-Couverture-100.md`
+- `OpenSpec/specs/reference/13-Plan-Repo-Et-Scaffold.md`
+- `OpenSpec/specs/reference/15-Matrice-De-Tests-Et-Definition-Of-Done.md`
+- `OpenSpec/specs/reference/23-Politique-De-Tests-Et-Couverture-100.md`
 
 ## Objectif
 
