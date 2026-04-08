@@ -880,6 +880,22 @@ describe("App shell buttons", () => {
     });
   });
 
+  test("simulation run relaunches an automatic OpenSpec prompt in the local AI panel", async () => {
+    const { user } = await renderApp();
+
+    const autoPromptToggle = document.querySelector('[data-ai-auto-prompts="true"]');
+    assert.equal(autoPromptToggle?.checked, true);
+
+    await user.click(screen.getByRole("button", { name: "Debogage" }));
+    await user.click(document.querySelector('[data-command-id="simulation.run.start"]'));
+
+    await waitFor(() => {
+      assert.ok(screen.getAllByText(/Mode summarize/).length >= 2);
+      assert.ok(screen.getByText("auto-openspec"));
+      assert.ok(document.querySelector('[data-ai-structured="true"]'));
+    });
+  });
+
   test("running safety analysis surfaces a safety report in properties", async () => {
     const { user } = await renderApp();
 

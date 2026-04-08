@@ -1141,6 +1141,63 @@ function formatStructuredConfidence(value) {
   return `${Math.round(Number(value ?? 0) * 100)}%`;
 }
 
+function latestOpenSpecDocumentSummary(snapshot) {
+  const documents = snapshot?.openSpecDocuments ?? [];
+  return documents[documents.length - 1] ?? documents[0] ?? null;
+}
+
+function buildOpenSpecAutoPrompt(commandId, snapshot) {
+  const openSpec = latestOpenSpecDocumentSummary(snapshot);
+  const openSpecHint = openSpec
+    ? ` en suivant le document OpenSpec "${openSpec.title}" (${openSpec.kind})`
+    : " en suivant OpenSpec";
+
+  if (commandId === "simulation.run.start") {
+    const run = latestSimulationRunFromSnapshot(snapshot);
+    if (!run?.simulationRunSummary) {
+      return null;
+    }
+
+    if (run.simulationRunSummary.collisionCount > 0) {
+      return `Mode explain${openSpecHint}: explique pourquoi ${run.name} detecte ${run.simulationRunSummary.collisionCount} collision(s). Cite la timeline, les contacts et les signaux du run courant.`;
+    }
+
+    if (run.simulationRunSummary.blockedSequenceDetected) {
+      return `Mode explain${openSpecHint}: explique pourquoi ${run.name} reste bloque. Cite l etat controle, les signaux et les limites du run courant.`;
+    }
+
+    return `Mode summarize${openSpecHint}: resume ${run.name}, les signaux clefs du controle et le prochain jalon technique concret.`;
+  }
+
+  if (commandId === "analyze.safety") {
+    const report = latestSafetyReportFromSnapshot(snapshot);
+    if (!report?.safetyReportSummary) {
+      return null;
+    }
+
+    if (report.safetyReportSummary.inhibited) {
+      return `Mode explain${openSpecHint}: explique pourquoi ${report.name} bloque l action. Cite les zones actives et les interlocks.`;
+    }
+
+    return `Mode explain${openSpecHint}: explique pourquoi ${report.name} autorise encore l action sous surveillance. Cite les zones et les interlocks.`;
+  }
+
+  if (commandId === "entity.create.robot_cell") {
+    const cell = latestRobotCellFromSnapshot(snapshot);
+    if (!cell?.robotCellSummary) {
+      return null;
+    }
+
+    return `Mode document${openSpecHint}: resume la nouvelle cellule ${cell.name}, ses signaux, son controle minimal et le prochain jalon OpenSpec a traiter.`;
+  }
+
+  if (commandId === "help.openspec") {
+    return `Mode summarize: a partir des documents OpenSpec visibles, quel est le prochain jalon technique concret et pourquoi ?`;
+  }
+
+  return null;
+}
+
 function parsePositiveDimension(value) {
   const parsed = Number(value);
   if (!Number.isFinite(parsed) || parsed <= 0) {
@@ -1199,6 +1256,8 @@ export default function App({ backend = defaultDesktopBackend }) {
   const [aiMessages, setAiMessages] = useState([]);
   const [aiDraft, setAiDraft] = useState("");
   const [aiBusy, setAiBusy] = useState(false);
+  const [autoPromptEnabled, setAutoPromptEnabled] = useState(true);
+  const [autoPromptQueue, setAutoPromptQueue] = useState([]);
   const [selectedAiModel, setSelectedAiModel] = useState("");
   const [panelState, setPanelState] = useState(defaultWorkspacePanels);
   const [dockWidths, setDockWidths] = useState(defaultWorkspaceDockWidths);
@@ -1317,6 +1376,27 @@ export default function App({ backend = defaultDesktopBackend }) {
     }));
   }
 
+  function enqueueOpenSpecAutoPrompt(commandId, snapshot) {
+    if (!autoPromptEnabled) {
+      return;
+    }
+
+    const prompt = buildOpenSpecAutoPrompt(commandId, snapshot);
+    if (!prompt) {
+      return;
+    }
+
+    setAutoPromptQueue((previous) => [
+      ...previous,
+      {
+        id: `${commandId}-${snapshot.status.fixtureId}-${previous.length + 1}`,
+        commandId,
+        message: prompt,
+        snapshot
+      }
+    ]);
+  }
+
   async function handleInspectorSubmit() {
     if (!selectedEntity) {
       return;
@@ -1418,6 +1498,7 @@ export default function App({ backend = defaultDesktopBackend }) {
       );
       setProjectSnapshot(response.snapshot);
       setCommandResult(response.result);
+      enqueueOpenSpecAutoPrompt("build.regenerate_part", response.snapshot);
     } finally {
       setExecutingCommandId(null);
     }
@@ -1536,6 +1617,19 @@ export default function App({ backend = defaultDesktopBackend }) {
   }, []);
 
   useEffect(() => {
+    if (!autoPromptEnabled || aiBusy || autoPromptQueue.length === 0) {
+      return;
+    }
+
+    const [nextPrompt, ...remainingPrompts] = autoPromptQueue;
+    setAutoPromptQueue(remainingPrompts);
+    submitAiMessage(nextPrompt.message, {
+      snapshotOverride: nextPrompt.snapshot,
+      source: "auto-openspec"
+    });
+  }, [autoPromptEnabled, aiBusy, autoPromptQueue, locale, projectSnapshot, selectedAiModel]);
+
+  useEffect(() => {
     async function handleWindowKeydown(event) {
       if (!shouldHandleShortcutEvent(event)) {
         return;
@@ -1575,6 +1669,7 @@ export default function App({ backend = defaultDesktopBackend }) {
       setAiRuntime(runtime);
       setAiMessages([]);
       setAiDraft("");
+      setAutoPromptQueue([]);
       return snapshot;
     } finally {
       setFixtureLoading(false);
@@ -1679,22 +1774,25 @@ export default function App({ backend = defaultDesktopBackend }) {
       setProjectSnapshot(response.snapshot);
       setSelectedFixtureId(response.snapshot.status.fixtureId);
       setCommandResult(response.result);
+      enqueueOpenSpecAutoPrompt(commandId, response.snapshot);
 
       if (commandId === "project.create") {
         setAiMessages([]);
         setAiDraft("");
+        setAutoPromptQueue([]);
       }
     } finally {
       setExecutingCommandId(null);
     }
   }
 
-  async function submitAiMessage(message) {
+  async function submitAiMessage(message, options = {}) {
     const trimmedMessage = message.trim();
     if (!trimmedMessage || aiBusy) {
       return;
     }
 
+    const activeSnapshot = options.snapshotOverride ?? projectSnapshot;
     const history = aiMessages.map((entry) => ({
       role: entry.role,
       content: entry.content
@@ -1705,7 +1803,7 @@ export default function App({ backend = defaultDesktopBackend }) {
       references: [],
       structured: null,
       warnings: [],
-      source: "user"
+      source: options.source ?? "user"
     };
 
     setAiMessages((previous) => [...previous, userEntry]);
@@ -1718,7 +1816,7 @@ export default function App({ backend = defaultDesktopBackend }) {
         locale,
         history,
         selectedAiModel || null,
-        projectSnapshot
+        activeSnapshot
       );
       setAiRuntime(response.runtime);
       setAiMessages((previous) => [
@@ -2512,6 +2610,27 @@ export default function App({ backend = defaultDesktopBackend }) {
                         "Le modele selectionne sera utilise au prochain message."
                       )
                     : t("ui.ai.model_unavailable", "Aucune variante gemma3 detectee localement.")}
+                </div>
+              </label>
+
+              <label className="control-group assistant-model-group">
+                <span>{t("ui.ai.auto_prompt_label", "Relances auto OpenSpec")}</span>
+                <input
+                  type="checkbox"
+                  data-ai-auto-prompts="true"
+                  checked={autoPromptEnabled}
+                  onChange={(event) => setAutoPromptEnabled(event.target.checked)}
+                />
+                <div className="muted">
+                  {autoPromptEnabled
+                    ? t(
+                        "ui.ai.auto_prompt_enabled",
+                        `Actif apres simulation, safety ou revue OpenSpec. File: ${autoPromptQueue.length}.`
+                      )
+                    : t(
+                        "ui.ai.auto_prompt_disabled",
+                        "Desactive. Aucun prompt automatique n est relance."
+                      )}
                 </div>
               </label>
 
