@@ -1,0 +1,25 @@
+---
+id: ops_pick_import_mapping
+title: Pick Cell Import Mapping
+kind: import_mapping
+status: active
+bodyFormat: markdown
+entityRefs:
+  - ent_cell_001
+externalRefs:
+  - ext_robot_001
+tags:
+  - openspec
+  - import
+  - traceability
+updatedAt: "2026-04-08T08:05:00Z"
+---
+## Goal
+
+Conserver une trace diffable des correspondances entre la scene FutureAero et les sources externes.
+
+## Mapping rules
+
+- `ent_cell_001` represente la cellule de reference chargee dans la fixture.
+- `ext_robot_001` reste le point d ancrage pour les futurs imports controleur ou PLC.
+- Tout binaire vendor conserve dans `assets/` devra etre accompagne d un resume ici.

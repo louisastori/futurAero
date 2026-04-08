@@ -51,6 +51,18 @@ const FALLBACK_SNAPSHOT = {
   endpoints: [],
   streams: [],
   plugins: [],
+  openSpecDocuments: [
+    {
+      id: "ops_preview_layout",
+      title: "Preview Layout Intent",
+      kind: "design_intent",
+      status: "active",
+      linkedEntityCount: 1,
+      linkedExternalCount: 1,
+      tagCount: 2,
+      excerpt: "Cellule lisible en clair sans dependre d un binaire vendor."
+    }
+  ],
   recentActivity: []
 };
 
@@ -800,12 +812,13 @@ function buildFallbackAiReferences(snapshot) {
     ...snapshot.entities.slice(0, 3).map((entity) => `entity:${entity.id}`),
     ...snapshot.endpoints.slice(0, 2).map((endpoint) => `endpoint:${endpoint.id}`),
     ...snapshot.streams.slice(0, 2).map((stream) => `stream:${stream.id}`),
-    ...snapshot.plugins.slice(0, 1).map((plugin) => `plugin:${plugin.pluginId}`)
+    ...snapshot.plugins.slice(0, 1).map((plugin) => `plugin:${plugin.pluginId}`),
+    ...(snapshot.openSpecDocuments ?? []).slice(0, 2).map((document) => `openspec:${document.id}`)
   ].slice(0, 8);
 }
 
 function buildFallbackAiAnswer(locale, snapshot, message) {
-  const summary = `${snapshot.status.projectName} | ${snapshot.status.entityCount} entites | ${snapshot.status.endpointCount} endpoints | ${snapshot.status.streamCount} flux`;
+  const summary = `${snapshot.status.projectName} | ${snapshot.status.entityCount} entites | ${snapshot.status.endpointCount} endpoints | ${snapshot.status.streamCount} flux | ${(snapshot.openSpecDocuments ?? []).length} docs OpenSpec`;
 
   if (locale === "en") {
     return `The local AI panel is running in web preview fallback mode. Current project: ${summary}. Your question was: "${message}". Start the Tauri shell with Ollama available on http://127.0.0.1:11434 to get a true local model-backed discussion.`;
@@ -977,6 +990,7 @@ export default function App({ backend = defaultDesktopBackend }) {
   const menus = localizeMenuModel(locale);
   const menu = menus.find((entry) => entry.id === activeMenuId) ?? menus[0];
   const currentStatus = projectSnapshot.status;
+  const openSpecDocuments = projectSnapshot.openSpecDocuments ?? [];
   const parametricParts = projectSnapshot.entities.filter((entity) => entity.partGeometry);
   const latestParametricPart = latestParametricPartFromSnapshot(projectSnapshot);
   const robotCells = projectSnapshot.entities.filter((entity) => entity.robotCellSummary);
@@ -1564,6 +1578,25 @@ export default function App({ backend = defaultDesktopBackend }) {
                   )}
                 </ul>
               </li>
+
+              <li className="tree-section">
+                <div className="tree-section-title">{t("ui.workspace.openspec_section", "OpenSpec")}</div>
+                <ul className="tree-sublist">
+                  {openSpecDocuments.length > 0 ? (
+                    openSpecDocuments.map((document) => (
+                      <li key={document.id} className="tree-row">
+                        <div className="tree-row-main">
+                          <span>{document.title}</span>
+                          <div className="tree-detail">{document.excerpt}</div>
+                        </div>
+                        <span className="tree-meta">{document.kind}</span>
+                      </li>
+                    ))
+                  ) : (
+                    <li className="tree-empty">{t("ui.workspace.no_openspec", "Aucun document OpenSpec")}</li>
+                  )}
+                </ul>
+              </li>
             </ul>
           </Panel>
 
@@ -1592,11 +1625,54 @@ export default function App({ backend = defaultDesktopBackend }) {
               <dd>{currentStatus.streamCount}</dd>
               <dt>{t("ui.property.plugins", "Plugins")}</dt>
               <dd>{currentStatus.pluginCount}</dd>
+              <dt>{t("ui.property.openspec", "OpenSpec")}</dt>
+              <dd>{openSpecDocuments.length}</dd>
               <dt>{t("ui.property.language", "Langue")}</dt>
               <dd>{supportedLocales.find((entry) => entry.id === locale)?.label ?? locale}</dd>
               <dt>{t("ui.property.fixture", "Fixture")}</dt>
               <dd>{fixtureLabel(fixtureOptions, selectedFixtureId)}</dd>
             </dl>
+
+            <div className="property-section">
+              <div className="subsection-label">
+                {t("ui.property.openspec_documents", "Documents OpenSpec")}
+              </div>
+              {openSpecDocuments.length > 0 ? (
+                <div className="property-card-list">
+                  {openSpecDocuments.slice(0, 3).map((document) => (
+                    <article
+                      key={document.id}
+                      className="result-card property-card"
+                      data-openspec-summary={document.id}
+                    >
+                      <strong>{document.title}</strong>
+                      <div className="command-id">
+                        {document.kind} | {document.status}
+                      </div>
+                      <div className="muted">{document.excerpt}</div>
+                      <div className="property-inline-metrics">
+                        <span>
+                          {t("ui.property.linked_entities", "Entites liees")} {document.linkedEntityCount}
+                        </span>
+                        <span>
+                          {t("ui.property.linked_endpoints", "Endpoints lies")} {document.linkedExternalCount}
+                        </span>
+                        <span>
+                          {t("ui.property.tags", "Tags")} {document.tagCount}
+                        </span>
+                      </div>
+                    </article>
+                  ))}
+                </div>
+              ) : (
+                <p className="muted">
+                  {t(
+                    "ui.property.no_openspec_documents",
+                    "Aucun document OpenSpec lisible dans cette session."
+                  )}
+                </p>
+              )}
+            </div>
 
             <div className="property-section">
               <div className="subsection-label">

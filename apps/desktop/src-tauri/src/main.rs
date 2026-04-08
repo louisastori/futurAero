@@ -168,6 +168,19 @@ struct PluginSummary {
     status: String,
 }
 
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct OpenSpecDocumentSummary {
+    id: String,
+    title: String,
+    kind: String,
+    status: String,
+    linked_entity_count: usize,
+    linked_external_count: usize,
+    tag_count: usize,
+    excerpt: String,
+}
+
 #[derive(Debug, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct ActivityEntry {
@@ -187,6 +200,7 @@ struct ProjectSnapshot {
     endpoints: Vec<EndpointSummary>,
     streams: Vec<StreamSummary>,
     plugins: Vec<PluginSummary>,
+    open_spec_documents: Vec<OpenSpecDocumentSummary>,
     recent_activity: Vec<ActivityEntry>,
 }
 
@@ -645,6 +659,37 @@ impl WorkspaceSession {
                     message: "rapport de validation genere".to_string(),
                 })
             }
+            "help.openspec" => {
+                let (document_count, latest_id, latest_title) = {
+                    let open_spec_documents = self
+                        .graph
+                        .document()
+                        .open_spec_documents
+                        .values()
+                        .collect::<Vec<_>>();
+                    let latest = open_spec_documents
+                        .iter()
+                        .max_by(|left, right| left.updated_at.cmp(&right.updated_at));
+                    (
+                        open_spec_documents.len(),
+                        latest.map(|document| document.id.clone()),
+                        latest.map(|document| document.title.clone()),
+                    )
+                };
+                self.push_system_activity("help.openspec.reviewed", latest_id);
+                Ok(CommandResult {
+                    command_id: command_id.to_string(),
+                    status: "applied".to_string(),
+                    message: if let Some(latest_title) = latest_title {
+                        format!(
+                            "{} document(s) OpenSpec lisible(s) | dernier: {}",
+                            document_count, latest_title
+                        )
+                    } else {
+                        "aucun document OpenSpec enregistre dans ce projet".to_string()
+                    },
+                })
+            }
             _ => {
                 self.push_system_activity("command.simulated", Some(command_id.to_string()));
                 Ok(CommandResult {
@@ -751,6 +796,15 @@ fn endpoint_address_label(
     }
 
     "n/a".to_string()
+}
+
+fn open_spec_excerpt(content: &str) -> String {
+    content
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .map(|line| line.trim_start_matches('#').trim().to_string())
+        .unwrap_or_else(|| "Document OpenSpec sans contenu".to_string())
 }
 
 fn load_project_document(project_id: &str) -> Result<ProjectDocument, String> {
@@ -873,6 +927,21 @@ fn build_project_snapshot_from_document(
         })
         .collect::<Vec<_>>();
 
+    let open_spec_documents = document
+        .open_spec_documents
+        .values()
+        .map(|document| OpenSpecDocumentSummary {
+            id: document.id.clone(),
+            title: document.title.clone(),
+            kind: document.kind.clone(),
+            status: document.status.clone(),
+            linked_entity_count: document.entity_refs.len(),
+            linked_external_count: document.external_refs.len(),
+            tag_count: document.tags.len(),
+            excerpt: open_spec_excerpt(&document.content),
+        })
+        .collect::<Vec<_>>();
+
     let mut recent_activity = document
         .commands
         .iter()
@@ -907,6 +976,7 @@ fn build_project_snapshot_from_document(
         endpoints,
         streams,
         plugins,
+        open_spec_documents,
         recent_activity,
     }
 }
@@ -1725,8 +1795,11 @@ mod tests {
         assert_eq!(snapshot.endpoints.len(), 1);
         assert_eq!(snapshot.streams.len(), 1);
         assert_eq!(snapshot.plugins.len(), 1);
+        assert_eq!(snapshot.open_spec_documents.len(), 2);
         assert_eq!(snapshot.endpoints[0].transport_kind, "robot_controller");
         assert!(snapshot.plugins[0].enabled);
+        assert_eq!(snapshot.open_spec_documents[0].kind, "design_intent");
+        assert_eq!(snapshot.open_spec_documents[0].excerpt, "Intent");
         assert!(!snapshot.recent_activity.is_empty());
     }
 
@@ -1929,6 +2002,27 @@ mod tests {
     }
 
     #[test]
+    fn help_openspec_reports_readable_documents_and_logs_activity() {
+        let mut session = WorkspaceSession::load_fixture(DEFAULT_FIXTURE_ID)
+            .expect("fixture-backed session should load");
+
+        let result = session
+            .execute_command("help.openspec")
+            .expect("help openspec should succeed");
+        let snapshot = session.snapshot();
+
+        assert_eq!(result.status, "applied");
+        assert!(result.message.contains("document(s) OpenSpec"));
+        assert_eq!(snapshot.open_spec_documents.len(), 2);
+        assert!(
+            snapshot
+                .recent_activity
+                .iter()
+                .any(|entry| entry.kind == "help.openspec.reviewed")
+        );
+    }
+
+    #[test]
     fn save_document_copy_writes_a_loadable_project_under_artifacts() {
         let document = load_project_document(DEFAULT_FIXTURE_ID).expect("fixture should load");
         let output_path =
@@ -1937,6 +2031,10 @@ mod tests {
         let reloaded =
             faero_storage::load_project(&output_path).expect("saved project should reload");
         assert_eq!(reloaded.metadata.name, document.metadata.name);
+        assert_eq!(
+            reloaded.open_spec_documents.len(),
+            document.open_spec_documents.len()
+        );
         assert!(output_path.exists());
 
         fs::remove_dir_all(output_path).expect("saved test artifact should be removable");

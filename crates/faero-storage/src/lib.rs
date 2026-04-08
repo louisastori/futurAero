@@ -5,8 +5,8 @@ use std::{
 };
 
 use faero_types::{
-    CommandEnvelope, EntityRecord, EventEnvelope, ExternalEndpoint, GraphEdge, PluginManifest,
-    ProjectDocument, ProjectMetadata, TelemetryStream,
+    CommandEnvelope, EntityRecord, EventEnvelope, ExternalEndpoint, GraphEdge, OpenSpecDocument,
+    PluginManifest, ProjectDocument, ProjectMetadata, TelemetryStream,
 };
 use thiserror::Error;
 
@@ -18,6 +18,8 @@ pub enum StorageError {
     Json(#[from] serde_json::Error),
     #[error("yaml error: {0}")]
     Yaml(#[from] serde_yaml::Error),
+    #[error("invalid open spec format: {0}")]
+    InvalidOpenSpecFormat(String),
 }
 
 pub fn save_project(
@@ -30,6 +32,7 @@ pub fn save_project(
     fs::create_dir_all(root.join("integration/streams"))?;
     fs::create_dir_all(root.join("plugins/manifests"))?;
     fs::create_dir_all(root.join("plugins/state"))?;
+    fs::create_dir_all(root.join("openspec/docs"))?;
     fs::create_dir_all(root.join("events"))?;
 
     write_project_metadata_yaml(root.join("project.yaml"), &document.metadata)?;
@@ -57,6 +60,12 @@ pub fn save_project(
             .join("plugins/manifests")
             .join(format!("{}.json", manifest.plugin_id));
         write_plugin_manifest_file(manifest_path, manifest)?;
+    }
+    for open_spec_document in document.open_spec_documents.values() {
+        let open_spec_path = root
+            .join("openspec/docs")
+            .join(format!("{}.faerospec", open_spec_document.id));
+        write_open_spec_document(open_spec_path, open_spec_document)?;
     }
     write_plugin_states_file(
         root.join("plugins/state/plugins.json"),
@@ -88,6 +97,10 @@ pub fn load_project(path: impl AsRef<Path>) -> Result<ProjectDocument, StorageEr
         .into_iter()
         .map(|manifest| (manifest.plugin_id.clone(), manifest))
         .collect::<BTreeMap<_, _>>();
+    let open_spec_documents = read_open_spec_documents_dir(root.join("openspec/docs"))?
+        .into_iter()
+        .map(|document| (document.id.clone(), document))
+        .collect::<BTreeMap<_, _>>();
     let plugin_states =
         read_plugin_states_file(root.join("plugins/state/plugins.json")).unwrap_or_default();
     let commands = read_command_envelopes(root.join("events/commands.jsonl"))?;
@@ -101,9 +114,24 @@ pub fn load_project(path: impl AsRef<Path>) -> Result<ProjectDocument, StorageEr
         streams,
         plugin_manifests,
         plugin_states,
+        open_spec_documents,
         commands,
         events,
     })
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct OpenSpecFrontMatter {
+    id: String,
+    title: String,
+    kind: String,
+    status: String,
+    body_format: String,
+    entity_refs: Vec<String>,
+    external_refs: Vec<String>,
+    tags: Vec<String>,
+    updated_at: String,
 }
 
 fn ensure_parent_dir(path: &Path) -> Result<(), StorageError> {
@@ -218,6 +246,14 @@ fn write_plugin_states_file(
     write_text_file(path, &payload)
 }
 
+fn write_open_spec_document(
+    path: PathBuf,
+    document: &OpenSpecDocument,
+) -> Result<(), StorageError> {
+    let payload = serialize_open_spec_document(document)?;
+    write_text_file(path, &payload)
+}
+
 fn write_command_envelopes(
     path: PathBuf,
     commands: &[CommandEnvelope],
@@ -292,6 +328,15 @@ fn read_plugin_states_file(path: PathBuf) -> Result<BTreeMap<String, bool>, Stor
     Ok(serde_json::from_str(&payload)?)
 }
 
+fn read_open_spec_documents_dir(path: PathBuf) -> Result<Vec<OpenSpecDocument>, StorageError> {
+    let payloads = read_sorted_payload_files(path)?;
+    let mut values = Vec::with_capacity(payloads.len());
+    for payload in payloads {
+        values.push(deserialize_open_spec_document(&payload)?);
+    }
+    Ok(values)
+}
+
 fn read_command_envelopes(path: PathBuf) -> Result<Vec<CommandEnvelope>, StorageError> {
     let payloads = read_jsonl_payloads(path)?;
     let mut values = Vec::with_capacity(payloads.len());
@@ -310,6 +355,54 @@ fn read_event_envelopes(path: PathBuf) -> Result<Vec<EventEnvelope>, StorageErro
     Ok(values)
 }
 
+fn serialize_open_spec_document(document: &OpenSpecDocument) -> Result<String, StorageError> {
+    let front_matter = OpenSpecFrontMatter {
+        id: document.id.clone(),
+        title: document.title.clone(),
+        kind: document.kind.clone(),
+        status: document.status.clone(),
+        body_format: document.body_format.clone(),
+        entity_refs: document.entity_refs.clone(),
+        external_refs: document.external_refs.clone(),
+        tags: document.tags.clone(),
+        updated_at: document.updated_at.clone(),
+    };
+    let yaml_payload = serde_yaml::to_string(&front_matter)?;
+    let yaml_payload = yaml_payload.strip_prefix("---\n").unwrap_or(&yaml_payload);
+    let mut body = document.content.clone();
+    if !body.is_empty() && !body.ends_with('\n') {
+        body.push('\n');
+    }
+    Ok(format!("---\n{}---\n{}", yaml_payload, body))
+}
+
+fn deserialize_open_spec_document(payload: &str) -> Result<OpenSpecDocument, StorageError> {
+    let normalized = payload.replace("\r\n", "\n");
+    let Some(front_matter_payload) = normalized.strip_prefix("---\n") else {
+        return Err(StorageError::InvalidOpenSpecFormat(
+            "missing opening front matter delimiter".to_string(),
+        ));
+    };
+    let Some((front_matter, content)) = front_matter_payload.split_once("\n---\n") else {
+        return Err(StorageError::InvalidOpenSpecFormat(
+            "missing closing front matter delimiter".to_string(),
+        ));
+    };
+    let front_matter: OpenSpecFrontMatter = serde_yaml::from_str(front_matter)?;
+    Ok(OpenSpecDocument {
+        id: front_matter.id,
+        title: front_matter.title,
+        kind: front_matter.kind,
+        status: front_matter.status,
+        body_format: front_matter.body_format,
+        entity_refs: front_matter.entity_refs,
+        external_refs: front_matter.external_refs,
+        tags: front_matter.tags,
+        updated_at: front_matter.updated_at,
+        content: content.to_string(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs;
@@ -321,9 +414,9 @@ mod tests {
     use std::path::PathBuf;
 
     use faero_types::{
-        Addressing, ConnectionMode, DisplayUnits, EndpointType, LinkMetrics, PluginManifest,
-        ProjectDocument, ProjectMetadata, QosProfile, StreamDirection, TelemetryStream,
-        TimingProfile, TransportProfile,
+        Addressing, ConnectionMode, DisplayUnits, EndpointType, LinkMetrics, OpenSpecDocument,
+        PluginManifest, ProjectDocument, ProjectMetadata, QosProfile, StreamDirection,
+        TelemetryStream, TimingProfile, TransportProfile,
     };
     use tempfile::tempdir;
 
@@ -485,6 +578,21 @@ mod tests {
         document
             .plugin_states
             .insert("plg.integration.viewer".to_string(), true);
+        document.open_spec_documents.insert(
+            "ops_fixture_layout".to_string(),
+            OpenSpecDocument {
+                id: "ops_fixture_layout".to_string(),
+                title: "Fixture Layout Intent".to_string(),
+                kind: "design_intent".to_string(),
+                status: "active".to_string(),
+                body_format: "markdown".to_string(),
+                entity_refs: vec!["ent_cell_001".to_string()],
+                external_refs: vec!["ext_wifi_001".to_string()],
+                tags: vec!["openspec".to_string(), "fixture".to_string()],
+                updated_at: "2026-04-08T08:00:00Z".to_string(),
+                content: "## Intent\nConserver une trace lisible en clair.\n".to_string(),
+            },
+        );
         document.commands.push(CommandEnvelope {
             command_id: "cmd_001".to_string(),
             kind: "project.save".to_string(),
@@ -523,9 +631,15 @@ mod tests {
         assert_eq!(loaded.streams.len(), 1);
         assert_eq!(loaded.commands.len(), 1);
         assert_eq!(loaded.events.len(), 1);
+        assert_eq!(loaded.open_spec_documents.len(), 1);
         assert_eq!(
             loaded.plugin_states.get("plg.integration.viewer"),
             Some(&true)
+        );
+        assert!(
+            loaded.open_spec_documents["ops_fixture_layout"]
+                .content
+                .contains("## Intent")
         );
     }
 
@@ -550,6 +664,7 @@ mod tests {
         assert!(loaded.streams.is_empty());
         assert!(loaded.plugin_manifests.is_empty());
         assert!(loaded.plugin_states.is_empty());
+        assert!(loaded.open_spec_documents.is_empty());
         assert!(loaded.commands.is_empty());
         assert!(loaded.events.is_empty());
     }
@@ -748,6 +863,29 @@ mod tests {
             read_plugin_states_file(plugin_states_path).expect("states should load");
         assert_eq!(loaded_states.get("plg.integration.viewer"), Some(&true));
 
+        let open_spec_dir = dir.path().join("openspec/docs");
+        fs::create_dir_all(&open_spec_dir).expect("open spec dir should exist");
+        write_open_spec_document(
+            open_spec_dir.join("ops_fixture_layout.faerospec"),
+            &OpenSpecDocument {
+                id: "ops_fixture_layout".to_string(),
+                title: "Fixture Layout Intent".to_string(),
+                kind: "design_intent".to_string(),
+                status: "active".to_string(),
+                body_format: "markdown".to_string(),
+                entity_refs: vec!["ent_cell_001".to_string()],
+                external_refs: vec!["ext_wifi_001".to_string()],
+                tags: vec!["openspec".to_string(), "fixture".to_string()],
+                updated_at: "2026-04-08T08:00:00Z".to_string(),
+                content: "## Intent\nConserver une trace lisible en clair.\n".to_string(),
+            },
+        )
+        .expect("open spec should write");
+        let open_specs =
+            read_open_spec_documents_dir(open_spec_dir).expect("open specs should load");
+        assert_eq!(open_specs.len(), 1);
+        assert_eq!(open_specs[0].body_format, "markdown");
+
         let command_path = dir.path().join("events/commands.jsonl");
         let commands = vec![CommandEnvelope {
             command_id: "cmd_001".to_string(),
@@ -779,6 +917,35 @@ mod tests {
         let loaded_events = read_event_envelopes(event_path).expect("events should load");
         assert_eq!(loaded_events.len(), 1);
         assert_eq!(loaded_events[0].event_id, "evt_001");
+    }
+
+    #[test]
+    fn open_spec_document_round_trips_custom_text_format() {
+        let document = OpenSpecDocument {
+            id: "ops_fixture_layout".to_string(),
+            title: "Fixture Layout Intent".to_string(),
+            kind: "design_intent".to_string(),
+            status: "active".to_string(),
+            body_format: "markdown".to_string(),
+            entity_refs: vec!["ent_cell_001".to_string()],
+            external_refs: vec!["ext_wifi_001".to_string()],
+            tags: vec!["openspec".to_string(), "fixture".to_string()],
+            updated_at: "2026-04-08T08:00:00Z".to_string(),
+            content: "## Intent\nConserver une trace lisible en clair.\n".to_string(),
+        };
+
+        let payload = serialize_open_spec_document(&document).expect("open spec should serialize");
+        let parsed =
+            deserialize_open_spec_document(&payload).expect("open spec should deserialize");
+
+        assert_eq!(parsed, document);
+    }
+
+    #[test]
+    fn open_spec_document_requires_front_matter_delimiters() {
+        let error = deserialize_open_spec_document("id: missing\ncontent")
+            .expect_err("missing delimiters should fail");
+        assert!(matches!(error, StorageError::InvalidOpenSpecFormat(_)));
     }
 
     #[test]
@@ -875,6 +1042,11 @@ mod tests {
             .expect_err("streams should fail");
         let _ = read_plugin_manifests_dir(dir.path().join("manifests"))
             .expect_err("manifests should fail");
+        fs::create_dir_all(dir.path().join("openspec")).expect("openspec dir should exist");
+        fs::write(dir.path().join("openspec/broken.faerospec"), "{broken")
+            .expect("broken open spec should write");
+        let _ = read_open_spec_documents_dir(dir.path().join("openspec"))
+            .expect_err("open specs should fail");
         let _ = read_command_envelopes(dir.path().join("commands.jsonl"))
             .expect_err("commands should fail");
         let _ =
@@ -895,8 +1067,10 @@ mod tests {
             .expect_err("files should fail as endpoint directories");
         let _ = read_telemetry_streams_dir(file_path.clone())
             .expect_err("files should fail as stream directories");
-        let _ = read_plugin_manifests_dir(file_path)
+        let _ = read_plugin_manifests_dir(file_path.clone())
             .expect_err("files should fail as manifest directories");
+        let _ = read_open_spec_documents_dir(file_path)
+            .expect_err("files should fail as open spec directories");
         let _ = read_graph_edges(dir.path().to_path_buf())
             .expect_err("directories should fail as edge jsonl files");
         let _ = read_command_envelopes(dir.path().to_path_buf())
@@ -919,6 +1093,11 @@ mod tests {
             ("integration/streams/str_001.json", "project.yaml", ""),
             (
                 "plugins/manifests/plg.integration.viewer.json",
+                "project.yaml",
+                "",
+            ),
+            (
+                "openspec/docs/ops_fixture_layout.faerospec",
                 "project.yaml",
                 "",
             ),
@@ -953,6 +1132,7 @@ mod tests {
             "integration/streams/str_001.json",
             "plugins/manifests/plg.integration.viewer.json",
             "plugins/state/plugins.json",
+            "openspec/docs/ops_fixture_layout.faerospec",
             "events/commands.jsonl",
             "events/events.jsonl",
         ];
@@ -980,6 +1160,7 @@ mod tests {
             "integration/streams",
             "plugins/manifests",
             "plugins/state",
+            "openspec/docs",
             "events",
         ];
 

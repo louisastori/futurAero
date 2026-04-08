@@ -264,6 +264,21 @@ pub struct PluginManifest {
     pub status: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenSpecDocument {
+    pub id: String,
+    pub title: String,
+    pub kind: String,
+    pub status: String,
+    pub body_format: String,
+    pub entity_refs: Vec<String>,
+    pub external_refs: Vec<String>,
+    pub tags: Vec<String>,
+    pub updated_at: String,
+    pub content: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct ProjectDocument {
@@ -274,6 +289,7 @@ pub struct ProjectDocument {
     pub streams: BTreeMap<String, TelemetryStream>,
     pub plugin_manifests: BTreeMap<String, PluginManifest>,
     pub plugin_states: BTreeMap<String, bool>,
+    pub open_spec_documents: BTreeMap<String, OpenSpecDocument>,
     pub commands: Vec<CommandEnvelope>,
     pub events: Vec<EventEnvelope>,
 }
@@ -333,5 +349,26 @@ mod tests {
         let json = serde_json::to_value(endpoint).expect("endpoint should serialize");
         assert_eq!(json["transportProfile"]["transportKind"], "wifi");
         assert_eq!(json["mode"], "live");
+    }
+
+    #[test]
+    fn open_spec_document_serializes_with_camel_case_fields() {
+        let document = OpenSpecDocument {
+            id: "ops_pick_layout".to_string(),
+            title: "Intentions d implantation".to_string(),
+            kind: "design_intent".to_string(),
+            status: "active".to_string(),
+            body_format: "markdown".to_string(),
+            entity_refs: vec!["ent_cell_001".to_string()],
+            external_refs: vec!["ext_robot_001".to_string()],
+            tags: vec!["openspec".to_string(), "mvp".to_string()],
+            updated_at: "2026-04-08T08:00:00Z".to_string(),
+            content: "## Intent\nCellule lisible en clair.\n".to_string(),
+        };
+
+        let json = serde_json::to_value(document).expect("open spec document should serialize");
+        assert_eq!(json["bodyFormat"], "markdown");
+        assert_eq!(json["entityRefs"][0], "ent_cell_001");
+        assert_eq!(json["updatedAt"], "2026-04-08T08:00:00Z");
     }
 }

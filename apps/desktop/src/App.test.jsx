@@ -15,7 +15,19 @@ afterEach(() => {
 function createSnapshot({
   fixtureId = "pick-and-place-demo.faero",
   projectName = "Pick And Place Demo",
-  projectId = "prj_test_001"
+  projectId = "prj_test_001",
+  openSpecDocuments = [
+    {
+      id: "ops_001",
+      title: "Readable Layout Intent",
+      kind: "design_intent",
+      status: "active",
+      linkedEntityCount: 1,
+      linkedExternalCount: 1,
+      tagCount: 2,
+      excerpt: "Cellule lisible en clair sans binaire vendor."
+    }
+  ]
 } = {}) {
   return {
     status: {
@@ -72,6 +84,7 @@ function createSnapshot({
         status: "installed"
       }
     ],
+    openSpecDocuments,
     recentActivity: [
       {
         id: "cmd_seed_001",
@@ -131,7 +144,8 @@ function createMockBackend() {
           ? createSnapshot({
               fixtureId: "empty-project.faero",
               projectName: "Empty Project",
-              projectId: "prj_empty_001"
+              projectId: "prj_empty_001",
+              openSpecDocuments: []
             })
           : createSnapshot();
       pushActivity("workspace.loaded", projectId);
@@ -148,6 +162,7 @@ function createMockBackend() {
         snapshot.endpoints = [];
         snapshot.streams = [];
         snapshot.plugins = [];
+        snapshot.openSpecDocuments = [];
         snapshot.status.entityCount = 0;
         snapshot.status.endpointCount = 0;
         snapshot.status.streamCount = 0;
@@ -685,6 +700,30 @@ describe("App shell buttons", () => {
       assert.equal(
         document.querySelector("[data-command-feedback]")?.getAttribute("data-command-feedback"),
         "analyze.safety"
+      );
+    });
+  });
+
+  test("openspec documents are visible and the help command can be executed", async () => {
+    const { user } = await renderApp();
+
+    await waitFor(() => {
+      const openSpecCard = document.querySelector('[data-openspec-summary="ops_001"]');
+      assert.ok(openSpecCard);
+      assert.equal(openSpecCard?.querySelector("strong")?.textContent, "Readable Layout Intent");
+    });
+
+    await user.click(screen.getByRole("button", { name: "Aide" }));
+    await user.click(document.querySelector('[data-command-id="help.openspec"]'));
+
+    await waitFor(() => {
+      assert.equal(
+        document.querySelector("[data-command-feedback]")?.getAttribute("data-command-feedback"),
+        "help.openspec"
+      );
+      assert.equal(
+        document.querySelector("[data-last-command-id]")?.getAttribute("data-last-command-id"),
+        "help.openspec"
       );
     });
   });

@@ -1,0 +1,26 @@
+---
+id: ops_pick_cell_layout
+title: Pick Cell Layout Intent
+kind: design_intent
+status: active
+bodyFormat: markdown
+entityRefs:
+  - ent_cell_001
+  - ent_robot_001
+externalRefs:
+  - ext_robot_001
+tags:
+  - openspec
+  - layout
+  - mvp
+updatedAt: "2026-04-08T08:00:00Z"
+---
+## Intent
+
+La cellule pick-and-place doit rester lisible en clair dans le depot sans dependre d un conteneur binaire vendor.
+
+## Decisions
+
+- Le robot et la cellule gardent des references explicites via `entityRefs`.
+- Le controleur mock reste lie via `externalRefs` pour documenter la boucle de simulation.
+- Les hypotheses d implantation et de lecture atelier vivent ici avant toute future importation CAO plus riche.

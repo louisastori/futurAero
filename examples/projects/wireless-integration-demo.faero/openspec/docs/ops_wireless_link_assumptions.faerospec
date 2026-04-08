@@ -1,0 +1,24 @@
+---
+id: ops_wireless_link_assumptions
+title: Wireless Link Assumptions
+kind: review_note
+status: active
+bodyFormat: markdown
+entityRefs:
+  - ent_cell_2001
+externalRefs:
+  - ext_wifi_001
+tags:
+  - openspec
+  - wireless
+  - telemetry
+updatedAt: "2026-04-08T08:10:00Z"
+---
+## Scope
+
+Documenter les hypotheses reseau en clair pour eviter de cacher la logique d integration dans un export binaire opaque.
+
+## Notes
+
+- Le endpoint Wi-Fi garde un mode replay lisible pour les tests.
+- Les decisions de securite et de qualite de lien doivent rester diffables dans Git.
