@@ -29,7 +29,10 @@ import {
   defaultAerospaceSceneId,
   getAerospaceScene,
 } from "@futureaero/viewport";
-import { buildFallbackRobotCellBundle } from "./robotCellFallback.js";
+import {
+  buildFallbackRobotCellBundle,
+  syncFallbackRobotCellTargets,
+} from "./robotCellFallback.js";
 
 const FALLBACK_FIXTURES = [
   { id: "pick-and-place-demo.faero", projectName: "Pick And Place Demo" },
@@ -1423,6 +1426,13 @@ async function updateEntityProperties(payload, currentSnapshot) {
     };
   }
 
+  let nextEntities = currentSnapshot.entities.map((entity, entityIndex) =>
+    entityIndex === index ? nextEntity : entity,
+  );
+  if (nextEntity.entityType === "RobotTarget") {
+    nextEntities = syncFallbackRobotCellTargets(nextEntities, nextEntity.id);
+  }
+
   return {
     snapshot: {
       ...appendFallbackActivity(
@@ -1431,9 +1441,7 @@ async function updateEntityProperties(payload, currentSnapshot) {
         "entity.properties.updated",
         payload.entityId,
       ),
-      entities: currentSnapshot.entities.map((entity, entityIndex) =>
-        entityIndex === index ? nextEntity : entity,
-      ),
+      entities: nextEntities,
     },
     result: {
       commandId: "entity.properties.update",
@@ -3523,6 +3531,12 @@ export default function App({ backend = defaultDesktopBackend }) {
                           {t("ui.property.safety_zones", "zones safety")} |{" "}
                           {entity.robotCellSummary.warningCount}{" "}
                           {t("ui.property.warnings", "warning(s)")}
+                        </div>
+                        <div
+                          className="command-id"
+                          data-robot-cell-preview={entity.id}
+                        >
+                          {entity.robotCellSummary.targetPreview ?? ""}
                         </div>
                         <div className="property-inline-metrics">
                           <span data-robot-cell-equipment={entity.id}>

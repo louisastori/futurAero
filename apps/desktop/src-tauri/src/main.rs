@@ -31,8 +31,9 @@ use faero_perception::{
 use faero_plugin_host::validate_manifest;
 use faero_robotics::{
     CartesianPose, EquipmentModel, EquipmentParameterSet, EquipmentType, RobotCellModel,
-    RobotModel, RobotPayloadLimits, RobotSequenceModel, RobotTarget, RobotToolMountRef,
-    RobotWorkspaceBounds, validate_robot_cell_structure, validate_sequence,
+    RobotModel, RobotPayloadLimits, RobotSequenceModel, RobotTarget, RobotTargetModel,
+    RobotToolMountRef, RobotWorkspaceBounds, validate_robot_cell_structure,
+    validate_sequence, validate_target_models,
 };
 use faero_safety::{SafetyInterlock, SafetyStatus, SafetyZone, SafetyZoneKind, evaluate_safety};
 use faero_sim::{SimulationRequest, SimulationStatus, run_simulation};
@@ -145,6 +146,7 @@ struct AssemblyEntitySummary {
 #[serde(rename_all = "camelCase")]
 struct RobotCellEntitySummary {
     scene_assembly_id: Option<String>,
+    target_preview: Option<String>,
     target_count: usize,
     path_length_mm: f64,
     max_segment_mm: f64,
@@ -599,6 +601,9 @@ impl WorkspaceSession {
                         );
                     }
                 }
+                if entity.entity_type == "RobotTarget" {
+                    normalize_robot_target_entity_data(&entity.id, data)?;
+                }
                 validate_entity_change_set(&entity, data)?;
             }
             self.graph
@@ -616,6 +621,9 @@ impl WorkspaceSession {
                         value: parsed_value,
                     })
                     .map_err(|error| error.to_string())?;
+            }
+            if entity.entity_type == "RobotTarget" {
+                self.sync_robot_target_dependents(&next_entity)?;
             }
         }
 
@@ -2309,6 +2317,10 @@ fn robot_cell_sequence_entity_id(cell_id: &str) -> String {
     format!("ent_seq_{}", robot_cell_token(cell_id))
 }
 
+fn robot_cell_target_entity_id(cell_id: &str, target_key: &str) -> String {
+    format!("ent_target_{}_{}", robot_cell_token(cell_id), target_key)
+}
+
 fn robot_cell_safety_zone_entity_id(cell_id: &str, zone_suffix: &str) -> String {
     format!("ent_zone_{}_{}", robot_cell_token(cell_id), zone_suffix)
 }
@@ -2356,6 +2368,14 @@ fn robot_cell_signal_definitions(safety_clear: bool) -> Vec<SignalDefinition> {
             tags: vec!["process".to_string(), "boolean".to_string()],
         },
     ]
+}
+
+fn ordered_target_preview(targets: &[RobotTarget]) -> String {
+    targets
+        .iter()
+        .map(|target| target.id.as_str())
+        .collect::<Vec<_>>()
+        .join(" -> ")
 }
 
 fn robot_cell_controller_state_machine(cell_id: &str) -> ControllerStateMachine {
@@ -2552,18 +2572,92 @@ fn robot_cell_equipment_models(cell_id: &str) -> Vec<EquipmentModel> {
     ]
 }
 
+fn robot_cell_target_models(
+    cell_id: &str,
+    sequence_id: &str,
+    targets: &[RobotTarget],
+) -> Vec<RobotTargetModel> {
+    targets
+        .iter()
+        .enumerate()
+        .map(|(index, target)| RobotTargetModel {
+            id: robot_cell_target_entity_id(cell_id, &target.id),
+            cell_id: cell_id.to_string(),
+            sequence_id: sequence_id.to_string(),
+            target_key: target.id.clone(),
+            order_index: (index + 1) as u32,
+            pose: target.pose,
+            nominal_speed_mm_s: target.nominal_speed_mm_s,
+            dwell_time_ms: target.dwell_time_ms,
+        })
+        .collect()
+}
+
+fn robot_target_entity(model: &RobotTargetModel) -> EntityRecord {
+    sample_entity(
+        "RobotTarget",
+        &model.id,
+        &format!("Target {}", model.target_key),
+        serde_json::json!({
+            "id": model.id,
+            "cellId": model.cell_id,
+            "sequenceId": model.sequence_id,
+            "targetKey": model.target_key,
+            "orderIndex": model.order_index,
+            "pose": model.pose,
+            "nominalSpeedMmS": model.nominal_speed_mm_s,
+            "dwellTimeMs": model.dwell_time_ms,
+            "tags": ["robotics", "target", "sequence"],
+            "parameterSet": {
+                "orderIndex": model.order_index,
+                "xMm": model.pose.x_mm,
+                "yMm": model.pose.y_mm,
+                "zMm": model.pose.z_mm,
+                "nominalSpeedMmS": model.nominal_speed_mm_s,
+                "dwellTimeMs": model.dwell_time_ms
+            }
+        }),
+    )
+}
+
+fn robot_target_model_from_entity(entity: &EntityRecord) -> Option<RobotTargetModel> {
+    if entity.entity_type != "RobotTarget" {
+        return None;
+    }
+    let parameters = entity.data.get("parameterSet")?.as_object()?;
+    Some(RobotTargetModel {
+        id: entity.id.clone(),
+        cell_id: entity.data.get("cellId")?.as_str()?.to_string(),
+        sequence_id: entity.data.get("sequenceId")?.as_str()?.to_string(),
+        target_key: entity.data.get("targetKey")?.as_str()?.to_string(),
+        order_index: parameters.get("orderIndex")?.as_u64()? as u32,
+        pose: CartesianPose {
+            x_mm: parameters.get("xMm")?.as_f64()?,
+            y_mm: parameters.get("yMm")?.as_f64()?,
+            z_mm: parameters.get("zMm")?.as_f64()?,
+        },
+        nominal_speed_mm_s: parameters.get("nominalSpeedMmS")?.as_u64()? as u32,
+        dwell_time_ms: parameters.get("dwellTimeMs")?.as_u64()? as u32,
+    })
+}
+
 fn robot_cell_sequence_model(
     cell_id: &str,
-    targets: &[RobotTarget],
+    target_models: &[RobotTargetModel],
     validation: &faero_robotics::SequenceValidation,
 ) -> RobotSequenceModel {
+    let mut ordered_target_ids = target_models
+        .iter()
+        .map(|target| (target.order_index, target.id.clone()))
+        .collect::<Vec<_>>();
+    ordered_target_ids.sort_by_key(|(order_index, _)| *order_index);
     RobotSequenceModel {
         id: robot_cell_sequence_entity_id(cell_id),
         cell_id: cell_id.to_string(),
         robot_id: robot_cell_robot_entity_id(cell_id),
-        target_ids: targets
-            .iter()
-            .map(|target| format!("target_{}", target.id))
+        target_ids: ordered_target_ids
+            .into_iter()
+            .map(|(_, target_id)| target_id)
             .collect(),
         path_length_mm: validation.path_length_mm,
         estimated_cycle_time_ms: validation.estimated_cycle_time_ms,
@@ -2672,21 +2766,26 @@ fn build_robot_cell_support_entities(cell: &EntityRecord) -> Result<Vec<EntityRe
             .ok_or_else(|| "robot cell safety interlocks missing".to_string())?,
     )
     .map_err(|error| error.to_string())?;
-    let targets = serde_json::from_value::<Vec<RobotTarget>>(
+    let raw_targets = serde_json::from_value::<Vec<RobotTarget>>(
         cell.data
             .get("targets")
             .cloned()
             .ok_or_else(|| "robot cell targets missing".to_string())?,
     )
     .map_err(|error| error.to_string())?;
+    let sequence_id = robot_cell_sequence_entity_id(&cell.id);
+    let target_models = robot_cell_target_models(&cell.id, &sequence_id, &raw_targets);
+    let targets =
+        validate_target_models(&cell.id, &sequence_id, &target_models).map_err(|error| error.to_string())?;
     let validation = validate_sequence(&targets).map_err(|error| error.to_string())?;
+    let target_preview = ordered_target_preview(&targets);
     let safety_clear = !evaluate_safety(&zones, &interlocks, "robot.move").inhibited;
     let signal_definitions = robot_cell_signal_definitions(safety_clear);
     let controller = robot_cell_controller_state_machine(&cell.id);
     let structure = robot_cell_model(&cell.id, &zones);
     let robot_model = robot_cell_robot_model(&cell.id);
     let equipment_models = robot_cell_equipment_models(&cell.id);
-    let sequence_model = robot_cell_sequence_model(&cell.id, &targets, &validation);
+    let sequence_model = robot_cell_sequence_model(&cell.id, &target_models, &validation);
     let structure_summary = validate_robot_cell_structure(
         &structure,
         std::slice::from_ref(&robot_model),
@@ -2751,6 +2850,7 @@ fn build_robot_cell_support_entities(cell: &EntityRecord) -> Result<Vec<EntityRe
             }),
         )
     }));
+    entities.extend(target_models.iter().map(robot_target_entity));
     entities.push(sample_entity(
         "RobotSequence",
         &sequence_model.id,
@@ -2764,6 +2864,7 @@ fn build_robot_cell_support_entities(cell: &EntityRecord) -> Result<Vec<EntityRe
             "pathLengthMm": sequence_model.path_length_mm,
             "estimatedCycleTimeMs": sequence_model.estimated_cycle_time_ms,
             "targetCount": validation.target_count,
+            "targetPreview": target_preview,
             "structureSummary": {
                 "robotCount": structure_summary.robot_count,
                 "equipmentCount": structure_summary.equipment_count,
@@ -2865,14 +2966,18 @@ fn build_robot_cell_entity(
     id: &str,
     name: &str,
 ) -> Result<(EntityRecord, RobotCellEntitySummary), String> {
-    let targets = sample_robot_targets();
+    let sequence_id = robot_cell_sequence_entity_id(id);
+    let target_models = robot_cell_target_models(id, &sequence_id, &sample_robot_targets());
+    let targets =
+        validate_target_models(id, &sequence_id, &target_models).map_err(|error| error.to_string())?;
     let validation = validate_sequence(&targets).map_err(|error| error.to_string())?;
+    let target_preview = ordered_target_preview(&targets);
     let safety_zones = sample_safety_zones();
     let safety_interlocks = sample_safety_interlocks();
     let structure = robot_cell_model(id, &safety_zones);
     let robot_model = robot_cell_robot_model(id);
     let equipment_models = robot_cell_equipment_models(id);
-    let sequence_model = robot_cell_sequence_model(id, &targets, &validation);
+    let sequence_model = robot_cell_sequence_model(id, &target_models, &validation);
     let structure_summary = validate_robot_cell_structure(
         &structure,
         std::slice::from_ref(&robot_model),
@@ -2882,6 +2987,7 @@ fn build_robot_cell_entity(
     .map_err(|error| error.to_string())?;
     let summary = RobotCellEntitySummary {
         scene_assembly_id: Some(structure.scene_assembly_id.clone()),
+        target_preview: Some(target_preview.clone()),
         target_count: validation.target_count,
         path_length_mm: validation.path_length_mm,
         max_segment_mm: validation.max_segment_mm,
@@ -2916,6 +3022,8 @@ fn build_robot_cell_entity(
             "safetyZoneIds": structure.safety_zone_ids,
             "sequenceIds": structure.sequence_ids,
             "controllerModelIds": structure.controller_model_ids,
+            "targetIds": target_models.iter().map(|target| target.id.clone()).collect::<Vec<_>>(),
+            "targetPreview": target_preview,
             "targets": targets,
             "sequenceValidation": {
                 "targetCount": summary.target_count,
@@ -2954,6 +3062,191 @@ fn build_robot_cell_entity(
     );
 
     Ok((entity, summary))
+}
+
+fn normalize_robot_target_entity_data(
+    entity_id: &str,
+    data: &mut serde_json::Map<String, serde_json::Value>,
+) -> Result<RobotTargetModel, String> {
+    let parameters = data
+        .get("parameterSet")
+        .and_then(|value| value.as_object())
+        .ok_or_else(|| "RobotTarget.parameterSet requis".to_string())?;
+    let order_index = parameters
+        .get("orderIndex")
+        .and_then(|value| value.as_u64())
+        .ok_or_else(|| "RobotTarget.parameterSet.orderIndex doit rester entier positif".to_string())?
+        as u32;
+    let x_mm = parameters
+        .get("xMm")
+        .and_then(|value| value.as_f64())
+        .ok_or_else(|| "RobotTarget.parameterSet.xMm doit rester numerique".to_string())?;
+    let y_mm = parameters
+        .get("yMm")
+        .and_then(|value| value.as_f64())
+        .ok_or_else(|| "RobotTarget.parameterSet.yMm doit rester numerique".to_string())?;
+    let z_mm = parameters
+        .get("zMm")
+        .and_then(|value| value.as_f64())
+        .ok_or_else(|| "RobotTarget.parameterSet.zMm doit rester numerique".to_string())?;
+    let nominal_speed_mm_s = parameters
+        .get("nominalSpeedMmS")
+        .and_then(|value| value.as_u64())
+        .ok_or_else(|| "RobotTarget.parameterSet.nominalSpeedMmS doit rester entier positif".to_string())?
+        as u32;
+    let dwell_time_ms = parameters
+        .get("dwellTimeMs")
+        .and_then(|value| value.as_u64())
+        .ok_or_else(|| "RobotTarget.parameterSet.dwellTimeMs doit rester entier".to_string())?
+        as u32;
+    let model = RobotTargetModel {
+        id: entity_id.to_string(),
+        cell_id: data
+            .get("cellId")
+            .and_then(|value| value.as_str())
+            .ok_or_else(|| "RobotTarget.cellId requis".to_string())?
+            .to_string(),
+        sequence_id: data
+            .get("sequenceId")
+            .and_then(|value| value.as_str())
+            .ok_or_else(|| "RobotTarget.sequenceId requis".to_string())?
+            .to_string(),
+        target_key: data
+            .get("targetKey")
+            .and_then(|value| value.as_str())
+            .ok_or_else(|| "RobotTarget.targetKey requis".to_string())?
+            .to_string(),
+        order_index,
+        pose: CartesianPose {
+            x_mm,
+            y_mm,
+            z_mm,
+        },
+        nominal_speed_mm_s,
+        dwell_time_ms,
+    };
+    data.insert("orderIndex".to_string(), serde_json::json!(model.order_index));
+    data.insert("pose".to_string(), serde_json::to_value(model.pose).map_err(|error| error.to_string())?);
+    data.insert(
+        "nominalSpeedMmS".to_string(),
+        serde_json::json!(model.nominal_speed_mm_s),
+    );
+    data.insert(
+        "dwellTimeMs".to_string(),
+        serde_json::json!(model.dwell_time_ms),
+    );
+    Ok(model)
+}
+
+fn format_robot_target_entity_detail(model: &RobotTargetModel) -> String {
+    format!(
+        "#{} {} | {:.0}, {:.0}, {:.0} | {} mm/s",
+        model.order_index,
+        model.target_key,
+        model.pose.x_mm,
+        model.pose.y_mm,
+        model.pose.z_mm,
+        model.nominal_speed_mm_s
+    )
+}
+
+impl WorkspaceSession {
+    fn sync_robot_target_dependents(&mut self, target_entity: &EntityRecord) -> Result<(), String> {
+        let target_model = robot_target_model_from_entity(target_entity)
+            .ok_or_else(|| "RobotTarget invalide".to_string())?;
+        let mut target_models = self
+            .graph
+            .document()
+            .nodes
+            .values()
+            .filter_map(robot_target_model_from_entity)
+            .filter(|model| {
+                model.cell_id == target_model.cell_id && model.sequence_id == target_model.sequence_id
+            })
+            .collect::<Vec<_>>();
+        let ordered_targets = validate_target_models(
+            &target_model.cell_id,
+            &target_model.sequence_id,
+            &target_models,
+        )
+        .map_err(|error| error.to_string())?;
+        let validation = validate_sequence(&ordered_targets).map_err(|error| error.to_string())?;
+        target_models.sort_by_key(|model| model.order_index);
+        let ordered_target_ids = target_models
+            .iter()
+            .map(|model| model.id.clone())
+            .collect::<Vec<_>>();
+        let target_preview = ordered_target_preview(&ordered_targets);
+
+        if let Some(sequence) = self.graph.document().nodes.get(&target_model.sequence_id).cloned() {
+            let mut next_sequence = sequence;
+            if let Some(data) = next_sequence.data.as_object_mut() {
+                data.insert("targetIds".to_string(), serde_json::json!(ordered_target_ids.clone()));
+                data.insert(
+                    "targets".to_string(),
+                    serde_json::to_value(&ordered_targets).map_err(|error| error.to_string())?,
+                );
+                data.insert("pathLengthMm".to_string(), serde_json::json!(validation.path_length_mm));
+                data.insert(
+                    "estimatedCycleTimeMs".to_string(),
+                    serde_json::json!(validation.estimated_cycle_time_ms),
+                );
+                data.insert("targetCount".to_string(), serde_json::json!(validation.target_count));
+                data.insert("targetPreview".to_string(), serde_json::json!(target_preview.clone()));
+            }
+            self.graph
+                .apply_command(CoreCommand::ReplaceEntity(next_sequence))
+                .map_err(|error| error.to_string())?;
+        }
+
+        if let Some(cell) = self.graph.document().nodes.get(&target_model.cell_id).cloned() {
+            let mut next_cell = cell;
+            if let Some(data) = next_cell.data.as_object_mut() {
+                data.insert("targetIds".to_string(), serde_json::json!(ordered_target_ids));
+                data.insert(
+                    "targets".to_string(),
+                    serde_json::to_value(&ordered_targets).map_err(|error| error.to_string())?,
+                );
+                data.insert("targetPreview".to_string(), serde_json::json!(target_preview.clone()));
+                if let Some(validation_data) =
+                    data.get_mut("sequenceValidation").and_then(|value| value.as_object_mut())
+                {
+                    validation_data
+                        .insert("targetCount".to_string(), serde_json::json!(validation.target_count));
+                    validation_data.insert(
+                        "pathLengthMm".to_string(),
+                        serde_json::json!(validation.path_length_mm),
+                    );
+                    validation_data.insert(
+                        "maxSegmentMm".to_string(),
+                        serde_json::json!(validation.max_segment_mm),
+                    );
+                    validation_data.insert(
+                        "estimatedCycleTimeMs".to_string(),
+                        serde_json::json!(validation.estimated_cycle_time_ms),
+                    );
+                    validation_data
+                        .insert("warningCount".to_string(), serde_json::json!(validation.warning_count));
+                }
+                if let Some(parameters) =
+                    data.get_mut("parameterSet").and_then(|value| value.as_object_mut())
+                {
+                    parameters.insert("targetCount".to_string(), serde_json::json!(validation.target_count));
+                    parameters.insert(
+                        "estimatedCycleTimeMs".to_string(),
+                        serde_json::json!(validation.estimated_cycle_time_ms),
+                    );
+                }
+            }
+            robot_cell_summary_from_entity(&next_cell)
+                .ok_or_else(|| "resume RobotCell invalide apres sync cible".to_string())?;
+            self.graph
+                .apply_command(CoreCommand::ReplaceEntity(next_cell))
+                .map_err(|error| error.to_string())?;
+        }
+
+        Ok(())
+    }
 }
 
 fn build_simulation_run_entity(
@@ -3571,6 +3864,47 @@ fn validate_entity_change_set(
         }
     }
 
+    if entity.entity_type == "RobotTarget" {
+        let parameters = data
+            .get("parameterSet")
+            .and_then(|value| value.as_object())
+            .ok_or_else(|| "RobotTarget.parameterSet requis".to_string())?;
+        let order_index = parameters
+            .get("orderIndex")
+            .and_then(|value| value.as_u64())
+            .ok_or_else(|| "RobotTarget.parameterSet.orderIndex doit rester entier positif".to_string())?;
+        if order_index == 0 {
+            return Err("RobotTarget.parameterSet.orderIndex doit rester strictement positif".to_string());
+        }
+        for coordinate in ["xMm", "yMm", "zMm"] {
+            if !parameters
+                .get(coordinate)
+                .and_then(|value| value.as_f64())
+                .is_some_and(f64::is_finite)
+            {
+                return Err(format!(
+                    "RobotTarget.parameterSet.{coordinate} doit rester numerique"
+                ));
+            }
+        }
+        let nominal_speed = parameters
+            .get("nominalSpeedMmS")
+            .and_then(|value| value.as_u64())
+            .ok_or_else(|| {
+                "RobotTarget.parameterSet.nominalSpeedMmS doit rester entier positif".to_string()
+            })?;
+        if nominal_speed == 0 {
+            return Err(
+                "RobotTarget.parameterSet.nominalSpeedMmS doit rester strictement positif"
+                    .to_string(),
+            );
+        }
+        parameters
+            .get("dwellTimeMs")
+            .and_then(|value| value.as_u64())
+            .ok_or_else(|| "RobotTarget.parameterSet.dwellTimeMs doit rester entier".to_string())?;
+    }
+
     Ok(())
 }
 
@@ -3656,6 +3990,11 @@ fn robot_cell_summary_from_entity(entity: &EntityRecord) -> Option<RobotCellEnti
         scene_assembly_id: entity
             .data
             .get("sceneAssemblyId")
+            .and_then(|value| value.as_str())
+            .map(str::to_string),
+        target_preview: entity
+            .data
+            .get("targetPreview")
             .and_then(|value| value.as_str())
             .map(str::to_string),
         target_count: validation.get("targetCount")?.as_u64()? as usize,
@@ -3909,6 +4248,9 @@ fn generic_entity_detail(entity: &EntityRecord) -> Option<String> {
                 .and_then(|value| value.as_u64())
                 .unwrap_or(0)
         )),
+        "RobotTarget" => robot_target_model_from_entity(entity).map(|model| {
+            format_robot_target_entity_detail(&model)
+        }),
         "AiSession" => Some(format!(
             "{} | {} suggestion(s)",
             entity
@@ -3982,13 +4324,19 @@ fn format_robot_cell_entity_detail(summary: &RobotCellEntitySummary) -> String {
         .scene_assembly_id
         .as_deref()
         .unwrap_or("scene");
+    let preview = summary
+        .target_preview
+        .as_deref()
+        .map(|value| format!(" | {value}"))
+        .unwrap_or_default();
     format!(
-        "{} pts | {} equip | {} sig | {} | {} ms",
+        "{} pts | {} equip | {} sig | {} | {} ms{}",
         summary.target_count,
         summary.equipment_count,
         summary.signal_count,
         scene,
-        summary.estimated_cycle_time_ms
+        summary.estimated_cycle_time_ms,
+        preview
     )
 }
 
@@ -4752,6 +5100,7 @@ mod tests {
         assert_eq!(summary.target_count, 3);
         assert!(summary.path_length_mm > 850.0);
         assert!(summary.estimated_cycle_time_ms > 3_000);
+        assert_eq!(summary.target_preview.as_deref(), Some("pick -> transfer -> place"));
         assert_eq!(summary.equipment_count, 3);
         assert_eq!(summary.sequence_count, 1);
         assert_eq!(summary.scene_assembly_id.as_deref(), Some("ent_asm_cell_001"));
@@ -4770,6 +5119,14 @@ mod tests {
                 .map(|entries| entries.len()),
             Some(1)
         );
+        assert_eq!(
+            robot_cell
+                .data["targetIds"]
+                .as_array()
+                .map(|entries| entries.len()),
+            Some(3)
+        );
+        assert_eq!(robot_cell.data["targetPreview"], "pick -> transfer -> place");
         assert!(snapshot
             .entities
             .iter()
@@ -4790,6 +5147,14 @@ mod tests {
             .entities
             .iter()
             .any(|entity| entity.entity_type == "RobotSequence" && entity.id == "ent_seq_001"));
+        assert_eq!(
+            snapshot
+                .entities
+                .iter()
+                .filter(|entity| entity.entity_type == "RobotTarget")
+                .count(),
+            3
+        );
         assert_eq!(
             snapshot
                 .entities
@@ -4986,6 +5351,73 @@ mod tests {
         assert_eq!(updated.data["currentValue"], "ready");
         assert_eq!(updated.data["parameterSet"]["unit"], "label");
         assert_eq!(updated.data["parameterSet"]["thresholds"][0], "ready");
+    }
+
+    #[test]
+    fn robot_target_property_update_reorders_sequence_and_preview() {
+        let mut session = WorkspaceSession::empty("Session");
+        session
+            .execute_command("entity.create.robot_cell")
+            .expect("robot cell should be created");
+        let target = session
+            .graph
+            .document()
+            .nodes
+            .values()
+            .find(|entity| entity.id == "ent_target_001_transfer")
+            .cloned()
+            .expect("target should exist");
+
+        let result = session
+            .update_entity_properties(&EntityPropertyUpdateInput {
+                entity_id: target.id.clone(),
+                changes: serde_json::json!({
+                    "parameterSet.orderIndex": 4
+                }),
+            })
+            .expect("target order should update");
+
+        let snapshot = session.snapshot();
+        let robot_cell = snapshot
+            .entities
+            .iter()
+            .find(|entity| entity.id == "ent_cell_001")
+            .expect("robot cell should still exist");
+        let sequence = snapshot
+            .entities
+            .iter()
+            .find(|entity| entity.id == "ent_seq_001")
+            .expect("robot sequence should still exist");
+
+        assert_eq!(result.status, "applied");
+        assert_eq!(robot_cell.data["targetPreview"], "pick -> place -> transfer");
+        assert_eq!(
+            robot_cell.data["targetIds"].as_array().map(|entries| {
+                entries
+                    .iter()
+                    .filter_map(|value| value.as_str())
+                    .collect::<Vec<_>>()
+            }),
+            Some(vec![
+                "ent_target_001_pick",
+                "ent_target_001_place",
+                "ent_target_001_transfer",
+            ])
+        );
+        assert_eq!(sequence.data["targetPreview"], "pick -> place -> transfer");
+        assert_eq!(
+            sequence.data["targetIds"].as_array().map(|entries| {
+                entries
+                    .iter()
+                    .filter_map(|value| value.as_str())
+                    .collect::<Vec<_>>()
+            }),
+            Some(vec![
+                "ent_target_001_pick",
+                "ent_target_001_place",
+                "ent_target_001_transfer",
+            ])
+        );
     }
 
     #[test]

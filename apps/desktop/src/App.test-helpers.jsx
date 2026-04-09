@@ -12,7 +12,10 @@ import {
 import userEvent from "@testing-library/user-event";
 
 import App from "./App.jsx";
-import { buildFallbackRobotCellBundle } from "./robotCellFallback.js";
+import {
+  buildFallbackRobotCellBundle,
+  syncFallbackRobotCellTargets,
+} from "./robotCellFallback.js";
 import { localizeMenuModel, translate } from "@futureaero/ui";
 import { aerospaceReferenceScenes } from "@futureaero/viewport";
 
@@ -311,6 +314,9 @@ function createMockBackend() {
     snapshot.entities = snapshot.entities.map((entity, index) =>
       index === entityIndex ? next : entity,
     );
+    if (next.entityType === "RobotTarget") {
+      snapshot.entities = syncFallbackRobotCellTargets(snapshot.entities, next.id);
+    }
     pushActivity("entity.properties.updated", payload.entityId);
 
     return {

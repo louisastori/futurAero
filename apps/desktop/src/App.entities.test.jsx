@@ -181,11 +181,60 @@ describe("App entity and simulation flows", () => {
           .querySelector('[data-robot-cell-scene="ent_cell_002"]')
           ?.textContent?.includes("ent_asm_cell_002"),
       );
+      assert.ok(
+        document
+          .querySelector('[data-robot-cell-preview="ent_cell_002"]')
+          ?.textContent?.includes("pick -> transfer -> place"),
+      );
       assert.ok(document.querySelector('[data-entity-select="ent_robot_002"]'));
       assert.ok(
         document.querySelector('[data-entity-select="ent_conveyor_002"]'),
       );
       assert.ok(document.querySelector('[data-entity-select="ent_seq_002"]'));
+      assert.ok(
+        document.querySelector('[data-entity-select="ent_target_002_pick"]'),
+      );
+    });
+  });
+
+  test("editing a robot target order updates the ordered target preview", async () => {
+    const { user } = await renderApp();
+
+    await user.click(screen.getByRole("button", { name: "Insertion" }));
+    await user.click(
+      document.querySelector('[data-command-id="entity.create.robot_cell"]'),
+    );
+
+    await waitFor(() => {
+      assert.ok(
+        document.querySelector('[data-entity-select="ent_target_002_transfer"]'),
+      );
+    });
+
+    await user.click(
+      document.querySelector('[data-entity-select="ent_target_002_transfer"]'),
+    );
+
+    fireEvent.change(screen.getByLabelText("orderIndex"), {
+      target: { value: "4" },
+    });
+    await user.click(
+      document.querySelector('[data-entity-save="ent_target_002_transfer"]'),
+    );
+
+    await waitFor(() => {
+      assert.equal(screen.getByLabelText("orderIndex").value, "4");
+      assert.ok(
+        document
+          .querySelector('[data-robot-cell-preview="ent_cell_002"]')
+          ?.textContent?.includes("pick -> place -> transfer"),
+      );
+      assert.equal(
+        document
+          .querySelector("[data-command-feedback]")
+          ?.getAttribute("data-command-feedback"),
+        "entity.properties.update",
+      );
     });
   });
 

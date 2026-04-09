@@ -39,6 +39,10 @@ function sequenceId(cellId) {
   return `ent_seq_${robotCellToken(cellId)}`;
 }
 
+function targetId(cellId, targetKey) {
+  return `ent_target_${robotCellToken(cellId)}_${targetKey}`;
+}
+
 function safetyZoneId(cellId, kind) {
   return `ent_zone_${robotCellToken(cellId)}_${kind}`;
 }
@@ -57,6 +61,47 @@ function partId(cellId, kind) {
 
 function occurrenceId(kind) {
   return `occ_${kind}_001`;
+}
+
+function distanceBetween(left, right) {
+  const dx = right.xMm - left.xMm;
+  const dy = right.yMm - left.yMm;
+  const dz = right.zMm - left.zMm;
+  return Math.sqrt(dx * dx + dy * dy + dz * dz);
+}
+
+function computeSequenceValidation(targets) {
+  let pathLengthMm = 0;
+  let maxSegmentMm = 0;
+  let motionTimeMs = 0;
+  for (let index = 1; index < targets.length; index += 1) {
+    const previous = targets[index - 1];
+    const next = targets[index];
+    const distance = distanceBetween(previous.pose, next.pose);
+    const averageSpeed = Math.max(
+      1,
+      Math.floor((previous.nominalSpeedMmS + next.nominalSpeedMmS) / 2),
+    );
+    pathLengthMm += distance;
+    maxSegmentMm = Math.max(maxSegmentMm, distance);
+    motionTimeMs += Math.ceil((distance / averageSpeed) * 1000);
+  }
+  const dwellTimeMs = targets.reduce(
+    (total, target) => total + target.dwellTimeMs,
+    0,
+  );
+  return {
+    targetCount: targets.length,
+    pathLengthMm,
+    maxSegmentMm,
+    estimatedCycleTimeMs: motionTimeMs + dwellTimeMs,
+    warningCount:
+      Number(maxSegmentMm > 1000) + Number(pathLengthMm > 1800),
+  };
+}
+
+function targetPreview(targets) {
+  return targets.map((target) => target.id).join(" -> ");
 }
 
 function sampleTargets() {
@@ -182,6 +227,172 @@ function sampleSignals(cellId) {
   ];
 }
 
+function buildTargetEntities(cellId, sequenceModelId, targets) {
+  return targets.map((target, index) =>
+    createEntity(
+      "RobotTarget",
+      targetId(cellId, target.id),
+      `Target ${target.id}`,
+      `#${index + 1} ${target.id} | ${target.pose.xMm}, ${target.pose.yMm}, ${target.pose.zMm} | ${target.nominalSpeedMmS} mm/s`,
+      {
+        id: targetId(cellId, target.id),
+        cellId,
+        sequenceId: sequenceModelId,
+        targetKey: target.id,
+        orderIndex: index + 1,
+        pose: target.pose,
+        nominalSpeedMmS: target.nominalSpeedMmS,
+        dwellTimeMs: target.dwellTimeMs,
+        tags: ["robotics", "target", "sequence"],
+        parameterSet: {
+          orderIndex: index + 1,
+          xMm: target.pose.xMm,
+          yMm: target.pose.yMm,
+          zMm: target.pose.zMm,
+          nominalSpeedMmS: target.nominalSpeedMmS,
+          dwellTimeMs: target.dwellTimeMs,
+        },
+      },
+    ),
+  );
+}
+
+function normalizeTargetEntity(entity) {
+  if (entity?.entityType !== "RobotTarget") {
+    return entity;
+  }
+  const parameterSet = entity.data?.parameterSet ?? {};
+  const orderIndex = Number(parameterSet.orderIndex ?? entity.data?.orderIndex ?? 1);
+  const xMm = Number(parameterSet.xMm ?? entity.data?.pose?.xMm ?? 0);
+  const yMm = Number(parameterSet.yMm ?? entity.data?.pose?.yMm ?? 0);
+  const zMm = Number(parameterSet.zMm ?? entity.data?.pose?.zMm ?? 0);
+  const nominalSpeedMmS = Number(
+    parameterSet.nominalSpeedMmS ?? entity.data?.nominalSpeedMmS ?? 1,
+  );
+  const dwellTimeMs = Number(
+    parameterSet.dwellTimeMs ?? entity.data?.dwellTimeMs ?? 0,
+  );
+  return {
+    ...entity,
+    detail: `#${orderIndex} ${entity.data?.targetKey ?? "target"} | ${xMm}, ${yMm}, ${zMm} | ${nominalSpeedMmS} mm/s`,
+    data: {
+      ...entity.data,
+      orderIndex,
+      pose: { xMm, yMm, zMm },
+      nominalSpeedMmS,
+      dwellTimeMs,
+      parameterSet: {
+        ...entity.data?.parameterSet,
+        orderIndex,
+        xMm,
+        yMm,
+        zMm,
+        nominalSpeedMmS,
+        dwellTimeMs,
+      },
+    },
+  };
+}
+
+function orderedTargetEntities(entities, cellId, sequenceModelId) {
+  return entities
+    .filter(
+      (entity) =>
+        entity.entityType === "RobotTarget" &&
+        entity.data?.cellId === cellId &&
+        entity.data?.sequenceId === sequenceModelId,
+    )
+    .map(normalizeTargetEntity)
+    .sort(
+      (left, right) =>
+        (left.data?.parameterSet?.orderIndex ?? 0) -
+        (right.data?.parameterSet?.orderIndex ?? 0),
+    );
+}
+
+function rawTargetsFromEntities(targetEntities) {
+  return targetEntities.map((entity) => ({
+    id: entity.data.targetKey,
+    pose: entity.data.pose,
+    nominalSpeedMmS: entity.data.nominalSpeedMmS,
+    dwellTimeMs: entity.data.dwellTimeMs,
+  }));
+}
+
+export function syncFallbackRobotCellTargets(entities, targetEntityId) {
+  const nextEntities = structuredClone(entities);
+  const targetIndex = nextEntities.findIndex((entity) => entity.id === targetEntityId);
+  if (targetIndex === -1 || nextEntities[targetIndex]?.entityType !== "RobotTarget") {
+    return nextEntities;
+  }
+
+  nextEntities[targetIndex] = normalizeTargetEntity(nextEntities[targetIndex]);
+  const targetEntity = nextEntities[targetIndex];
+  const cellId = targetEntity.data.cellId;
+  const sequenceModelId = targetEntity.data.sequenceId;
+  const targetEntities = orderedTargetEntities(nextEntities, cellId, sequenceModelId);
+  const rawTargets = rawTargetsFromEntities(targetEntities);
+  const validation = computeSequenceValidation(rawTargets);
+  const preview = targetPreview(rawTargets);
+  const orderedTargetIds = targetEntities.map((entity) => entity.id);
+
+  const sequenceIndex = nextEntities.findIndex((entity) => entity.id === sequenceModelId);
+  if (sequenceIndex !== -1) {
+    nextEntities[sequenceIndex] = {
+      ...nextEntities[sequenceIndex],
+      detail: `${validation.targetCount} pts | ${validation.estimatedCycleTimeMs} ms | ${preview}`,
+      data: {
+        ...nextEntities[sequenceIndex].data,
+        targetIds: orderedTargetIds,
+        targets: rawTargets,
+        pathLengthMm: validation.pathLengthMm,
+        estimatedCycleTimeMs: validation.estimatedCycleTimeMs,
+        targetCount: validation.targetCount,
+        targetPreview: preview,
+      },
+    };
+  }
+
+  const cellIndex = nextEntities.findIndex((entity) => entity.id === cellId);
+  if (cellIndex !== -1) {
+    const currentCell = nextEntities[cellIndex];
+    nextEntities[cellIndex] = {
+      ...currentCell,
+      detail: `${validation.targetCount} pts | ${currentCell.robotCellSummary?.equipmentCount ?? 0} equip | ${currentCell.robotCellSummary?.signalCount ?? 0} sig | ${currentCell.data?.sceneAssemblyId ?? "scene"} | ${validation.estimatedCycleTimeMs} ms | ${preview}`,
+      data: {
+        ...currentCell.data,
+        targetIds: orderedTargetIds,
+        targets: rawTargets,
+        targetPreview: preview,
+        parameterSet: {
+          ...currentCell.data?.parameterSet,
+          targetCount: validation.targetCount,
+          estimatedCycleTimeMs: validation.estimatedCycleTimeMs,
+        },
+        sequenceValidation: {
+          ...currentCell.data?.sequenceValidation,
+          targetCount: validation.targetCount,
+          pathLengthMm: validation.pathLengthMm,
+          maxSegmentMm: validation.maxSegmentMm,
+          estimatedCycleTimeMs: validation.estimatedCycleTimeMs,
+          warningCount: validation.warningCount,
+        },
+      },
+      robotCellSummary: {
+        ...currentCell.robotCellSummary,
+        targetCount: validation.targetCount,
+        pathLengthMm: validation.pathLengthMm,
+        maxSegmentMm: validation.maxSegmentMm,
+        estimatedCycleTimeMs: validation.estimatedCycleTimeMs,
+        warningCount: validation.warningCount,
+        targetPreview: preview,
+      },
+    };
+  }
+
+  return nextEntities;
+}
+
 export function buildFallbackRobotCellBundle(index) {
   const cellId = buildCellId(index);
   const token = robotCellToken(cellId);
@@ -196,6 +407,9 @@ export function buildFallbackRobotCellBundle(index) {
   const controllerModelId = controllerId(cellId);
   const signals = sampleSignals(cellId);
   const targets = sampleTargets();
+  const validation = computeSequenceValidation(targets);
+  const preview = targetPreview(targets);
+  const targetEntities = buildTargetEntities(cellId, sequenceModelId, targets);
   const safetyZones = sampleSafetyZones();
   const safetyInterlocks = sampleSafetyInterlocks();
   const structureSummary = {
@@ -207,16 +421,17 @@ export function buildFallbackRobotCellBundle(index) {
   };
   const robotCellSummary = {
     sceneAssemblyId: asmId,
-    targetCount: 3,
-    pathLengthMm: 896,
-    maxSegmentMm: 470,
-    estimatedCycleTimeMs: 3491,
+    targetPreview: preview,
+    targetCount: validation.targetCount,
+    pathLengthMm: validation.pathLengthMm,
+    maxSegmentMm: validation.maxSegmentMm,
+    estimatedCycleTimeMs: validation.estimatedCycleTimeMs,
     equipmentCount: 3,
     sequenceCount: 1,
     safetyZoneCount: 2,
     signalCount: 4,
     controllerTransitionCount: 3,
-    warningCount: 0,
+    warningCount: validation.warningCount,
   };
 
   return [
@@ -505,19 +720,21 @@ export function buildFallbackRobotCellBundle(index) {
       "RobotSequence",
       sequenceModelId,
       `RobotCell-${token} / Sequence`,
-      "3 pts | 3491 ms",
+      `${validation.targetCount} pts | ${validation.estimatedCycleTimeMs} ms | ${preview}`,
       {
         id: sequenceModelId,
         cellId,
         robotId: robotModelId,
-        targetIds: ["target_pick", "target_transfer", "target_place"],
+        targetIds: targetEntities.map((entity) => entity.id),
         targets,
-        pathLengthMm: 896,
-        estimatedCycleTimeMs: 3491,
-        targetCount: 3,
+        pathLengthMm: validation.pathLengthMm,
+        estimatedCycleTimeMs: validation.estimatedCycleTimeMs,
+        targetCount: validation.targetCount,
+        targetPreview: preview,
         structureSummary,
       },
     ),
+    ...targetEntities,
     ...signals,
     createEntity(
       "ControllerModel",
@@ -602,7 +819,7 @@ export function buildFallbackRobotCellBundle(index) {
       "RobotCell",
       cellId,
       `RobotCell-${token}`,
-      `3 pts | 3 equip | 4 sig | ${asmId} | 3491 ms`,
+      `${validation.targetCount} pts | 3 equip | 4 sig | ${asmId} | ${validation.estimatedCycleTimeMs} ms | ${preview}`,
       {
         controller: {
           robotModel: "FAERO-X90",
@@ -611,7 +828,8 @@ export function buildFallbackRobotCellBundle(index) {
         tags: ["robotics", "simulation", "mvp"],
         parameterSet: {
           tcpPayloadKg: 8,
-          estimatedCycleTimeMs: 3491,
+          estimatedCycleTimeMs: validation.estimatedCycleTimeMs,
+          targetCount: validation.targetCount,
           equipmentCount: 3,
           sequenceCount: 1,
         },
@@ -622,13 +840,15 @@ export function buildFallbackRobotCellBundle(index) {
         safetyZoneIds: [warningZoneId, protectiveZoneId],
         sequenceIds: [sequenceModelId],
         controllerModelIds: [controllerModelId],
+        targetIds: targetEntities.map((entity) => entity.id),
+        targetPreview: preview,
         targets,
         sequenceValidation: {
-          targetCount: 3,
-          pathLengthMm: 896,
-          maxSegmentMm: 470,
-          estimatedCycleTimeMs: 3491,
-          warningCount: 0,
+          targetCount: validation.targetCount,
+          pathLengthMm: validation.pathLengthMm,
+          maxSegmentMm: validation.maxSegmentMm,
+          estimatedCycleTimeMs: validation.estimatedCycleTimeMs,
+          warningCount: validation.warningCount,
           sequenceEntityId: sequenceModelId,
         },
         control: {

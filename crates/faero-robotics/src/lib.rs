@@ -88,6 +88,19 @@ pub struct RobotSequenceModel {
     pub estimated_cycle_time_ms: u32,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RobotTargetModel {
+    pub id: String,
+    pub cell_id: String,
+    pub sequence_id: String,
+    pub target_key: String,
+    pub order_index: u32,
+    pub pose: CartesianPose,
+    pub nominal_speed_mm_s: u32,
+    pub dwell_time_ms: u32,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RobotCellStructureSummary {
     pub robot_count: usize,
@@ -146,6 +159,10 @@ pub enum RoboticsError {
         "robot sequences must belong to the cell and target declared robots with non-empty targets"
     )]
     InvalidRobotSequenceSet,
+    #[error(
+        "robot target models must belong to the sequence and expose unique ids, keys and positive order indexes"
+    )]
+    InvalidRobotTargetModelSet,
 }
 
 pub fn validate_sequence(targets: &[RobotTarget]) -> Result<SequenceValidation, RoboticsError> {
@@ -197,6 +214,53 @@ pub fn validate_sequence(targets: &[RobotTarget]) -> Result<SequenceValidation, 
         estimated_cycle_time_ms: motion_time_ms + dwell_time_ms,
         warning_count,
     })
+}
+
+pub fn validate_target_models(
+    cell_id: &str,
+    sequence_id: &str,
+    target_models: &[RobotTargetModel],
+) -> Result<Vec<RobotTarget>, RoboticsError> {
+    if target_models.is_empty() {
+        return Err(RoboticsError::EmptySequence);
+    }
+
+    let mut entity_ids = HashSet::new();
+    let mut target_keys = HashSet::new();
+    let mut order_indexes = HashSet::new();
+    if target_models.iter().any(|target| {
+        target.id.is_empty()
+            || target.cell_id != cell_id
+            || target.sequence_id != sequence_id
+            || target.target_key.is_empty()
+            || target.order_index == 0
+            || target.nominal_speed_mm_s == 0
+            || !entity_ids.insert(target.id.as_str())
+            || !target_keys.insert(target.target_key.as_str())
+            || !order_indexes.insert(target.order_index)
+    }) {
+        return Err(RoboticsError::InvalidRobotTargetModelSet);
+    }
+
+    if target_models.iter().any(|target| {
+        !target.pose.x_mm.is_finite()
+            || !target.pose.y_mm.is_finite()
+            || !target.pose.z_mm.is_finite()
+    }) {
+        return Err(RoboticsError::InvalidPose);
+    }
+
+    let mut ordered = target_models.to_vec();
+    ordered.sort_by_key(|target| target.order_index);
+    Ok(ordered
+        .into_iter()
+        .map(|target| RobotTarget {
+            id: target.target_key,
+            pose: target.pose,
+            nominal_speed_mm_s: target.nominal_speed_mm_s,
+            dwell_time_ms: target.dwell_time_ms,
+        })
+        .collect())
 }
 
 pub fn validate_robot_cell_structure(
@@ -526,13 +590,60 @@ mod tests {
             cell_id: "ent_cell_001".to_string(),
             robot_id: "ent_robot_001".to_string(),
             target_ids: vec![
-                "target_pick".to_string(),
-                "target_transfer".to_string(),
-                "target_place".to_string(),
+                "ent_target_001_pick".to_string(),
+                "ent_target_001_transfer".to_string(),
+                "ent_target_001_place".to_string(),
             ],
             path_length_mm: 896.0,
             estimated_cycle_time_ms: 3_491,
         }
+    }
+
+    fn sample_target_models() -> Vec<RobotTargetModel> {
+        vec![
+            RobotTargetModel {
+                id: "ent_target_001_pick".to_string(),
+                cell_id: "ent_cell_001".to_string(),
+                sequence_id: "ent_seq_001".to_string(),
+                target_key: "pick".to_string(),
+                order_index: 1,
+                pose: CartesianPose {
+                    x_mm: 0.0,
+                    y_mm: 0.0,
+                    z_mm: 120.0,
+                },
+                nominal_speed_mm_s: 250,
+                dwell_time_ms: 120,
+            },
+            RobotTargetModel {
+                id: "ent_target_001_transfer".to_string(),
+                cell_id: "ent_cell_001".to_string(),
+                sequence_id: "ent_seq_001".to_string(),
+                target_key: "transfer".to_string(),
+                order_index: 2,
+                pose: CartesianPose {
+                    x_mm: 450.0,
+                    y_mm: 60.0,
+                    z_mm: 240.0,
+                },
+                nominal_speed_mm_s: 320,
+                dwell_time_ms: 40,
+            },
+            RobotTargetModel {
+                id: "ent_target_001_place".to_string(),
+                cell_id: "ent_cell_001".to_string(),
+                sequence_id: "ent_seq_001".to_string(),
+                target_key: "place".to_string(),
+                order_index: 3,
+                pose: CartesianPose {
+                    x_mm: 860.0,
+                    y_mm: 120.0,
+                    z_mm: 140.0,
+                },
+                nominal_speed_mm_s: 240,
+                dwell_time_ms: 160,
+            },
+        ]
     }
 
     #[test]
@@ -581,6 +692,39 @@ mod tests {
                 &[bad_sequence],
             ),
             Err(RoboticsError::InvalidRobotSequenceSet)
+        );
+    }
+
+    #[test]
+    fn validates_target_models_and_preserves_ordered_robot_targets() {
+        let ordered =
+            validate_target_models("ent_cell_001", "ent_seq_001", &sample_target_models())
+                .expect("target models should validate");
+
+        assert_eq!(
+            ordered
+                .iter()
+                .map(|target| target.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["pick", "transfer", "place"]
+        );
+        assert_eq!(ordered[1].pose.x_mm, 450.0);
+    }
+
+    #[test]
+    fn rejects_target_models_with_duplicate_order_or_invalid_scope() {
+        let mut models = sample_target_models();
+        models[1].order_index = 1;
+        assert_eq!(
+            validate_target_models("ent_cell_001", "ent_seq_001", &models),
+            Err(RoboticsError::InvalidRobotTargetModelSet)
+        );
+
+        let mut wrong_scope = sample_target_models();
+        wrong_scope[0].sequence_id = "ent_seq_other".to_string();
+        assert_eq!(
+            validate_target_models("ent_cell_001", "ent_seq_001", &wrong_scope),
+            Err(RoboticsError::InvalidRobotTargetModelSet)
         );
     }
 }
