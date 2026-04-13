@@ -31,8 +31,15 @@ import {
 } from "@futureaero/viewport";
 import {
   buildFallbackRobotCellBundle,
+  syncFallbackRobotCellControl,
   syncFallbackRobotCellTargets,
 } from "./robotCellFallback.js";
+import {
+  buildFallbackSimulationRunEntity,
+  simulationRunReportFromPersistedData,
+  simulationRunSummaryFromPersistedData,
+} from "./simulationRunFallback.js";
+import InteractiveWorkcellViewport from "./InteractiveWorkcellViewport.jsx";
 
 const FALLBACK_FIXTURES = [
   { id: "pick-and-place-demo.faero", projectName: "Pick And Place Demo" },
@@ -97,6 +104,10 @@ const FALLBACK_AI_STATUS = {
 
 const COMMAND_TOAST_TIMEOUT_MS = 2400;
 const NATIVE_MENU_EVENT_NAME = "futureaero:menu-command";
+const MAIN_SCREEN_WHITEBOX = "whitebox";
+const MAIN_SCREEN_EXPLORER = "explorer";
+const MAIN_SCREEN_PROPERTIES = "properties";
+const COMMAND_SCREEN_PREFIX = "commands:";
 
 function getGemma3Models(runtime) {
   if (Array.isArray(runtime?.gemma3Models) && runtime.gemma3Models.length > 0) {
@@ -136,23 +147,46 @@ function getAvailableAiProfiles(runtime) {
   return ["balanced", "max", "furnace"];
 }
 
-function MenuBar({ menus, activeMenuId, onSelect }) {
+function MenuPicker({ options, value, onSelect, label }) {
   return (
-    <nav className="menu-bar" aria-label="Application menu">
-      {menus.map((menu) => (
-        <button
-          key={menu.id}
-          data-menu-id={menu.id}
-          className={
-            menu.id === activeMenuId ? "menu-button active" : "menu-button"
-          }
-          type="button"
-          onClick={() => onSelect(menu.id)}
-        >
-          {menu.label}
-        </button>
-      ))}
-    </nav>
+    <label className="control-group menu-picker">
+      <span>{label}</span>
+      <select
+        className="shell-select"
+        aria-label={label}
+        data-menu-picker="true"
+        value={value}
+        onChange={(event) => onSelect(event.target.value)}
+      >
+        {options.map((option) => (
+          <option key={option.id} value={option.id}>
+            {option.label}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
+function ContextBar({ options, selectedView, onSelect, title, meta, t }) {
+  return (
+    <div className="context-bar">
+      <div className="context-bar-main">
+        <MenuPicker
+          options={options}
+          value={selectedView}
+          onSelect={onSelect}
+          label={t("ui.menu.section", "Menu")}
+        />
+        <div className="context-title-block">
+          <div className="context-title">{title}</div>
+          <div className="context-meta">{meta}</div>
+        </div>
+      </div>
+      <div className="context-meta">
+        {t("ui.menu.native_hint", "Menu natif conserve en haut")}
+      </div>
+    </div>
   );
 }
 
@@ -588,6 +622,12 @@ function AerospaceViewport({ locale, t, selectedSceneId, onSelectScene }) {
       scene.palette.tertiary,
     ][index],
   }));
+  const stageStyle = {
+    "--viewport-stage-accent": scene.palette.accent,
+    "--viewport-stage-secondary": scene.palette.secondary,
+    "--viewport-stage-tertiary": scene.palette.tertiary,
+    "--viewport-stage-background": scene.palette.background,
+  };
 
   let artwork = <TurbofanReferenceArtwork />;
   if (scene.id === "airframe_transparent") {
@@ -627,8 +667,19 @@ function AerospaceViewport({ locale, t, selectedSceneId, onSelectScene }) {
       </div>
 
       <div className="viewport-showcase">
-        <div className="viewport-canvas-shell">
-          {artwork}
+        <div className="viewport-canvas-shell" style={stageStyle}>
+          <div className="viewport-diorama-stage">
+            <div
+              className="viewport-diorama-wall viewport-diorama-wall-back"
+              aria-hidden="true"
+            />
+            <div
+              className="viewport-diorama-wall viewport-diorama-wall-side"
+              aria-hidden="true"
+            />
+            <div className="viewport-diorama-floor" aria-hidden="true" />
+            <div className="viewport-canvas-frame">{artwork}</div>
+          </div>
           <div className="viewport-caption">
             {t(
               "ui.viewport.reference_inspiration",
@@ -1013,33 +1064,11 @@ async function executeWorkspaceCommand(commandId, currentSnapshot) {
         },
         entities: [
           ...nextEntities,
-          {
-            id: `ent_run_${String(runIndex).padStart(3, "0")}`,
-            entityType: "SimulationRun",
-            name: `SimulationRun-${String(runIndex).padStart(3, "0")}`,
-            revision: "rev_seed",
-            status: "active",
-            detail: "completed | 3497 ms | 0 coll | 0 contact",
-            data: {
-              tags: ["simulation", "artifact", "mvp"],
-              parameterSet: {
-                seed: 308,
-                stepCount: 12,
-              },
-            },
-            simulationRunSummary: {
-              status: "completed",
-              collisionCount: 0,
-              cycleTimeMs: 3497,
-              maxTrackingErrorMm: 0.27,
-              energyEstimateJ: 74.82,
-              blockedSequenceDetected: false,
-              contactCount: 0,
-              signalSampleCount: 4,
-              controllerStateSampleCount: 3,
-              timelineSampleCount: 12,
-            },
-          },
+          buildFallbackSimulationRunEntity({
+            entities: nextEntities,
+            runIndex,
+            endpointCount: currentSnapshot.status.endpointCount,
+          }),
         ],
       },
       result: {
@@ -1238,7 +1267,7 @@ function buildFallbackStructuredExplain(snapshot, message) {
           {
             entityId: latestSimulationRun.id,
             role: "source",
-            path: "simulationRunSummary.collisionCount",
+            path: "data.metrics.collisionCount",
           },
         ]
       : []),
@@ -1260,10 +1289,10 @@ function buildFallbackStructuredExplain(snapshot, message) {
     contextRefs,
     confidence: latestSimulationRun || latestSafetyReport ? 0.76 : 0.52,
     riskLevel:
-      latestSimulationRun?.simulationRunSummary?.collisionCount > 0 ||
+      latestSimulationRun?.data?.metrics?.collisionCount > 0 ||
       latestSafetyReport?.safetyReportSummary?.blockingInterlockCount > 0
         ? "high"
-        : latestSimulationRun?.simulationRunSummary?.blockedSequenceDetected
+        : latestSimulationRun?.data?.summary?.blockedSequenceDetected
           ? "medium"
           : "low",
     limitations:
@@ -1277,7 +1306,7 @@ function buildFallbackStructuredExplain(snapshot, message) {
     proposedCommands: [],
     explanation: latestSimulationRun
       ? [
-          `Le run retenu expose ${latestSimulationRun.simulationRunSummary?.collisionCount ?? 0} collision(s) et ${latestSimulationRun.simulationRunSummary?.timelineSampleCount ?? 0} echantillon(s) de timeline.`,
+          `Le run retenu expose ${latestSimulationRun.data?.metrics?.collisionCount ?? 0} collision(s) et ${latestSimulationRun.data?.summary?.timelineSampleCount ?? 0} echantillon(s) de timeline.`,
           `La demande etait: "${message}".`,
         ]
       : [`La demande etait: "${message}".`],
@@ -1432,6 +1461,12 @@ async function updateEntityProperties(payload, currentSnapshot) {
   if (nextEntity.entityType === "RobotTarget") {
     nextEntities = syncFallbackRobotCellTargets(nextEntities, nextEntity.id);
   }
+  if (
+    nextEntity.entityType === "Signal" ||
+    nextEntity.entityType === "ControllerModel"
+  ) {
+    nextEntities = syncFallbackRobotCellControl(nextEntities, nextEntity.id);
+  }
 
   return {
     snapshot: {
@@ -1552,7 +1587,7 @@ function latestRobotCellFromSnapshot(snapshot) {
 }
 
 function formatSimulationRunSummary(locale, simulationRunSummary) {
-  return `${simulationRunSummary.status} | ${simulationRunSummary.cycleTimeMs} ms | ${simulationRunSummary.collisionCount} coll`;
+  return `${simulationRunSummary.status} | ${simulationRunSummary.jobPhase} ${Math.round(simulationRunSummary.jobProgress * 100)}% | ${simulationRunSummary.cycleTimeMs} ms | ${simulationRunSummary.collisionCount} coll`;
 }
 
 function latestSimulationRunFromSnapshot(snapshot) {
@@ -1607,7 +1642,10 @@ function timelineSeverityRank(kind) {
   if (kind === "controller") {
     return 2;
   }
-  return 3;
+  if (kind === "job") {
+    return 3;
+  }
+  return 4;
 }
 
 function buildSimulationTimelineEvents(runEntity) {
@@ -1627,13 +1665,29 @@ function buildSimulationTimelineEvents(runEntity) {
   const contacts = Array.isArray(runEntity.data.contacts)
     ? runEntity.data.contacts
     : [];
+  const progressSamples = Array.isArray(runEntity.data.job?.progressSamples)
+    ? runEntity.data.job.progressSamples
+    : [];
+  const runSummary =
+    simulationRunSummaryFromPersistedData(runEntity.data) ??
+    runEntity.simulationRunSummary;
+  const cycleTimeMs = Number(runSummary?.cycleTimeMs ?? 0);
 
   const events = [
     ...contacts.map((contact) => ({
       id: `collision-${contact.stepIndex}-${contact.pairId}`,
       kind: "collision",
-      title: `${contact.leftEntityId} x ${contact.rightEntityId}`,
-      summary: `${contact.overlapMm} mm | ${contact.severity}`,
+      title:
+        contact.locationLabel ??
+        `${contact.leftEntityId} x ${contact.rightEntityId}`,
+      summary: [
+        `${contact.overlapMm} mm`,
+        contact.severity,
+        contact.phase,
+        contact.stateId,
+      ]
+        .filter(Boolean)
+        .join(" | "),
       timestampMs: contact.timestampMs,
       stepIndex: contact.stepIndex,
       payload: contact,
@@ -1660,6 +1714,18 @@ function buildSimulationTimelineEvents(runEntity) {
         stepIndex: sample.stepIndex,
         payload: sample,
       })),
+    ...progressSamples.map((sample, index) => ({
+      id: `job-${sample.phase}-${index}`,
+      kind: "job",
+      title: sample.phase,
+      summary: `${Math.round(Number(sample.progress ?? 0) * 100)}% | ${sample.message}`,
+      timestampMs:
+        progressSamples.length <= 1
+          ? cycleTimeMs
+          : Math.round((cycleTimeMs * index) / (progressSamples.length - 1)),
+      stepIndex: index,
+      payload: sample,
+    })),
     ...timelineSamples.map((sample) => ({
       id: `timeline-${sample.stepIndex}`,
       kind: "timeline",
@@ -1682,8 +1748,17 @@ function buildSimulationTimelineEvents(runEntity) {
   });
 }
 
-function criticalTimelineEvent(events) {
+function criticalTimelineEvent(runEntity, events) {
+  const report = runEntity?.data
+    ? simulationRunReportFromPersistedData(runEntity.data)
+    : null;
+  const reportCriticalId =
+    report?.criticalEventIds?.find((eventId) =>
+      events.some((event) => event.id === eventId),
+    ) ?? null;
+
   return (
+    events.find((event) => event.id === reportCriticalId) ??
     events.find((event) => event.kind === "collision") ??
     events.find((event) => event.kind === "signal") ??
     events[0] ??
@@ -1721,19 +1796,25 @@ function buildOpenSpecAutoPrompt(commandId, snapshot) {
 
   if (commandId === "simulation.run.start") {
     const run = latestSimulationRunFromSnapshot(snapshot);
-    if (!run?.simulationRunSummary) {
+    const runSummary = run?.data
+      ? simulationRunSummaryFromPersistedData(run.data)
+      : run?.simulationRunSummary;
+    const runReport = run?.data
+      ? simulationRunReportFromPersistedData(run.data)
+      : null;
+    if (!runSummary) {
       return null;
     }
 
-    if (run.simulationRunSummary.collisionCount > 0) {
-      return `Mode explain${openSpecHint}: explique pourquoi ${run.name} detecte ${run.simulationRunSummary.collisionCount} collision(s). Cite la timeline, les contacts et les signaux du run courant.`;
+    if (runSummary.collisionCount > 0) {
+      return `Mode explain${openSpecHint}: explique ${run.name} a partir du rapport "${runReport?.headline ?? run.name}". Cite le rapport, les evenements critiques, les contacts localises et les signaux du run courant.`;
     }
 
-    if (run.simulationRunSummary.blockedSequenceDetected) {
-      return `Mode explain${openSpecHint}: explique pourquoi ${run.name} reste bloque. Cite l etat controle, les signaux et les limites du run courant.`;
+    if (runSummary.blockedSequenceDetected) {
+      return `Mode explain${openSpecHint}: explique ${run.name} a partir du rapport "${runReport?.headline ?? run.name}". Cite le job, l etat controle, les evenements critiques et les recommandations du run courant.`;
     }
 
-    return `Mode summarize${openSpecHint}: resume ${run.name}, les signaux clefs du controle et le prochain jalon technique concret.`;
+    return `Mode summarize${openSpecHint}: resume ${run.name} via le rapport "${runReport?.headline ?? run.name}", son job ${runSummary.jobPhase}, les signaux clefs du controle et le prochain jalon technique concret.`;
   }
 
   if (commandId === "analyze.safety") {
@@ -1864,10 +1945,8 @@ export default function App({ backend = defaultDesktopBackend }) {
   const [selectedFixtureId, setSelectedFixtureId] = useState(
     FALLBACK_STATUS.fixtureId,
   );
-  const [selectedViewportSceneId, setSelectedViewportSceneId] = useState(
-    defaultAerospaceSceneId,
-  );
   const [activeMenuId, setActiveMenuId] = useState("file");
+  const [mainScreenMode, setMainScreenMode] = useState(MAIN_SCREEN_WHITEBOX);
   const [fixtureLoading, setFixtureLoading] = useState(false);
   const [executingCommandId, setExecutingCommandId] = useState(null);
   const [commandResult, setCommandResult] = useState(null);
@@ -1902,7 +1981,32 @@ export default function App({ backend = defaultDesktopBackend }) {
   const dragStateRef = useRef(null);
 
   const menus = localizeMenuModel(locale);
-  const menu = menus.find((entry) => entry.id === activeMenuId) ?? menus[0];
+  const t = (key, fallback = key) => translate(locale, key, fallback);
+  const activeMenu = menus.find((entry) => entry.id === activeMenuId) ?? menus[0];
+  const isCommandOverlayOpen = mainScreenMode.startsWith(COMMAND_SCREEN_PREFIX);
+  const overlayCommandMenuId = isCommandOverlayOpen
+    ? mainScreenMode.slice(COMMAND_SCREEN_PREFIX.length)
+    : null;
+  const overlayMenu =
+    menus.find((entry) => entry.id === overlayCommandMenuId) ?? activeMenu;
+  const mainScreenOptions = [
+    {
+      id: MAIN_SCREEN_WHITEBOX,
+      label: t("ui.menu.whitebox", "White box"),
+    },
+    {
+      id: MAIN_SCREEN_EXPLORER,
+      label: t("ui.menu.explorer", "Explorateur"),
+    },
+    {
+      id: MAIN_SCREEN_PROPERTIES,
+      label: t("ui.menu.properties", "Propriétés"),
+    },
+    ...menus.map((entry) => ({
+      id: `${COMMAND_SCREEN_PREFIX}${entry.id}`,
+      label: entry.label,
+    })),
+  ];
   const currentStatus = projectSnapshot.status;
   const openSpecDocuments = projectSnapshot.openSpecDocuments ?? [];
   const parametricParts = projectSnapshot.entities.filter(
@@ -1914,6 +2018,8 @@ export default function App({ backend = defaultDesktopBackend }) {
     (entity) => entity.robotCellSummary,
   );
   const latestRobotCell = latestRobotCellFromSnapshot(projectSnapshot);
+  const viewportSceneLabel =
+    projectSnapshot.details.rootSceneId ?? latestRobotCell?.id ?? "ent_cell_001";
   const simulationRuns = projectSnapshot.entities.filter(
     (entity) => entity.simulationRunSummary,
   );
@@ -1926,6 +2032,9 @@ export default function App({ backend = defaultDesktopBackend }) {
     simulationRuns.find((entity) => entity.id === selectedSimulationRunId) ??
     latestSimulationRun ??
     null;
+  const selectedSimulationRunReport = selectedSimulationRun?.data
+    ? simulationRunReportFromPersistedData(selectedSimulationRun.data)
+    : null;
   const simulationTimelineEvents = buildSimulationTimelineEvents(
     selectedSimulationRun,
   );
@@ -1933,7 +2042,7 @@ export default function App({ backend = defaultDesktopBackend }) {
     simulationTimelineEvents.find(
       (event) => event.id === selectedTimelineEventId,
     ) ??
-    criticalTimelineEvent(simulationTimelineEvents);
+    criticalTimelineEvent(selectedSimulationRun, simulationTimelineEvents);
   const selectedEntity =
     projectSnapshot.entities.find((entity) => entity.id === selectedEntityId) ??
     projectSnapshot.entities[projectSnapshot.entities.length - 1] ??
@@ -1947,7 +2056,6 @@ export default function App({ backend = defaultDesktopBackend }) {
           ...fixtureProjects,
         ]
       : fixtureProjects;
-  const t = (key, fallback = key) => translate(locale, key, fallback);
   const shortcutLabelForCommand = (commandId) =>
     formatShortcutLabel(
       findMenuEntryByCommand(commandId, menus)?.item?.shortcut,
@@ -1957,14 +2065,30 @@ export default function App({ backend = defaultDesktopBackend }) {
     return shortcutLabel ? `${label} (${shortcutLabel})` : label;
   };
   const { leftExpanded, rightExpanded } = getWorkspaceColumnState(panelState);
+  const inspectorOverlayOpen =
+    mainScreenMode === MAIN_SCREEN_EXPLORER ||
+    mainScreenMode === MAIN_SCREEN_PROPERTIES;
+  const contextTitle =
+    mainScreenMode === MAIN_SCREEN_EXPLORER
+      ? t("ui.panel.project_explorer", "Explorateur de projet")
+      : mainScreenMode === MAIN_SCREEN_PROPERTIES
+        ? t("ui.panel.properties", "Propriétés")
+        : isCommandOverlayOpen
+          ? overlayMenu.label
+          : t("ui.menu.whitebox", "White box");
+  const contextMeta =
+    mainScreenMode === MAIN_SCREEN_EXPLORER
+      ? `${currentStatus.entityCount} ${t("ui.workspace.entities", "entites")}`
+      : mainScreenMode === MAIN_SCREEN_PROPERTIES
+        ? selectedEntity?.name ??
+          t("ui.property.project_overview", "Resume projet et inspecteur")
+        : isCommandOverlayOpen
+          ? `${overlayMenu.items.filter((item) => item.type !== "separator").length} ${t("ui.command.count", "commandes")}`
+          : viewportSceneLabel;
   const gemma3Models = getGemma3Models(aiRuntime);
   const availableAiProfiles = getAvailableAiProfiles(aiRuntime);
   const workspaceStyle = {
-    "--workspace-left-column": `${getVisibleSidebarWidth(dockWidths.left, leftExpanded)}px`,
     "--workspace-right-column": `${getVisibleSidebarWidth(dockWidths.right, rightExpanded)}px`,
-    "--workspace-left-resizer": leftExpanded
-      ? `${WORKSPACE_RESIZER_WIDTH}px`
-      : "0px",
     "--workspace-right-resizer": rightExpanded
       ? `${WORKSPACE_RESIZER_WIDTH}px`
       : "0px",
@@ -1983,6 +2107,13 @@ export default function App({ backend = defaultDesktopBackend }) {
 
   function togglePanel(panelId) {
     setPanelState((previous) => toggleWorkspacePanel(previous, panelId));
+  }
+
+  function handleMainScreenModeChange(nextMode) {
+    setMainScreenMode(nextMode);
+    if (nextMode.startsWith(COMMAND_SCREEN_PREFIX)) {
+      setActiveMenuId(nextMode.slice(COMMAND_SCREEN_PREFIX.length));
+    }
   }
 
   function panelToggleLabel(panelId) {
@@ -2392,9 +2523,11 @@ export default function App({ backend = defaultDesktopBackend }) {
     }
 
     setSelectedTimelineEventId(
-      criticalTimelineEvent(simulationTimelineEvents)?.id ?? null,
+      criticalTimelineEvent(selectedSimulationRun, simulationTimelineEvents)?.id ??
+        null,
     );
   }, [
+    selectedSimulationRun,
     selectedSimulationRun?.id,
     selectedTimelineEventId,
     simulationTimelineEvents.map((event) => event.id).join("|"),
@@ -2634,6 +2767,49 @@ export default function App({ backend = defaultDesktopBackend }) {
 
     const panelId = panelIdFromCommand(commandId);
     if (panelId) {
+      if (panelId === "projectExplorer") {
+        setMainScreenMode(MAIN_SCREEN_EXPLORER);
+        applyCommandFeedback({
+          commandId,
+          status: "layout",
+          message: t(
+            "ui.command.explorer_opened",
+            "Explorateur de projet ouvert dans le menu deroulant.",
+          ),
+        });
+        return;
+      }
+
+      if (panelId === "properties") {
+        setMainScreenMode(MAIN_SCREEN_PROPERTIES);
+        applyCommandFeedback({
+          commandId,
+          status: "layout",
+          message: t(
+            "ui.command.properties_opened",
+            "Panneau Proprietes ouvert.",
+          ),
+        });
+        return;
+      }
+
+      if (panelId === "viewport") {
+        setPanelState((previous) => ({
+          ...previous,
+          viewport: true,
+        }));
+        setMainScreenMode(MAIN_SCREEN_WHITEBOX);
+        applyCommandFeedback({
+          commandId,
+          status: "layout",
+          message: t(
+            "ui.command.whitebox_opened",
+            "White box recentree sur l ecran principal.",
+          ),
+        });
+        return;
+      }
+
       const willBeVisible = !panelState[panelId];
       setPanelState((previous) => toggleWorkspacePanel(previous, panelId));
       applyCommandFeedback({
@@ -2687,11 +2863,7 @@ export default function App({ backend = defaultDesktopBackend }) {
     if (
       ["project.properties", "app.settings", "app.options"].includes(commandId)
     ) {
-      setPanelState((previous) => ({
-        ...previous,
-        properties: true,
-      }));
-      setActiveMenuId("insert");
+      setMainScreenMode(MAIN_SCREEN_PROPERTIES);
       applyCommandFeedback({
         commandId,
         status: "layout",
@@ -3036,19 +3208,14 @@ export default function App({ backend = defaultDesktopBackend }) {
         </div>
       </header>
 
-      <MenuBar
-        menus={menus}
-        activeMenuId={activeMenuId}
-        onSelect={setActiveMenuId}
+      <ContextBar
+        options={mainScreenOptions}
+        selectedView={mainScreenMode}
+        onSelect={handleMainScreenModeChange}
+        title={contextTitle}
+        meta={contextMeta}
+        t={t}
       />
-
-      <div className="context-bar">
-        <div className="context-title">{menu.label}</div>
-        <div className="context-meta">
-          {menu.items.filter((item) => item.type !== "separator").length}{" "}
-          commandes
-        </div>
-      </div>
 
       {commandToast ? (
         <div
@@ -3062,159 +3229,166 @@ export default function App({ backend = defaultDesktopBackend }) {
         </div>
       ) : null}
 
-      <main className="workspace" style={workspaceStyle} ref={workspaceRef}>
+      <main
+        className="workspace"
+        style={workspaceStyle}
+        ref={workspaceRef}
+        data-main-screen-mode={mainScreenMode}
+      >
         <aside
           className={
-            leftExpanded
-              ? "workspace-left"
-              : "workspace-left workspace-column-collapsed"
+            inspectorOverlayOpen
+              ? mainScreenMode === MAIN_SCREEN_PROPERTIES
+                ? "workspace-left workspace-floating-panel workspace-floating-panel-wide"
+                : "workspace-left workspace-floating-panel"
+              : "workspace-left workspace-floating-panel workspace-overlay-hidden"
           }
+          data-overlay-kind="inspector"
+          data-overlay-view={mainScreenMode}
+          aria-hidden={!inspectorOverlayOpen}
         >
-          <Panel
-            panelId="projectExplorer"
-            title={t("ui.panel.project_explorer", "Explorateur de projet")}
-            accent={`${currentStatus.entityCount} ${t("ui.workspace.entities", "entites")}`}
-            collapsed={!panelState.projectExplorer}
-            onToggle={() => togglePanel("projectExplorer")}
-            toggleLabel={panelToggleLabel("projectExplorer")}
-          >
-            <ul className="tree-list">
-              <li className="tree-root">{currentStatus.projectName}</li>
+          <div hidden={mainScreenMode !== MAIN_SCREEN_EXPLORER}>
+            <Panel
+              panelId="projectExplorer"
+              title={t("ui.panel.project_explorer", "Explorateur de projet")}
+              accent={`${currentStatus.entityCount} ${t("ui.workspace.entities", "entites")}`}
+            >
+              <ul className="tree-list">
+                <li className="tree-root">{currentStatus.projectName}</li>
 
-              <li className="tree-section">
-                <div className="tree-section-title">
-                  {t("ui.workspace.entities_section", "Entites")}
-                </div>
-                <ul className="tree-sublist">
-                  {projectSnapshot.entities.length > 0 ? (
-                    projectSnapshot.entities.map((entity) => (
-                      <li key={entity.id} className="tree-row">
-                        <button
-                          className="tree-row-button"
-                          type="button"
-                          data-entity-select={entity.id}
-                          data-entity-selected={
-                            selectedEntity?.id === entity.id ? "true" : "false"
-                          }
-                          onClick={() => handleEntitySelect(entity.id)}
-                        >
+                <li className="tree-section">
+                  <div className="tree-section-title">
+                    {t("ui.workspace.entities_section", "Entites")}
+                  </div>
+                  <ul className="tree-sublist">
+                    {projectSnapshot.entities.length > 0 ? (
+                      projectSnapshot.entities.map((entity) => (
+                        <li key={entity.id} className="tree-row">
+                          <button
+                            className="tree-row-button"
+                            type="button"
+                            data-entity-select={entity.id}
+                            data-entity-selected={
+                              selectedEntity?.id === entity.id ? "true" : "false"
+                            }
+                            onClick={() => handleEntitySelect(entity.id)}
+                          >
+                            <div className="tree-row-main">
+                              <span>{entity.name}</span>
+                              {entity.detail ? (
+                                <div className="tree-detail">{entity.detail}</div>
+                              ) : null}
+                            </div>
+                            <span className="tree-meta">{entity.entityType}</span>
+                          </button>
+                        </li>
+                      ))
+                    ) : (
+                      <li className="tree-empty">
+                        {t("ui.workspace.empty_section", "Aucun element")}
+                      </li>
+                    )}
+                  </ul>
+                </li>
+
+                <li className="tree-section">
+                  <div className="tree-section-title">
+                    {t("ui.workspace.endpoints_section", "Endpoints")}
+                  </div>
+                  <ul className="tree-sublist">
+                    {projectSnapshot.endpoints.length > 0 ? (
+                      projectSnapshot.endpoints.map((endpoint) => (
+                        <li key={endpoint.id} className="tree-row">
+                          <span>{endpoint.name}</span>
+                          <span className="tree-meta">
+                            {endpoint.endpointType}
+                          </span>
+                        </li>
+                      ))
+                    ) : (
+                      <li className="tree-empty">
+                        {t("ui.workspace.empty_section", "Aucun element")}
+                      </li>
+                    )}
+                  </ul>
+                </li>
+
+                <li className="tree-section">
+                  <div className="tree-section-title">
+                    {t("ui.workspace.streams_section", "Flux")}
+                  </div>
+                  <ul className="tree-sublist">
+                    {projectSnapshot.streams.length > 0 ? (
+                      projectSnapshot.streams.map((stream) => (
+                        <li key={stream.id} className="tree-row">
+                          <span>{stream.name}</span>
+                          <span className="tree-meta">{stream.direction}</span>
+                        </li>
+                      ))
+                    ) : (
+                      <li className="tree-empty">
+                        {t("ui.workspace.empty_section", "Aucun element")}
+                      </li>
+                    )}
+                  </ul>
+                </li>
+
+                <li className="tree-section">
+                  <div className="tree-section-title">
+                    {t("ui.workspace.plugins_section", "Plugins")}
+                  </div>
+                  <ul className="tree-sublist">
+                    {projectSnapshot.plugins.length > 0 ? (
+                      projectSnapshot.plugins.map((plugin) => (
+                        <li key={plugin.pluginId} className="tree-row">
+                          <span>{plugin.pluginId}</span>
+                          <span className="tree-meta">
+                            {plugin.enabled
+                              ? t("ui.workspace.enabled", "active")
+                              : t("ui.workspace.disabled", "inactive")}
+                          </span>
+                        </li>
+                      ))
+                    ) : (
+                      <li className="tree-empty">
+                        {t("ui.workspace.empty_section", "Aucun element")}
+                      </li>
+                    )}
+                  </ul>
+                </li>
+
+                <li className="tree-section">
+                  <div className="tree-section-title">
+                    {t("ui.workspace.openspec_section", "OpenSpec")}
+                  </div>
+                  <ul className="tree-sublist">
+                    {openSpecDocuments.length > 0 ? (
+                      openSpecDocuments.map((document) => (
+                        <li key={document.id} className="tree-row">
                           <div className="tree-row-main">
-                            <span>{entity.name}</span>
-                            {entity.detail ? (
-                              <div className="tree-detail">{entity.detail}</div>
-                            ) : null}
+                            <span>{document.title}</span>
+                            <div className="tree-detail">{document.excerpt}</div>
                           </div>
-                          <span className="tree-meta">{entity.entityType}</span>
-                        </button>
+                          <span className="tree-meta">{document.kind}</span>
+                        </li>
+                      ))
+                    ) : (
+                      <li className="tree-empty">
+                        {t("ui.workspace.no_openspec", "Aucun document OpenSpec")}
                       </li>
-                    ))
-                  ) : (
-                    <li className="tree-empty">
-                      {t("ui.workspace.empty_section", "Aucun element")}
-                    </li>
-                  )}
-                </ul>
-              </li>
+                    )}
+                  </ul>
+                </li>
+              </ul>
+            </Panel>
+          </div>
 
-              <li className="tree-section">
-                <div className="tree-section-title">
-                  {t("ui.workspace.endpoints_section", "Endpoints")}
-                </div>
-                <ul className="tree-sublist">
-                  {projectSnapshot.endpoints.length > 0 ? (
-                    projectSnapshot.endpoints.map((endpoint) => (
-                      <li key={endpoint.id} className="tree-row">
-                        <span>{endpoint.name}</span>
-                        <span className="tree-meta">
-                          {endpoint.endpointType}
-                        </span>
-                      </li>
-                    ))
-                  ) : (
-                    <li className="tree-empty">
-                      {t("ui.workspace.empty_section", "Aucun element")}
-                    </li>
-                  )}
-                </ul>
-              </li>
-
-              <li className="tree-section">
-                <div className="tree-section-title">
-                  {t("ui.workspace.streams_section", "Flux")}
-                </div>
-                <ul className="tree-sublist">
-                  {projectSnapshot.streams.length > 0 ? (
-                    projectSnapshot.streams.map((stream) => (
-                      <li key={stream.id} className="tree-row">
-                        <span>{stream.name}</span>
-                        <span className="tree-meta">{stream.direction}</span>
-                      </li>
-                    ))
-                  ) : (
-                    <li className="tree-empty">
-                      {t("ui.workspace.empty_section", "Aucun element")}
-                    </li>
-                  )}
-                </ul>
-              </li>
-
-              <li className="tree-section">
-                <div className="tree-section-title">
-                  {t("ui.workspace.plugins_section", "Plugins")}
-                </div>
-                <ul className="tree-sublist">
-                  {projectSnapshot.plugins.length > 0 ? (
-                    projectSnapshot.plugins.map((plugin) => (
-                      <li key={plugin.pluginId} className="tree-row">
-                        <span>{plugin.pluginId}</span>
-                        <span className="tree-meta">
-                          {plugin.enabled
-                            ? t("ui.workspace.enabled", "active")
-                            : t("ui.workspace.disabled", "inactive")}
-                        </span>
-                      </li>
-                    ))
-                  ) : (
-                    <li className="tree-empty">
-                      {t("ui.workspace.empty_section", "Aucun element")}
-                    </li>
-                  )}
-                </ul>
-              </li>
-
-              <li className="tree-section">
-                <div className="tree-section-title">
-                  {t("ui.workspace.openspec_section", "OpenSpec")}
-                </div>
-                <ul className="tree-sublist">
-                  {openSpecDocuments.length > 0 ? (
-                    openSpecDocuments.map((document) => (
-                      <li key={document.id} className="tree-row">
-                        <div className="tree-row-main">
-                          <span>{document.title}</span>
-                          <div className="tree-detail">{document.excerpt}</div>
-                        </div>
-                        <span className="tree-meta">{document.kind}</span>
-                      </li>
-                    ))
-                  ) : (
-                    <li className="tree-empty">
-                      {t("ui.workspace.no_openspec", "Aucun document OpenSpec")}
-                    </li>
-                  )}
-                </ul>
-              </li>
-            </ul>
-          </Panel>
-
-          <Panel
-            panelId="properties"
-            title={t("ui.panel.properties", "Proprietes")}
-            accent="F4"
-            collapsed={!panelState.properties}
-            onToggle={() => togglePanel("properties")}
-            toggleLabel={panelToggleLabel("properties")}
-          >
+          <div hidden={mainScreenMode !== MAIN_SCREEN_PROPERTIES}>
+            <Panel
+              panelId="properties"
+              title={t("ui.panel.properties", "Proprietes")}
+              accent="F4"
+            >
             <dl className="property-grid">
               <dt>{t("ui.property.project", "Projet")}</dt>
               <dd>{currentStatus.projectName}</dd>
@@ -3569,6 +3743,19 @@ export default function App({ backend = defaultDesktopBackend }) {
                             {t("ui.property.targets", "Cibles")}{" "}
                             {entity.robotCellSummary.targetCount}
                           </span>
+                          <span data-robot-cell-signals={entity.id}>
+                            {t("ui.property.signals", "Signaux")}{" "}
+                            {entity.robotCellSummary.signalCount}
+                          </span>
+                          <span data-robot-cell-transitions={entity.id}>
+                            {t("ui.property.transitions", "Transitions")}{" "}
+                            {entity.robotCellSummary.controllerTransitionCount}
+                          </span>
+                          <span data-robot-cell-blocked={entity.id}>
+                            {entity.robotCellSummary.blockedSequenceDetected
+                              ? `blocked ${entity.robotCellSummary.blockedStateId ?? "state"}`
+                              : t("ui.property.control_clear", "control clear")}
+                          </span>
                         </div>
                       </article>
                     ))}
@@ -3606,6 +3793,14 @@ export default function App({ backend = defaultDesktopBackend }) {
                           )}
                         </div>
                         <div className="muted">
+                          <span data-simulation-run-job={entity.id}>
+                            {entity.simulationRunSummary.jobPhase} |{" "}
+                            {Math.round(
+                              entity.simulationRunSummary.jobProgress * 100,
+                            )}
+                            %
+                          </span>{" "}
+                          |{" "}
                           {t(
                             "ui.property.timeline_samples",
                             "Echantillons timeline",
@@ -3634,6 +3829,11 @@ export default function App({ backend = defaultDesktopBackend }) {
                           <span data-simulation-run-collisions={entity.id}>
                             {t("ui.property.collisions", "Collisions")}{" "}
                             {entity.simulationRunSummary.collisionCount}
+                          </span>
+                          <span data-simulation-run-blocked={entity.id}>
+                            {entity.simulationRunSummary.blockedSequenceDetected
+                              ? `blocked ${entity.simulationRunSummary.blockedStateId ?? "state"}`
+                              : t("ui.property.control_clear", "control clear")}
                           </span>
                         </div>
                       </article>
@@ -3705,84 +3905,81 @@ export default function App({ backend = defaultDesktopBackend }) {
                 </p>
               )}
             </div>
-          </Panel>
+            </Panel>
+          </div>
         </aside>
 
-        <div
-          className={
-            leftExpanded
-              ? dragSide === "left"
-                ? "workspace-resizer is-active"
-                : "workspace-resizer"
-              : "workspace-resizer workspace-resizer-hidden"
-          }
-          aria-hidden={!leftExpanded}
-          aria-label={resizeHandleLabel("left")}
-          title={resizeHandleLabel("left")}
-          onMouseDown={(event) => startDockResize("left", event)}
-          onDoubleClick={() => resetDockWidth("left")}
-        />
-
         <section className="workspace-center">
-          <Panel
-            panelId="commandSurface"
-            title={t("ui.panel.command_surface", "Surface de commandes")}
-            accent={menu.label}
-            collapsed={!panelState.commandSurface}
-            onToggle={() => togglePanel("commandSurface")}
-            toggleLabel={panelToggleLabel("commandSurface")}
+          <div
+            className={
+              isCommandOverlayOpen
+                ? "workspace-command-overlay"
+                : "workspace-command-overlay workspace-overlay-hidden"
+            }
+            data-overlay-kind="commands"
+            data-overlay-view={mainScreenMode}
+            aria-hidden={!isCommandOverlayOpen}
           >
-            {commandResult ? (
-              <div
-                className="command-feedback"
-                data-command-feedback={commandResult.commandId}
-                data-command-feedback-status={commandResult.status}
-              >
-                <strong>{commandResult.commandId}</strong>
-                <div className="command-id">{commandResult.status}</div>
-                <div className="muted">{commandResult.message}</div>
-              </div>
-            ) : null}
+            <Panel
+              panelId="commandSurface"
+              title={t("ui.panel.command_surface", "Surface de commandes")}
+              accent={overlayMenu.label}
+            >
+              {commandResult ? (
+                <div
+                  className="command-feedback"
+                  data-command-feedback={commandResult.commandId}
+                  data-command-feedback-status={commandResult.status}
+                >
+                  <strong>{commandResult.commandId}</strong>
+                  <div className="command-id">{commandResult.status}</div>
+                  <div className="muted">{commandResult.message}</div>
+                </div>
+              ) : null}
 
-            <ul className="command-list">
-              {menu.items.map((item, index) =>
-                item.type === "separator" ? (
-                  <li key={`${menu.id}-sep-${index}`} className="separator" />
-                ) : (
-                  <li
-                    key={item.id}
-                    className={
-                      commandResult?.commandId === item.command
-                        ? "command-row is-last-command"
-                        : "command-row"
-                    }
-                  >
-                    <div>
-                      <strong>{item.label}</strong>
-                      <div className="command-id">{item.command}</div>
-                    </div>
-                    <div className="command-actions">
-                      <span className="shortcut">
-                        {formatShortcutLabel(item.shortcut)}
-                      </span>
-                      <button
-                        className="run-button"
-                        type="button"
-                        data-command-id={item.command}
-                        disabled={executingCommandId !== null}
-                        onClick={() => handleCommandExecute(item.command)}
-                        title={commandButtonTitle(item.command, item.label)}
-                      >
-                        {executingCommandId === item.command
-                          ? t("ui.command.running", "Execution...")
-                          : t("ui.command.run", "Executer")}
-                      </button>
-                    </div>
-                  </li>
-                ),
-              )}
-            </ul>
-          </Panel>
+              <ul className="command-list">
+                {overlayMenu.items.map((item, index) =>
+                  item.type === "separator" ? (
+                    <li
+                      key={`${overlayMenu.id}-sep-${index}`}
+                      className="separator"
+                    />
+                  ) : (
+                    <li
+                      key={item.id}
+                      className={
+                        commandResult?.commandId === item.command
+                          ? "command-row is-last-command"
+                          : "command-row"
+                      }
+                    >
+                      <div>
+                        <strong>{item.label}</strong>
+                        <div className="command-id">{item.command}</div>
+                      </div>
+                      <div className="command-actions">
+                        <span className="shortcut">
+                          {formatShortcutLabel(item.shortcut)}
+                        </span>
+                        <button
+                          className="run-button"
+                          type="button"
+                          data-command-id={item.command}
+                          disabled={executingCommandId !== null}
+                          onClick={() => handleCommandExecute(item.command)}
+                          title={commandButtonTitle(item.command, item.label)}
+                        >
+                          {executingCommandId === item.command
+                            ? t("ui.command.running", "Execution...")
+                            : t("ui.command.run", "Executer")}
+                        </button>
+                      </div>
+                    </li>
+                  ),
+                )}
+              </ul>
+            </Panel>
+          </div>
 
           <Panel
             panelId="viewport"
@@ -3791,15 +3988,10 @@ export default function App({ backend = defaultDesktopBackend }) {
               projectSnapshot.details.rootSceneId ??
               t("ui.panel.scene_host", "Hote de scene")
             }
-            collapsed={!panelState.viewport}
-            onToggle={() => togglePanel("viewport")}
-            toggleLabel={panelToggleLabel("viewport")}
           >
-            <AerospaceViewport
-              locale={locale}
+            <InteractiveWorkcellViewport
+              sceneId={viewportSceneLabel}
               t={t}
-              selectedSceneId={selectedViewportSceneId}
-              onSelectScene={setSelectedViewportSceneId}
             />
           </Panel>
         </section>
@@ -3859,6 +4051,65 @@ export default function App({ backend = defaultDesktopBackend }) {
                     ))}
                   </div>
 
+                  {selectedSimulationRun?.simulationRunSummary ? (
+                    <div
+                      className="result-card"
+                      data-simulation-run-job-panel={selectedSimulationRun.id}
+                    >
+                      <strong>{selectedSimulationRun.name}</strong>
+                      <div className="command-id">
+                        {selectedSimulationRun.simulationRunSummary.jobStatus} |{" "}
+                        {selectedSimulationRun.simulationRunSummary.jobPhase} |{" "}
+                        {Math.round(
+                          selectedSimulationRun.simulationRunSummary.jobProgress *
+                            100,
+                        )}
+                        %
+                      </div>
+                      <div className="muted">
+                        {selectedSimulationRun.simulationRunSummary.timelineSampleCount}{" "}
+                        timeline |{" "}
+                        {selectedSimulationRun.simulationRunSummary.signalSampleCount}{" "}
+                        signaux |{" "}
+                        {
+                          selectedSimulationRun.simulationRunSummary
+                            .controllerStateSampleCount
+                        }{" "}
+                        etats controle
+                      </div>
+                    </div>
+                  ) : null}
+
+                  {selectedSimulationRunReport?.headline ? (
+                    <div
+                      className="result-card"
+                      data-simulation-run-report={selectedSimulationRun.id}
+                    >
+                      <strong>{selectedSimulationRunReport.headline}</strong>
+                      <div className="command-id">
+                        {selectedSimulationRunReport.status} |{" "}
+                        {selectedSimulationRunReport.criticalEventIds.length} event(s)
+                        critique(s)
+                      </div>
+                      {selectedSimulationRunReport.findings.length > 0 ? (
+                        <div
+                          className="muted"
+                          data-simulation-run-findings={selectedSimulationRun.id}
+                        >
+                          {selectedSimulationRunReport.findings.join(" | ")}
+                        </div>
+                      ) : null}
+                      {selectedSimulationRunReport.recommendedActions.length > 0 ? (
+                        <div
+                          className="muted"
+                          data-simulation-run-actions={selectedSimulationRun.id}
+                        >
+                          {selectedSimulationRunReport.recommendedActions[0]}
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : null}
+
                   {focusedTimelineEvent ? (
                     <div
                       className="result-card"
@@ -3878,6 +4129,7 @@ export default function App({ backend = defaultDesktopBackend }) {
                           data-simulation-jump-critical="true"
                           onClick={() => {
                             const criticalEvent = criticalTimelineEvent(
+                              selectedSimulationRun,
                               simulationTimelineEvents,
                             );
                             if (!criticalEvent) {

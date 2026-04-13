@@ -2,20 +2,122 @@ import { describe, test } from "vitest";
 
 import {
   assert,
+  createMockBackend,
   fireEvent,
   renderApp,
   screen,
   waitFor,
 } from "./App.test-helpers.jsx";
 
+async function selectMenu(user, value) {
+  await user.selectOptions(screen.getByLabelText("Menu"), value);
+}
+
+async function focusEntityInspector(user, entityId) {
+  await selectMenu(user, "explorer");
+  await waitFor(() => {
+    assert.ok(document.querySelector(`[data-entity-select="${entityId}"]`));
+  });
+  await user.click(document.querySelector(`[data-entity-select="${entityId}"]`));
+  await selectMenu(user, "properties");
+}
+
 describe("App entity and simulation flows", () => {
+  test("workspace defaults to the white box while explorer and command overlays stay hidden", async () => {
+    await renderApp();
+
+    await waitFor(() => {
+      assert.equal(
+        document
+          .querySelector('[data-main-screen-mode]')
+          ?.getAttribute("data-main-screen-mode"),
+        "whitebox",
+      );
+      assert.ok(document.querySelector('[data-panel-id="viewport"]'));
+      assert.ok(document.querySelector('[data-panel-id="simulationTimeline"]'));
+      assert.equal(
+        document
+          .querySelector('[data-overlay-kind="inspector"]')
+          ?.getAttribute("aria-hidden"),
+        "true",
+      );
+      assert.equal(
+        document
+          .querySelector('[data-overlay-kind="commands"]')
+          ?.getAttribute("aria-hidden"),
+        "true",
+      );
+    });
+  });
+
+  test("dropdown opens explorer, properties and simulation overlays then returns to white box", async () => {
+    const { user } = await renderApp();
+
+    await selectMenu(user, "explorer");
+    await waitFor(() => {
+      assert.equal(
+        document
+          .querySelector('[data-overlay-kind="inspector"]')
+          ?.getAttribute("aria-hidden"),
+        "false",
+      );
+      assert.ok(screen.getAllByText("Explorateur de projet").length >= 1);
+      assert.ok(document.querySelector("[data-entity-select]"));
+    });
+
+    await selectMenu(user, "properties");
+    await waitFor(() => {
+      assert.equal(
+        document
+          .querySelector('[data-overlay-kind="inspector"]')
+          ?.getAttribute("aria-hidden"),
+        "false",
+      );
+      assert.ok(document.querySelector('[data-openspec-summary="ops_001"]'));
+    });
+
+    await selectMenu(user, "commands:simulation");
+    await waitFor(() => {
+      assert.equal(
+        document
+          .querySelector('[data-overlay-kind="commands"]')
+          ?.getAttribute("aria-hidden"),
+        "false",
+      );
+      assert.ok(document.querySelector('[data-command-id="simulation.run.start"]'));
+    });
+
+    await selectMenu(user, "whitebox");
+    await waitFor(() => {
+      assert.equal(
+        document
+          .querySelector('[data-main-screen-mode]')
+          ?.getAttribute("data-main-screen-mode"),
+        "whitebox",
+      );
+      assert.equal(
+        document
+          .querySelector('[data-overlay-kind="inspector"]')
+          ?.getAttribute("aria-hidden"),
+        "true",
+      );
+      assert.equal(
+        document
+          .querySelector('[data-overlay-kind="commands"]')
+          ?.getAttribute("aria-hidden"),
+        "true",
+      );
+    });
+  });
+
   test("creating a part surfaces parametric geometry metrics in properties", async () => {
     const { user } = await renderApp();
 
-    await user.click(screen.getByRole("button", { name: "Insertion" }));
+    await selectMenu(user, "commands:insert");
     await user.click(
       document.querySelector('[data-command-id="entity.create.part"]'),
     );
+    await selectMenu(user, "properties");
 
     await waitFor(() => {
       assert.ok(screen.getByText("Pieces parametriques"));
@@ -33,10 +135,11 @@ describe("App entity and simulation flows", () => {
   test("parametric editor regenerates the latest part with new dimensions", async () => {
     const { user } = await renderApp();
 
-    await user.click(screen.getByRole("button", { name: "Insertion" }));
+    await selectMenu(user, "commands:insert");
     await user.click(
       document.querySelector('[data-command-id="entity.create.part"]'),
     );
+    await selectMenu(user, "properties");
 
     const widthInput = screen.getByLabelText("Largeur");
     const heightInput = screen.getByLabelText("Hauteur");
@@ -70,18 +173,12 @@ describe("App entity and simulation flows", () => {
   test("generic inspector edits the selected entity name, nested parameters and list values", async () => {
     const { user } = await renderApp();
 
-    await user.click(screen.getByRole("button", { name: "Insertion" }));
+    await selectMenu(user, "commands:insert");
     await user.click(
       document.querySelector('[data-command-id="entity.create.part"]'),
     );
 
-    await waitFor(() => {
-      assert.ok(document.querySelector('[data-entity-select="ent_part_002"]'));
-    });
-
-    await user.click(
-      document.querySelector('[data-entity-select="ent_part_002"]'),
-    );
+    await focusEntityInspector(user, "ent_part_002");
 
     const nameInput = screen.getByLabelText("Nom");
     const tagsInput = screen.getByLabelText("Tags");
@@ -126,7 +223,7 @@ describe("App entity and simulation flows", () => {
   test("simulation timeline panel exposes signal and controller events from persisted artifacts", async () => {
     const { user } = await renderApp();
 
-    await user.click(screen.getByRole("button", { name: "Simulation" }));
+    await selectMenu(user, "commands:simulation");
     await user.click(
       document.querySelector('[data-command-id="simulation.run.start"]'),
     );
@@ -136,9 +233,14 @@ describe("App entity and simulation flows", () => {
         document.querySelector('[data-simulation-timeline-focus]'),
       );
       assert.ok(
+        document.querySelector('[data-simulation-run-job-panel^="ent_run_"]'),
+      );
+      assert.ok(
         Array.from(document.querySelectorAll("[data-simulation-event]")).length >=
           3,
       );
+      assert.ok(screen.getAllByText(/queued/).length >= 1);
+      assert.ok(screen.getAllByText(/trace_persisted/).length >= 1);
     });
 
     await user.click(document.querySelector('[data-simulation-step="true"]'));
@@ -153,13 +255,61 @@ describe("App entity and simulation flows", () => {
     });
   });
 
+  test("simulation timeline surfaces the run report and focuses the reported critical event", async () => {
+    const backend = createMockBackend();
+    await backend.executeWorkspaceCommand("entity.create.external_endpoint");
+    await backend.executeWorkspaceCommand("entity.create.external_endpoint");
+    await backend.executeWorkspaceCommand("simulation.run.start");
+
+    const { user } = await renderApp({ backend });
+
+    await selectMenu(user, "commands:simulation");
+
+    await waitFor(() => {
+      const report = document.querySelector(
+        '[data-simulation-run-report^="ent_run_"]',
+      );
+      assert.ok(report);
+      assert.ok(report.textContent?.includes("Collision critique"));
+      assert.equal(
+        document
+          .querySelector("[data-simulation-timeline-focus]")
+          ?.getAttribute("data-simulation-timeline-focus")
+          ?.startsWith("collision-"),
+        true,
+      );
+    });
+
+    await user.click(document.querySelector('[data-simulation-step="true"]'));
+    await user.click(
+      document.querySelector('[data-simulation-jump-critical="true"]'),
+    );
+
+    await waitFor(() => {
+      assert.equal(
+        document
+          .querySelector("[data-command-feedback]")
+          ?.getAttribute("data-command-feedback"),
+        "simulation.timeline.jump_critical",
+      );
+      assert.equal(
+        document
+          .querySelector("[data-simulation-timeline-focus]")
+          ?.getAttribute("data-simulation-timeline-focus")
+          ?.startsWith("collision-"),
+        true,
+      );
+    });
+  });
+
   test("creating a robot cell surfaces structure and timing metrics in properties", async () => {
     const { user } = await renderApp();
 
-    await user.click(screen.getByRole("button", { name: "Insertion" }));
+    await selectMenu(user, "commands:insert");
     await user.click(
       document.querySelector('[data-command-id="entity.create.robot_cell"]'),
     );
+    await selectMenu(user, "properties");
 
     await waitFor(() => {
       assert.ok(screen.getByText("Cellules robotiques"));
@@ -186,6 +336,11 @@ describe("App entity and simulation flows", () => {
           .querySelector('[data-robot-cell-preview="ent_cell_002"]')
           ?.textContent?.includes("pick -> transfer -> place"),
       );
+    });
+
+    await selectMenu(user, "explorer");
+
+    await waitFor(() => {
       assert.ok(document.querySelector('[data-entity-select="ent_robot_002"]'));
       assert.ok(
         document.querySelector('[data-entity-select="ent_conveyor_002"]'),
@@ -200,20 +355,11 @@ describe("App entity and simulation flows", () => {
   test("editing a robot target order updates the ordered target preview", async () => {
     const { user } = await renderApp();
 
-    await user.click(screen.getByRole("button", { name: "Insertion" }));
+    await selectMenu(user, "commands:insert");
     await user.click(
       document.querySelector('[data-command-id="entity.create.robot_cell"]'),
     );
-
-    await waitFor(() => {
-      assert.ok(
-        document.querySelector('[data-entity-select="ent_target_002_transfer"]'),
-      );
-    });
-
-    await user.click(
-      document.querySelector('[data-entity-select="ent_target_002_transfer"]'),
-    );
+    await focusEntityInspector(user, "ent_target_002_transfer");
 
     fireEvent.change(screen.getByLabelText("orderIndex"), {
       target: { value: "4" },
@@ -238,34 +384,67 @@ describe("App entity and simulation flows", () => {
     });
   });
 
-  test("signal inspector edits enum kind and typed current value", async () => {
+  test("signal inspector edits boolean, scalar and text values and refreshes blocked state", async () => {
     const { user } = await renderApp();
 
-    await user.click(screen.getByRole("button", { name: "Insertion" }));
+    await selectMenu(user, "commands:insert");
     await user.click(
       document.querySelector('[data-command-id="entity.create.robot_cell"]'),
     );
+    await selectMenu(user, "properties");
 
     await waitFor(() => {
-      assert.ok(document.querySelector('[data-entity-select^="ent_sig_"]'));
+      assert.ok(
+        document
+          .querySelector('[data-robot-cell-blocked="ent_cell_002"]')
+          ?.textContent?.includes("idle"),
+      );
     });
 
-    await user.click(document.querySelector('[data-entity-select^="ent_sig_"]'));
-
-    const kindSelect = screen.getByLabelText("kind");
-    const currentValueInput = screen.getByLabelText("currentValue");
-    const checkpointsInput = screen.getByLabelText("checkpoints");
-
-    await user.selectOptions(kindSelect, "text");
-    fireEvent.change(currentValueInput, { target: { value: "ready" } });
-    fireEvent.change(checkpointsInput, { target: { value: '["ready", "done"]' } });
+    await focusEntityInspector(user, "ent_sig_002_cycle_start");
+    await user.click(screen.getByLabelText("currentValue"));
     await user.click(
-      document.querySelector('[data-entity-save^="ent_sig_"]'),
+      document.querySelector('[data-entity-save="ent_sig_002_cycle_start"]'),
+    );
+
+    await waitFor(() => {
+      assert.equal(screen.getByLabelText("currentValue").checked, true);
+      assert.ok(
+        document
+          .querySelector('[data-robot-cell-blocked="ent_cell_002"]')
+          ?.textContent?.includes("place"),
+      );
+    });
+
+    await focusEntityInspector(user, "ent_sig_002_progress_gate");
+    fireEvent.change(screen.getByLabelText("currentValue"), {
+      target: { value: "1" },
+    });
+    await user.click(
+      document.querySelector('[data-entity-save="ent_sig_002_progress_gate"]'),
+    );
+
+    await waitFor(() => {
+      assert.equal(screen.getByLabelText("currentValue").value, "1");
+      assert.ok(
+        document
+          .querySelector('[data-robot-cell-blocked="ent_cell_002"]')
+          ?.textContent?.includes("control clear"),
+      );
+    });
+
+    await focusEntityInspector(user, "ent_sig_002_operator_mode");
+    assert.equal(screen.getByLabelText("kind").value, "text");
+    fireEvent.change(screen.getByLabelText("currentValue"), {
+      target: { value: "manual" },
+    });
+    await user.click(
+      document.querySelector('[data-entity-save="ent_sig_002_operator_mode"]'),
     );
 
     await waitFor(() => {
       assert.equal(screen.getByLabelText("kind").value, "text");
-      assert.equal(screen.getByLabelText("currentValue").value, "ready");
+      assert.equal(screen.getByLabelText("currentValue").value, "manual");
       assert.equal(
         document
           .querySelector("[data-command-feedback]")
@@ -275,13 +454,45 @@ describe("App entity and simulation flows", () => {
     });
   });
 
+  test("controller inspector exposes explicit transitions and robot cell blocked state", async () => {
+    const { user } = await renderApp();
+
+    await selectMenu(user, "commands:insert");
+    await user.click(
+      document.querySelector('[data-command-id="entity.create.robot_cell"]'),
+    );
+    await selectMenu(user, "properties");
+
+    await waitFor(() => {
+      assert.ok(
+        document
+          .querySelector('[data-robot-cell-blocked="ent_cell_002"]')
+          ?.textContent?.includes("idle"),
+      );
+      assert.ok(
+        document
+          .querySelector('[data-robot-cell-transitions="ent_cell_002"]')
+          ?.textContent?.includes("3"),
+      );
+    });
+
+    await focusEntityInspector(user, "ent_ctrl_002");
+
+    await waitFor(() => {
+      assert.ok(screen.getByText(/tr_start_cycle/));
+      assert.ok(screen.getByText(/tr_reach_place/));
+      assert.ok(screen.getByText(/tr_finish_cycle/));
+    });
+  });
+
   test("starting a simulation surfaces a completed run summary in properties", async () => {
     const { user } = await renderApp();
 
-    await user.click(screen.getByRole("button", { name: "Simulation" }));
+    await selectMenu(user, "commands:simulation");
     await user.click(
       document.querySelector('[data-command-id="simulation.run.start"]'),
     );
+    await selectMenu(user, "properties");
 
     await waitFor(() => {
       assert.ok(screen.getByText("Runs de simulation"));
@@ -294,6 +505,16 @@ describe("App entity and simulation flows", () => {
         document
           .querySelector(`[data-simulation-run-collisions="${runId}"]`)
           ?.textContent?.includes("0"),
+      );
+      assert.ok(
+        document
+          .querySelector(`[data-simulation-run-job="${runId}"]`)
+          ?.textContent?.includes("completed"),
+      );
+      assert.ok(
+        document
+          .querySelector(`[data-simulation-run-job="${runId}"]`)
+          ?.textContent?.includes("100"),
       );
       assert.equal(
         document
@@ -312,7 +533,7 @@ describe("App entity and simulation flows", () => {
     );
     assert.equal(autoPromptToggle?.checked, true);
 
-    await user.click(screen.getByRole("button", { name: "Simulation" }));
+    await selectMenu(user, "commands:simulation");
     await user.click(
       document.querySelector('[data-command-id="simulation.run.start"]'),
     );
@@ -327,10 +548,11 @@ describe("App entity and simulation flows", () => {
   test("running safety analysis surfaces a safety report in properties", async () => {
     const { user } = await renderApp();
 
-    await user.click(screen.getByRole("button", { name: "Simulation" }));
+    await selectMenu(user, "commands:simulation");
     await user.click(
       document.querySelector('[data-command-id="analyze.safety"]'),
     );
+    await selectMenu(user, "properties");
 
     await waitFor(() => {
       assert.ok(screen.getByText("Rapports safety"));
@@ -356,6 +578,8 @@ describe("App entity and simulation flows", () => {
   test("openspec documents are visible and the help command can be executed", async () => {
     const { user } = await renderApp();
 
+    await selectMenu(user, "properties");
+
     await waitFor(() => {
       const openSpecCard = document.querySelector(
         '[data-openspec-summary="ops_001"]',
@@ -367,7 +591,7 @@ describe("App entity and simulation flows", () => {
       );
     });
 
-    await user.click(screen.getByRole("button", { name: "Aide" }));
+    await selectMenu(user, "commands:help");
     await user.click(
       document.querySelector('[data-command-id="help.openspec"]'),
     );

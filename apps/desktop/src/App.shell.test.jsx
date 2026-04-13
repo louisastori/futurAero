@@ -1,44 +1,46 @@
 import { describe, test } from "vitest";
 
 import {
-  aerospaceReferenceScenes,
   assert,
   cleanup,
+  fireEvent,
   localizeMenuModel,
   renderApp,
   screen,
-  translate,
   waitFor,
   within,
 } from "./App.test-helpers.jsx";
 
 describe("App shell chrome", () => {
-  test("top-level menu buttons all switch the active command surface", async () => {
+  test("dropdown command entries switch the active command overlay", async () => {
     const { user } = await renderApp();
     const menus = localizeMenuModel("fr");
+    const menuPicker = screen.getByLabelText("Menu");
 
     for (const menu of menus) {
-      const menuButton = screen.getByRole("button", { name: menu.label });
-      await user.click(menuButton);
-      assert.equal(
-        document.querySelector(".context-title")?.textContent,
-        menu.label,
-      );
-      assert.ok(menuButton.className.includes("active"));
-      assert.equal(
-        document.querySelectorAll("[data-command-id]").length,
-        menu.items.filter((item) => item.type !== "separator").length,
-      );
+      await user.selectOptions(menuPicker, `commands:${menu.id}`);
+      await waitFor(() => {
+        assert.equal(
+          document.querySelector(".context-title")?.textContent,
+          menu.label,
+        );
+        assert.equal(
+          document
+            .querySelector('[data-overlay-kind="commands"]')
+            ?.getAttribute("aria-hidden"),
+          "false",
+        );
+        assert.equal(
+          document.querySelectorAll("[data-command-id]").length,
+          menu.items.filter((item) => item.type !== "separator").length,
+        );
+      });
     }
   });
 
-  test("panel toggle buttons collapse and reopen every workspace panel", async () => {
+  test("panel toggle buttons collapse and reopen the docked right panels", async () => {
     const { user } = await renderApp();
     const panelExpectations = [
-      { panelId: "projectExplorer", text: "Explorateur de projet" },
-      { panelId: "properties", text: "Proprietes" },
-      { panelId: "commandSurface", text: "Surface de commandes" },
-      { panelId: "viewport", text: "Viewport 3D" },
       { panelId: "simulationTimeline", text: "Timeline de simulation" },
       { panelId: "aiAssistant", text: "Assistant IA local" },
       { panelId: "output", text: "Sortie" },
@@ -73,39 +75,58 @@ describe("App shell chrome", () => {
     const { user } = await renderApp();
     const menus = localizeMenuModel("fr");
     const panelCommands = new Map([
-      ["view.project_explorer", "projectExplorer"],
+      ["view.project_explorer", "explorer"],
       ["view.properties", "properties"],
       ["view.output", "output"],
       ["view.problems", "problems"],
       ["view.ai_assistant", "aiAssistant"],
-      ["view.viewport_3d", "viewport"],
+      ["view.viewport_3d", "whitebox"],
       ["view.simulation_timeline", "simulationTimeline"],
     ]);
+    const menuPicker = screen.getByLabelText("Menu");
 
     for (const menu of menus) {
       for (const item of menu.items.filter(
         (entry) => entry.type !== "separator",
       )) {
-        await user.click(screen.getByRole("button", { name: menu.label }));
+        await user.selectOptions(menuPicker, `commands:${menu.id}`);
+        await waitFor(() => {
+          assert.equal(
+            document.querySelector(".context-title")?.textContent,
+            menu.label,
+          );
+        });
         const runButton = document.querySelector(
           `[data-command-id="${item.command}"]`,
         );
         assert.ok(runButton, `missing run button for ${item.command}`);
 
         if (panelCommands.has(item.command)) {
-          const panelId = panelCommands.get(item.command);
-          const toggle = document.querySelector(
-            `[data-panel-toggle="${panelId}"]`,
-          );
-          const before = toggle.getAttribute("aria-expanded");
-          await user.click(runButton);
-          await waitFor(() => {
-            assert.notEqual(toggle.getAttribute("aria-expanded"), before);
-          });
-          await user.click(runButton);
-          await waitFor(() => {
-            assert.equal(toggle.getAttribute("aria-expanded"), before);
-          });
+          const target = panelCommands.get(item.command);
+          if (target === "explorer" || target === "properties" || target === "whitebox") {
+            await user.click(runButton);
+            await waitFor(() => {
+              assert.equal(
+                document
+                  .querySelector("[data-main-screen-mode]")
+                  ?.getAttribute("data-main-screen-mode"),
+                target,
+              );
+            });
+          } else {
+            const toggle = document.querySelector(
+              `[data-panel-toggle="${target}"]`,
+            );
+            const before = toggle.getAttribute("aria-expanded");
+            await user.click(runButton);
+            await waitFor(() => {
+              assert.notEqual(toggle.getAttribute("aria-expanded"), before);
+            });
+            await user.click(runButton);
+            await waitFor(() => {
+              assert.equal(toggle.getAttribute("aria-expanded"), before);
+            });
+          }
         } else {
           await user.click(runButton);
           await waitFor(() => {
@@ -122,24 +143,104 @@ describe("App shell chrome", () => {
     }
   }, 30000);
 
-  test("viewport scene tabs all switch the inspector title", async () => {
+  test("viewport camera controls support presets, zoom and orbit", async () => {
     const { user } = await renderApp();
+    const cameraState = document.querySelector("[data-viewport-camera-state]");
+    const canvas = document.querySelector('[data-viewport-canvas="true"]');
 
-    for (const scene of aerospaceReferenceScenes) {
-      const expectedTitle = translate("fr", scene.titleKey, scene.id);
-      await user.click(document.querySelector(`[data-scene-id="${scene.id}"]`));
-      await waitFor(() => {
-        const title = document.querySelector(".viewport-scene-title");
-        assert.equal(title?.textContent, expectedTitle);
-      });
-    }
+    assert.ok(cameraState);
+    assert.ok(canvas);
+    const initialState = cameraState.getAttribute("data-viewport-camera-state");
+
+    await user.click(document.querySelector('[data-viewport-preset="top"]'));
+    await waitFor(() => {
+      assert.equal(
+        document
+          .querySelector("[data-viewport-active-preset]")
+          ?.getAttribute("data-viewport-active-preset"),
+        "top",
+      );
+    });
+
+    const presetState = cameraState.getAttribute("data-viewport-camera-state");
+    assert.notEqual(presetState, initialState);
+
+    await user.click(document.querySelector('[data-viewport-zoom="in"]'));
+    await waitFor(() => {
+      assert.equal(
+        document
+          .querySelector("[data-viewport-active-preset]")
+          ?.getAttribute("data-viewport-active-preset"),
+        "custom",
+      );
+    });
+
+    const zoomedState = cameraState.getAttribute("data-viewport-camera-state");
+    assert.notEqual(zoomedState, presetState);
+
+    fireEvent.pointerDown(canvas, {
+      pointerId: 1,
+      clientX: 320,
+      clientY: 280,
+      button: 0,
+    });
+    fireEvent.pointerMove(canvas, {
+      pointerId: 1,
+      clientX: 410,
+      clientY: 228,
+      button: 0,
+    });
+    fireEvent.pointerUp(canvas, {
+      pointerId: 1,
+      clientX: 410,
+      clientY: 228,
+      button: 0,
+    });
+
+    await waitFor(() => {
+      const orbitState = cameraState.getAttribute("data-viewport-camera-state");
+      assert.notEqual(orbitState, zoomedState);
+    });
+  });
+
+  test("viewport shape editor updates units and dimensional summary", async () => {
+    const { user } = await renderApp();
+    const unitSelect = document.querySelector('[data-viewport-unit-select="true"]');
+    const shapeSelect = document.querySelector(
+      '[data-viewport-shape-select="true"]',
+    );
+    const widthInput = document.querySelector(
+      '[data-viewport-dimension="width"]',
+    );
+
+    assert.ok(unitSelect);
+    assert.ok(shapeSelect);
+    assert.ok(widthInput);
+
+    await user.selectOptions(unitSelect, "in");
+    await user.selectOptions(shapeSelect, "portal");
+    fireEvent.change(widthInput, { target: { value: "18" } });
+
+    await waitFor(() => {
+      const shapeName = document
+        .querySelector("[data-viewport-shape-name]")
+        ?.getAttribute("data-viewport-shape-name");
+      const measureSummary = document
+        .querySelector("[data-viewport-measure-summary]")
+        ?.getAttribute("data-viewport-measure-summary");
+
+      assert.equal(shapeName, "Portique");
+      assert.match(measureSummary ?? "", /18\.00 in/);
+    });
   });
 
   test("file execute buttons expose an immediate visible effect in the command surface", async () => {
     const { user } = await renderApp();
+    const menuPicker = screen.getByLabelText("Menu");
 
     const fixtureSelector = screen.getByLabelText("Projet de demonstration");
     await user.selectOptions(fixtureSelector, "empty-project.faero");
+    await user.selectOptions(menuPicker, "commands:file");
 
     await user.click(
       document.querySelector('[data-command-id="project.open"]'),
@@ -154,19 +255,16 @@ describe("App shell chrome", () => {
       assert.ok(screen.getAllByText("Empty Project").length >= 1);
     });
 
-    const propertiesToggle = document.querySelector(
-      '[data-panel-toggle="properties"]',
-    );
-    await user.click(propertiesToggle);
-    await waitFor(() => {
-      assert.equal(propertiesToggle.getAttribute("aria-expanded"), "false");
-    });
-
     await user.click(
       document.querySelector('[data-command-id="app.settings"]'),
     );
     await waitFor(() => {
-      assert.equal(propertiesToggle.getAttribute("aria-expanded"), "true");
+      assert.equal(
+        document
+          .querySelector("[data-main-screen-mode]")
+          ?.getAttribute("data-main-screen-mode"),
+        "properties",
+      );
       assert.equal(
         document
           .querySelector("[data-command-feedback]")

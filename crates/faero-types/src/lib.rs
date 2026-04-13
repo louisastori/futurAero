@@ -534,8 +534,21 @@ pub struct SimulationContact {
     pub pair_id: String,
     pub left_entity_id: String,
     pub right_entity_id: String,
+    pub location_label: String,
+    pub phase: Option<String>,
+    pub state_id: Option<String>,
     pub overlap_mm: f64,
     pub severity: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SimulationRunReport {
+    pub status: String,
+    pub headline: String,
+    pub findings: Vec<String>,
+    pub critical_event_ids: Vec<String>,
+    pub recommended_actions: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

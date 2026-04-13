@@ -14,8 +14,10 @@ import userEvent from "@testing-library/user-event";
 import App from "./App.jsx";
 import {
   buildFallbackRobotCellBundle,
+  syncFallbackRobotCellControl,
   syncFallbackRobotCellTargets,
 } from "./robotCellFallback.js";
+import { buildFallbackSimulationRunEntity } from "./simulationRunFallback.js";
 import { localizeMenuModel, translate } from "@futureaero/ui";
 import { aerospaceReferenceScenes } from "@futureaero/viewport";
 
@@ -206,49 +208,6 @@ function createMockBackend() {
       );
   }
 
-  function buildTimelineArtifacts() {
-    return {
-      timelineSamples: [
-        { stepIndex: 0, timestampMs: 0, trackingErrorMm: 0.11, speedScale: 0.82 },
-        { stepIndex: 1, timestampMs: 320, trackingErrorMm: 0.14, speedScale: 0.86 },
-        { stepIndex: 2, timestampMs: 710, trackingErrorMm: 0.19, speedScale: 0.93 },
-      ],
-      signalSamples: [
-        {
-          stepIndex: 0,
-          timestampMs: 0,
-          signalId: "sig_cycle_start",
-          value: false,
-          reason: "initial_value",
-        },
-        {
-          stepIndex: 1,
-          timestampMs: 320,
-          signalId: "sig_cycle_start",
-          value: true,
-          reason: "simulation.run.start",
-        },
-      ],
-      controllerStateSamples: [
-        {
-          stepIndex: 0,
-          timestampMs: 0,
-          stateId: "idle",
-          stateName: "Idle",
-          reason: "initial_state",
-        },
-        {
-          stepIndex: 2,
-          timestampMs: 710,
-          stateId: "transfer",
-          stateName: "Transfer",
-          reason: "pick completed",
-        },
-      ],
-      contacts: [],
-    };
-  }
-
   function applyEntityChanges(payload) {
     const entityIndex = snapshot.entities.findIndex(
       (entity) => entity.id === payload.entityId,
@@ -311,12 +270,16 @@ function createMockBackend() {
 
     next.revision = `rev_${String(activityCounter).padStart(4, "0")}`;
 
-    snapshot.entities = snapshot.entities.map((entity, index) =>
+    let nextEntities = snapshot.entities.map((entity, index) =>
       index === entityIndex ? next : entity,
     );
     if (next.entityType === "RobotTarget") {
-      snapshot.entities = syncFallbackRobotCellTargets(snapshot.entities, next.id);
+      nextEntities = syncFallbackRobotCellTargets(nextEntities, next.id);
     }
+    if (next.entityType === "Signal" || next.entityType === "ControllerModel") {
+      nextEntities = syncFallbackRobotCellControl(nextEntities, next.id);
+    }
+    snapshot.entities = nextEntities;
     pushActivity("entity.properties.updated", payload.entityId);
 
     return {
@@ -526,37 +489,13 @@ function createMockBackend() {
           ];
         }
         const index = snapshot.entities.length + 1;
-        const artifacts = buildTimelineArtifacts();
         snapshot.entities = [
           ...snapshot.entities,
-          {
-            id: `ent_run_${index.toString().padStart(3, "0")}`,
-            entityType: "SimulationRun",
-            name: `SimulationRun-${index.toString().padStart(3, "0")}`,
-            revision: "rev_seed",
-            status: "active",
-            detail: "completed | 3497 ms | 0 coll | 0 contact",
-            data: {
-              tags: ["simulation", "artifact", "mvp"],
-              parameterSet: {
-                seed: 308,
-                stepCount: 12,
-              },
-              ...artifacts,
-            },
-            simulationRunSummary: {
-              status: "completed",
-              collisionCount: 0,
-              cycleTimeMs: 3497,
-              maxTrackingErrorMm: 0.27,
-              energyEstimateJ: 74.82,
-              blockedSequenceDetected: false,
-              contactCount: 0,
-              signalSampleCount: 4,
-              controllerStateSampleCount: 3,
-              timelineSampleCount: 12,
-            },
-          },
+          buildFallbackSimulationRunEntity({
+            entities: snapshot.entities,
+            runIndex: index,
+            endpointCount: snapshot.status.endpointCount,
+          }),
         ];
         snapshot.status.entityCount = snapshot.entities.length;
       } else if (commandId === "analyze.safety") {
@@ -703,7 +642,7 @@ function createMockBackend() {
             {
               entityId: currentSnapshot.entities[0]?.id ?? null,
               role: "source",
-              path: "simulationRunSummary.collisionCount",
+              path: "data.metrics.collisionCount",
             },
           ],
           confidence: 0.82,
@@ -783,8 +722,8 @@ function createMockBackend() {
   };
 }
 
-async function renderApp() {
-  const backend = createMockBackend();
+async function renderApp(options = {}) {
+  const backend = options.backend ?? createMockBackend();
   const user = userEvent.setup();
   render(<App backend={backend} />);
 
@@ -794,8 +733,10 @@ async function renderApp() {
       "FutureAero",
     );
     assert.equal(
-      document.querySelector(".context-title")?.textContent,
-      "Fichier",
+      document
+        .querySelector("[data-main-screen-mode]")
+        ?.getAttribute("data-main-screen-mode"),
+      "whitebox",
     );
   });
 
@@ -806,6 +747,7 @@ export {
   aerospaceReferenceScenes,
   assert,
   cleanup,
+  createMockBackend,
   fireEvent,
   localizeMenuModel,
   renderApp,

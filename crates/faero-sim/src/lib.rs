@@ -1,9 +1,12 @@
-use std::collections::BTreeMap;
-
+use faero_robotics::{
+    RobotCellControlModel, RoboticsError, apply_control_assignments, control_signal_values,
+    enabled_control_transition, resolve_control_transition_state, resolve_initial_control_state,
+    validate_robot_cell_control,
+};
 use faero_types::{
-    ControllerState, ControllerStateMachine, ControllerStateSample, ScheduledSignalChange,
-    SignalComparator, SignalCondition, SignalDefinition, SignalSample, SignalValue,
-    SimulationContact, SimulationContactPair, SimulationProgressSample,
+    ControllerStateMachine, ControllerStateSample, ScheduledSignalChange, SignalDefinition,
+    SignalSample, SimulationContact, SimulationContactPair, SimulationProgressSample,
+    SimulationRunReport,
 };
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -46,16 +49,48 @@ pub struct TimelineSample {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct SimulationSummary {
-    pub status: SimulationStatus,
+pub struct SimulationScenario {
+    pub name: String,
     pub seed: u64,
     pub engine_version: String,
+    pub step_count: u32,
+    pub planned_cycle_time_ms: u32,
+    pub path_length_mm: f64,
+    pub endpoint_count: u32,
+    pub safety_zone_count: u32,
+    pub signal_count: usize,
+    pub scheduled_signal_change_count: usize,
+    pub contact_pair_count: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SimulationRunSummary {
+    pub status: SimulationStatus,
+    pub blocked_sequence_detected: bool,
+    pub blocked_state_id: Option<String>,
+    pub contact_count: usize,
+    pub signal_sample_count: usize,
+    pub controller_state_sample_count: usize,
+    pub timeline_sample_count: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SimulationRunMetrics {
     pub collision_count: u32,
     pub cycle_time_ms: u32,
     pub max_tracking_error_mm: f64,
     pub energy_estimate_j: f64,
-    pub blocked_sequence_detected: bool,
-    pub blocked_state_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SimulationRunResult {
+    pub scenario: SimulationScenario,
+    pub summary: SimulationRunSummary,
+    pub metrics: SimulationRunMetrics,
+    pub report: SimulationRunReport,
     pub timeline_samples: Vec<TimelineSample>,
     pub signal_samples: Vec<SignalSample>,
     pub controller_state_samples: Vec<ControllerStateSample>,
@@ -78,9 +113,11 @@ pub enum SimulationError {
         transition_id: String,
         state_id: String,
     },
+    #[error("control graph is invalid: {0}")]
+    InvalidControlGraph(String),
 }
 
-pub fn run_simulation(request: &SimulationRequest) -> Result<SimulationSummary, SimulationError> {
+pub fn run_simulation(request: &SimulationRequest) -> Result<SimulationRunResult, SimulationError> {
     if request.step_count == 0 {
         return Err(SimulationError::InvalidStepCount);
     }
@@ -90,6 +127,25 @@ pub fn run_simulation(request: &SimulationRequest) -> Result<SimulationSummary, 
     if !request.path_length_mm.is_finite() || request.path_length_mm < 0.0 {
         return Err(SimulationError::InvalidPathLength);
     }
+
+    let engine_version = if request.engine_version.trim().is_empty() {
+        DEFAULT_ENGINE_VERSION.to_string()
+    } else {
+        request.engine_version.clone()
+    };
+    let scenario = SimulationScenario {
+        name: request.scenario_name.clone(),
+        seed: request.seed,
+        engine_version: engine_version.clone(),
+        step_count: request.step_count,
+        planned_cycle_time_ms: request.planned_cycle_time_ms,
+        path_length_mm: request.path_length_mm,
+        endpoint_count: request.endpoint_count,
+        safety_zone_count: request.safety_zone_count,
+        signal_count: request.signals.len(),
+        scheduled_signal_change_count: request.scheduled_signal_changes.len(),
+        contact_pair_count: request.contact_pairs.len(),
+    };
 
     let latency_penalty_ms = request.endpoint_count * 6;
     let seed_jitter_ms = (request.seed % 11) as u32;
@@ -104,11 +160,19 @@ pub fn run_simulation(request: &SimulationRequest) -> Result<SimulationSummary, 
             + f64::from(request.endpoint_count) * 1.5,
     );
 
-    let mut signal_values = request
-        .signals
-        .iter()
-        .map(|signal| (signal.id.clone(), signal.initial_value.clone()))
-        .collect::<BTreeMap<_, _>>();
+    let control_model = request
+        .controller
+        .as_ref()
+        .map(|controller| RobotCellControlModel {
+            cell_id: request.scenario_name.clone(),
+            signals: request.signals.clone(),
+            controller: controller.clone(),
+        });
+    if let Some(control_model) = control_model.as_ref() {
+        validate_robot_cell_control(control_model).map_err(map_control_error)?;
+    }
+
+    let mut signal_values = control_signal_values(&request.signals);
     let mut signal_samples = request
         .signals
         .iter()
@@ -122,7 +186,11 @@ pub fn run_simulation(request: &SimulationRequest) -> Result<SimulationSummary, 
         .collect::<Vec<_>>();
 
     let mut controller_state_samples = Vec::new();
-    let mut current_state = resolve_initial_state(request.controller.as_ref())?;
+    let mut current_state = control_model
+        .as_ref()
+        .map(resolve_initial_control_state)
+        .transpose()
+        .map_err(map_control_error)?;
     if let Some(state) = current_state.as_ref() {
         controller_state_samples.push(ControllerStateSample {
             step_index: 0,
@@ -161,21 +229,11 @@ pub fn run_simulation(request: &SimulationRequest) -> Result<SimulationSummary, 
             change_cursor += 1;
         }
 
-        if let (Some(controller), Some(state)) =
-            (request.controller.as_ref(), current_state.clone())
-            && let Some(transition) = controller
-                .transitions
-                .iter()
-                .filter(|transition| transition.from_state_id == state.id)
-                .find(|transition| {
-                    transition
-                        .conditions
-                        .iter()
-                        .all(|condition| signal_condition_matches(condition, &signal_values))
-                })
+        if let (Some(control_model), Some(state)) = (control_model.as_ref(), current_state.clone())
+            && let Some(transition) =
+                enabled_control_transition(control_model, &state.id, &signal_values)
         {
             for assignment in &transition.assignments {
-                signal_values.insert(assignment.signal_id.clone(), assignment.value.clone());
                 signal_samples.push(SignalSample {
                     step_index,
                     timestamp_ms,
@@ -184,7 +242,10 @@ pub fn run_simulation(request: &SimulationRequest) -> Result<SimulationSummary, 
                     reason: format!("transition:{}", transition.id),
                 });
             }
-            let next_state = resolve_transition_state(controller, transition)?;
+            apply_control_assignments(&mut signal_values, &transition.assignments);
+            let next_state =
+                resolve_control_transition_state(&control_model.controller, transition)
+                    .map_err(map_control_error)?;
             controller_state_samples.push(ControllerStateSample {
                 step_index,
                 timestamp_ms,
@@ -234,7 +295,12 @@ pub fn run_simulation(request: &SimulationRequest) -> Result<SimulationSummary, 
     }
 
     let collision_count = compute_collision_count(request);
-    let contacts = build_contacts(request, collision_count, cycle_time_ms);
+    let contacts = build_contacts(
+        request,
+        collision_count,
+        cycle_time_ms,
+        &controller_state_samples,
+    );
     let status = if collision_count > 0 {
         SimulationStatus::Collided
     } else if blocked_sequence_detected || max_tracking_error_mm > 2.5 {
@@ -274,90 +340,40 @@ pub fn run_simulation(request: &SimulationRequest) -> Result<SimulationSummary, 
         },
     ];
 
-    Ok(SimulationSummary {
+    let summary = SimulationRunSummary {
         status,
-        seed: request.seed,
-        engine_version: if request.engine_version.trim().is_empty() {
-            DEFAULT_ENGINE_VERSION.to_string()
-        } else {
-            request.engine_version.clone()
-        },
+        blocked_sequence_detected,
+        blocked_state_id,
+        contact_count: contacts.len(),
+        signal_sample_count: signal_samples.len(),
+        controller_state_sample_count: controller_state_samples.len(),
+        timeline_sample_count: timeline_samples.len(),
+    };
+    let metrics = SimulationRunMetrics {
         collision_count,
         cycle_time_ms,
         max_tracking_error_mm,
         energy_estimate_j,
-        blocked_sequence_detected,
-        blocked_state_id,
+    };
+    let report = build_run_report(
+        &summary,
+        &metrics,
+        &contacts,
+        &timeline_samples,
+        &controller_state_samples,
+    );
+
+    Ok(SimulationRunResult {
+        scenario,
+        summary,
+        metrics,
+        report,
         timeline_samples,
         signal_samples,
         controller_state_samples,
         contacts,
         progress_samples,
     })
-}
-
-fn resolve_initial_state(
-    controller: Option<&ControllerStateMachine>,
-) -> Result<Option<ControllerState>, SimulationError> {
-    let Some(controller) = controller else {
-        return Ok(None);
-    };
-    controller
-        .states
-        .iter()
-        .find(|state| state.id == controller.initial_state_id)
-        .cloned()
-        .map(Some)
-        .ok_or_else(|| SimulationError::UnknownInitialState(controller.initial_state_id.clone()))
-}
-
-fn resolve_transition_state(
-    controller: &ControllerStateMachine,
-    transition: &faero_types::ControlTransition,
-) -> Result<ControllerState, SimulationError> {
-    controller
-        .states
-        .iter()
-        .find(|state| state.id == transition.to_state_id)
-        .cloned()
-        .ok_or_else(|| SimulationError::UnknownTransitionState {
-            transition_id: transition.id.clone(),
-            state_id: transition.to_state_id.clone(),
-        })
-}
-
-fn signal_condition_matches(
-    condition: &SignalCondition,
-    signal_values: &BTreeMap<String, SignalValue>,
-) -> bool {
-    let Some(current_value) = signal_values.get(&condition.signal_id) else {
-        return false;
-    };
-    match (
-        &condition.comparator,
-        current_value,
-        &condition.expected_value,
-    ) {
-        (SignalComparator::Equal, left, right) => left == right,
-        (SignalComparator::NotEqual, left, right) => left != right,
-        (SignalComparator::GreaterThan, SignalValue::Scalar(left), SignalValue::Scalar(right)) => {
-            left > right
-        }
-        (
-            SignalComparator::GreaterThanOrEqual,
-            SignalValue::Scalar(left),
-            SignalValue::Scalar(right),
-        ) => left >= right,
-        (SignalComparator::LessThan, SignalValue::Scalar(left), SignalValue::Scalar(right)) => {
-            left < right
-        }
-        (
-            SignalComparator::LessThanOrEqual,
-            SignalValue::Scalar(left),
-            SignalValue::Scalar(right),
-        ) => left <= right,
-        _ => false,
-    }
 }
 
 fn compute_collision_count(request: &SimulationRequest) -> u32 {
@@ -374,6 +390,7 @@ fn build_contacts(
     request: &SimulationRequest,
     collision_count: u32,
     cycle_time_ms: u32,
+    controller_state_samples: &[ControllerStateSample],
 ) -> Vec<SimulationContact> {
     if collision_count == 0 {
         return Vec::new();
@@ -403,6 +420,13 @@ fn build_contacts(
                 pair_id: pair.id.clone(),
                 left_entity_id: pair.left_entity_id.clone(),
                 right_entity_id: pair.right_entity_id.clone(),
+                location_label: contact_location_label(pair),
+                phase: Some(contact_phase(step_index, request.step_count).to_string()),
+                state_id: controller_state_samples
+                    .iter()
+                    .rev()
+                    .find(|sample| sample.step_index <= step_index)
+                    .map(|sample| sample.state_id.clone()),
                 overlap_mm: round_two_decimals(
                     pair.base_clearance_mm
                         + (request.seed % 7) as f64 * 0.11
@@ -412,6 +436,241 @@ fn build_contacts(
             }
         })
         .collect()
+}
+
+fn build_run_report(
+    summary: &SimulationRunSummary,
+    metrics: &SimulationRunMetrics,
+    contacts: &[SimulationContact],
+    timeline_samples: &[TimelineSample],
+    controller_state_samples: &[ControllerStateSample],
+) -> SimulationRunReport {
+    match summary.status {
+        SimulationStatus::Collided => build_collision_report(
+            metrics,
+            contacts,
+            timeline_samples,
+            controller_state_samples,
+        ),
+        SimulationStatus::Warning => {
+            build_warning_report(summary, metrics, timeline_samples, controller_state_samples)
+        }
+        SimulationStatus::Completed => {
+            build_nominal_report(summary, metrics, timeline_samples, controller_state_samples)
+        }
+    }
+}
+
+fn build_collision_report(
+    metrics: &SimulationRunMetrics,
+    contacts: &[SimulationContact],
+    _timeline_samples: &[TimelineSample],
+    controller_state_samples: &[ControllerStateSample],
+) -> SimulationRunReport {
+    let primary_contact = contacts.first();
+    let location = primary_contact
+        .map(|contact| contact.location_label.as_str())
+        .unwrap_or("zone inconnue");
+    let mut findings = vec![format!(
+        "{} collision(s) detectee(s) sur {}.",
+        metrics.collision_count, location
+    )];
+    if let Some(contact) = primary_contact {
+        findings.push(format!(
+            "Instant critique a t={} ms | overlap {:.2} mm | phase {}.",
+            contact.timestamp_ms,
+            contact.overlap_mm,
+            contact.phase.as_deref().unwrap_or("running")
+        ));
+        if let Some(state_id) = contact.state_id.as_deref() {
+            findings.push(format!(
+                "Le controle etait dans l etat {} au moment du contact.",
+                state_id
+            ));
+        }
+    }
+    findings.push(format!(
+        "Cycle estime {} ms | tracking max {:.2} mm.",
+        metrics.cycle_time_ms, metrics.max_tracking_error_mm
+    ));
+
+    let mut critical_event_ids = Vec::new();
+    if let Some(contact) = primary_contact {
+        push_unique(&mut critical_event_ids, Some(collision_event_id(contact)));
+        push_unique(
+            &mut critical_event_ids,
+            controller_state_samples
+                .iter()
+                .rev()
+                .find(|sample| sample.step_index <= contact.step_index)
+                .map(controller_event_id),
+        );
+    }
+
+    let mut recommended_actions = vec![
+        format!(
+            "Inspecter la paire {} autour de {}.",
+            primary_contact
+                .map(|contact| contact.pair_id.as_str())
+                .unwrap_or("pair_default"),
+            location
+        ),
+        "Rejouer un run apres ajustement de trajectoire ou de clearance.".to_string(),
+    ];
+    if let Some(state_id) = primary_contact.and_then(|contact| contact.state_id.as_deref()) {
+        recommended_actions.push(format!(
+            "Verifier la logique de transition associee a l etat {}.",
+            state_id
+        ));
+    }
+
+    SimulationRunReport {
+        status: simulation_status_key(&SimulationStatus::Collided).to_string(),
+        headline: format!("Collision critique sur {}", location),
+        findings,
+        critical_event_ids,
+        recommended_actions,
+    }
+}
+
+fn build_warning_report(
+    summary: &SimulationRunSummary,
+    metrics: &SimulationRunMetrics,
+    timeline_samples: &[TimelineSample],
+    controller_state_samples: &[ControllerStateSample],
+) -> SimulationRunReport {
+    let blocked_sample = controller_state_samples
+        .iter()
+        .rev()
+        .find(|sample| sample.reason == "sequence_blocked")
+        .or_else(|| controller_state_samples.last());
+    let blocked_state = summary
+        .blocked_state_id
+        .as_deref()
+        .or_else(|| blocked_sample.map(|sample| sample.state_id.as_str()))
+        .unwrap_or("state");
+
+    let mut critical_event_ids = Vec::new();
+    push_unique(
+        &mut critical_event_ids,
+        blocked_sample.map(controller_event_id),
+    );
+    push_unique(
+        &mut critical_event_ids,
+        timeline_samples.last().map(timeline_event_id),
+    );
+
+    SimulationRunReport {
+        status: simulation_status_key(&SimulationStatus::Warning).to_string(),
+        headline: format!("Sequence bloquee sur l etat {}", blocked_state),
+        findings: vec![
+            format!(
+                "Le run termine sans collision mais reste bloque sur {}.",
+                blocked_state
+            ),
+            format!(
+                "Cycle estime {} ms | tracking max {:.2} mm.",
+                metrics.cycle_time_ms, metrics.max_tracking_error_mm
+            ),
+            format!(
+                "{} echantillon(s) timeline et {} etat(s) controle persistent le run.",
+                summary.timeline_sample_count, summary.controller_state_sample_count
+            ),
+        ],
+        critical_event_ids,
+        recommended_actions: vec![
+            format!(
+                "Verifier la transition de controle qui doit sortir de l etat {}.",
+                blocked_state
+            ),
+            "Rejouer un run apres correction du signal ou de la condition bloquante.".to_string(),
+        ],
+    }
+}
+
+fn build_nominal_report(
+    summary: &SimulationRunSummary,
+    metrics: &SimulationRunMetrics,
+    timeline_samples: &[TimelineSample],
+    controller_state_samples: &[ControllerStateSample],
+) -> SimulationRunReport {
+    let final_state = controller_state_samples
+        .last()
+        .map(|sample| sample.state_id.as_str())
+        .unwrap_or("completed");
+    let mut critical_event_ids = Vec::new();
+    push_unique(
+        &mut critical_event_ids,
+        timeline_samples.last().map(timeline_event_id),
+    );
+
+    SimulationRunReport {
+        status: simulation_status_key(&SimulationStatus::Completed).to_string(),
+        headline: format!(
+            "Run nominal termine sans collision en {} ms",
+            metrics.cycle_time_ms
+        ),
+        findings: vec![
+            format!("Aucune collision ni sequence bloquee n est detectee sur ce run."),
+            format!(
+                "{} echantillon(s) timeline, {} changement(s) signal et {} etat(s) controle restent inspectables.",
+                summary.timeline_sample_count,
+                summary.signal_sample_count,
+                summary.controller_state_sample_count
+            ),
+            format!("Etat final de controle: {}.", final_state),
+        ],
+        critical_event_ids,
+        recommended_actions: vec![
+            "Conserver ce run comme reference white-box du cycle nominal.".to_string(),
+            "Relancer la simulation apres chaque modification de trajectoire, signal ou safety."
+                .to_string(),
+        ],
+    }
+}
+
+fn contact_location_label(pair: &SimulationContactPair) -> String {
+    format!(
+        "{} | {} x {}",
+        pair.id, pair.left_entity_id, pair.right_entity_id
+    )
+}
+
+fn contact_phase(step_index: u32, step_count: u32) -> &'static str {
+    if step_count <= 1 || step_index + 1 >= step_count {
+        "completed"
+    } else {
+        "running"
+    }
+}
+
+fn collision_event_id(contact: &SimulationContact) -> String {
+    format!("collision-{}-{}", contact.step_index, contact.pair_id)
+}
+
+fn controller_event_id(sample: &ControllerStateSample) -> String {
+    format!("controller-{}-{}", sample.step_index, sample.state_id)
+}
+
+fn timeline_event_id(sample: &TimelineSample) -> String {
+    format!("timeline-{}", sample.step_index)
+}
+
+fn push_unique(target: &mut Vec<String>, value: Option<String>) {
+    let Some(value) = value else {
+        return;
+    };
+    if !target.iter().any(|entry| entry == &value) {
+        target.push(value);
+    }
+}
+
+fn simulation_status_key(status: &SimulationStatus) -> &'static str {
+    match status {
+        SimulationStatus::Completed => "completed",
+        SimulationStatus::Warning => "warning",
+        SimulationStatus::Collided => "collided",
+    }
 }
 
 fn step_timestamp_ms(step_index: u32, step_count: u32, cycle_time_ms: u32) -> u32 {
@@ -425,11 +684,28 @@ fn round_two_decimals(value: f64) -> f64 {
     (value * 100.0).round() / 100.0
 }
 
+fn map_control_error(error: RoboticsError) -> SimulationError {
+    match error {
+        RoboticsError::UnknownInitialControllerState(state_id) => {
+            SimulationError::UnknownInitialState(state_id)
+        }
+        RoboticsError::UnknownControllerTransitionState {
+            transition_id,
+            state_id,
+        } => SimulationError::UnknownTransitionState {
+            transition_id,
+            state_id,
+        },
+        other => SimulationError::InvalidControlGraph(other.to_string()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use faero_types::{
-        ControlTransition, ControllerStateMachine, ScheduledSignalChange, SignalAssignment,
-        SignalComparator, SignalCondition, SignalDefinition, SignalKind, SignalValue,
+        ControlTransition, ControllerState, ControllerStateMachine, ScheduledSignalChange,
+        SignalAssignment, SignalComparator, SignalCondition, SignalDefinition, SignalKind,
+        SignalValue,
     };
 
     use super::*;
@@ -494,12 +770,15 @@ mod tests {
         let second = run_simulation(&request).expect("simulation should run twice");
 
         assert_eq!(first, second);
-        assert_eq!(first.status, SimulationStatus::Completed);
-        assert_eq!(first.seed, 42);
-        assert_eq!(first.engine_version, DEFAULT_ENGINE_VERSION);
-        assert_eq!(first.collision_count, 0);
-        assert_eq!(first.cycle_time_ms, 3_655);
-        assert_eq!(first.max_tracking_error_mm, 0.54);
+        assert_eq!(first.summary.status, SimulationStatus::Completed);
+        assert_eq!(first.scenario.seed, 42);
+        assert_eq!(first.scenario.engine_version, DEFAULT_ENGINE_VERSION);
+        assert_eq!(first.scenario.step_count, 10);
+        assert_eq!(first.metrics.collision_count, 0);
+        assert_eq!(first.metrics.cycle_time_ms, 3_655);
+        assert_eq!(first.metrics.max_tracking_error_mm, 0.54);
+        assert_eq!(first.report.status, "completed");
+        assert!(first.report.headline.contains("Run nominal"));
         assert_eq!(first.timeline_samples.len(), 10);
         assert_eq!(
             first.progress_samples.last().map(|sample| sample.progress),
@@ -521,6 +800,55 @@ mod tests {
         .expect("simulation should run");
 
         assert_ne!(first, second);
+    }
+
+    #[test]
+    fn run_result_keeps_deterministic_inputs_and_artifact_counts_explicit() {
+        let result = run_simulation(&SimulationRequest {
+            signals: vec![SignalDefinition {
+                id: "sig_cycle_start".to_string(),
+                name: "Cycle Start".to_string(),
+                kind: SignalKind::Boolean,
+                initial_value: SignalValue::Bool(false),
+                unit: None,
+                tags: vec!["control".to_string()],
+            }],
+            scheduled_signal_changes: vec![ScheduledSignalChange {
+                step_index: 2,
+                signal_id: "sig_cycle_start".to_string(),
+                value: SignalValue::Bool(true),
+                reason: "operator_start".to_string(),
+            }],
+            contact_pairs: vec![SimulationContactPair {
+                id: "pair_fixture".to_string(),
+                left_entity_id: "ent_tool_001".to_string(),
+                right_entity_id: "ent_fixture_001".to_string(),
+                base_clearance_mm: 0.8,
+            }],
+            ..nominal_request()
+        })
+        .expect("simulation should run");
+
+        assert_eq!(result.scenario.name, "pick-and-place");
+        assert_eq!(result.scenario.seed, 42);
+        assert_eq!(result.scenario.engine_version, DEFAULT_ENGINE_VERSION);
+        assert_eq!(result.scenario.step_count, 10);
+        assert_eq!(result.scenario.signal_count, 1);
+        assert_eq!(result.scenario.scheduled_signal_change_count, 1);
+        assert_eq!(result.scenario.contact_pair_count, 1);
+        assert_eq!(
+            result.summary.timeline_sample_count,
+            result.timeline_samples.len()
+        );
+        assert_eq!(
+            result.summary.signal_sample_count,
+            result.signal_samples.len()
+        );
+        assert_eq!(
+            result.summary.controller_state_sample_count,
+            result.controller_state_samples.len()
+        );
+        assert_eq!(result.summary.contact_count, result.contacts.len());
     }
 
     #[test]
@@ -555,7 +883,7 @@ mod tests {
         })
         .expect("simulation should run");
 
-        assert!(!summary.blocked_sequence_detected);
+        assert!(!summary.summary.blocked_sequence_detected);
         assert_eq!(
             summary
                 .controller_state_samples
@@ -571,22 +899,41 @@ mod tests {
     #[test]
     fn detects_a_blocked_sequence_when_transition_never_fires() {
         let summary = run_simulation(&SimulationRequest {
-            signals: vec![SignalDefinition {
-                id: "sig_cycle_start".to_string(),
-                name: "Cycle Start".to_string(),
-                kind: SignalKind::Boolean,
-                initial_value: SignalValue::Bool(false),
-                unit: None,
-                tags: vec!["control".to_string()],
-            }],
+            signals: vec![
+                SignalDefinition {
+                    id: "sig_cycle_start".to_string(),
+                    name: "Cycle Start".to_string(),
+                    kind: SignalKind::Boolean,
+                    initial_value: SignalValue::Bool(false),
+                    unit: None,
+                    tags: vec!["control".to_string()],
+                },
+                SignalDefinition {
+                    id: "sig_part_present".to_string(),
+                    name: "Part Present".to_string(),
+                    kind: SignalKind::Boolean,
+                    initial_value: SignalValue::Bool(true),
+                    unit: None,
+                    tags: vec!["process".to_string()],
+                },
+            ],
             controller: Some(simple_controller()),
             ..nominal_request()
         })
         .expect("simulation should run");
 
-        assert_eq!(summary.status, SimulationStatus::Warning);
-        assert!(summary.blocked_sequence_detected);
-        assert_eq!(summary.blocked_state_id.as_deref(), Some("idle"));
+        assert_eq!(summary.summary.status, SimulationStatus::Warning);
+        assert!(summary.summary.blocked_sequence_detected);
+        assert_eq!(summary.summary.blocked_state_id.as_deref(), Some("idle"));
+        assert_eq!(summary.report.status, "warning");
+        assert!(summary.report.headline.contains("Sequence bloquee"));
+        assert!(
+            summary
+                .report
+                .critical_event_ids
+                .iter()
+                .any(|event_id| event_id.starts_with("controller-"))
+        );
     }
 
     #[test]
@@ -594,6 +941,31 @@ mod tests {
         let summary = run_simulation(&SimulationRequest {
             safety_zone_count: 0,
             seed: 6,
+            signals: vec![
+                SignalDefinition {
+                    id: "sig_cycle_start".to_string(),
+                    name: "Cycle Start".to_string(),
+                    kind: SignalKind::Boolean,
+                    initial_value: SignalValue::Bool(false),
+                    unit: None,
+                    tags: vec!["control".to_string()],
+                },
+                SignalDefinition {
+                    id: "sig_part_present".to_string(),
+                    name: "Part Present".to_string(),
+                    kind: SignalKind::Boolean,
+                    initial_value: SignalValue::Bool(true),
+                    unit: None,
+                    tags: vec!["process".to_string()],
+                },
+            ],
+            controller: Some(simple_controller()),
+            scheduled_signal_changes: vec![ScheduledSignalChange {
+                step_index: 2,
+                signal_id: "sig_cycle_start".to_string(),
+                value: SignalValue::Bool(true),
+                reason: "operator_start".to_string(),
+            }],
             contact_pairs: vec![SimulationContactPair {
                 id: "pair_conveyor".to_string(),
                 left_entity_id: "ent_tool_001".to_string(),
@@ -604,10 +976,35 @@ mod tests {
         })
         .expect("simulation should run");
 
-        assert_eq!(summary.status, SimulationStatus::Collided);
-        assert!(summary.collision_count > 0);
-        assert_eq!(summary.contacts.len(), summary.collision_count as usize);
+        assert_eq!(summary.summary.status, SimulationStatus::Collided);
+        assert!(summary.metrics.collision_count > 0);
+        assert_eq!(
+            summary.contacts.len(),
+            summary.metrics.collision_count as usize
+        );
         assert_eq!(summary.contacts[0].pair_id, "pair_conveyor");
+        assert_eq!(
+            summary.contacts[0].location_label,
+            "pair_conveyor | ent_tool_001 x ent_conveyor_001"
+        );
+        assert_eq!(summary.contacts[0].phase.as_deref(), Some("running"));
+        assert_eq!(summary.contacts[0].state_id.as_deref(), Some("done"));
+        assert_eq!(summary.report.status, "collided");
+        assert!(summary.report.headline.contains("Collision critique"));
+        assert_eq!(
+            summary.report.critical_event_ids.first(),
+            Some(&format!(
+                "collision-{}-pair_conveyor",
+                summary.contacts[0].step_index
+            ))
+        );
+        assert!(
+            summary
+                .report
+                .recommended_actions
+                .iter()
+                .any(|action| action.contains("pair_conveyor"))
+        );
     }
 
     #[test]

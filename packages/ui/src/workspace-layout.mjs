@@ -1,7 +1,7 @@
 export const defaultWorkspacePanels = {
-  projectExplorer: true,
-  properties: true,
-  commandSurface: true,
+  projectExplorer: false,
+  properties: false,
+  commandSurface: false,
   viewport: true,
   simulationTimeline: true,
   aiAssistant: true,
@@ -47,7 +47,7 @@ export function setWorkspacePanel(panelState, panelId, visible) {
 
 export function getWorkspaceColumnState(panelState) {
   return {
-    leftExpanded: panelState.projectExplorer || panelState.properties,
+    leftExpanded: false,
     rightExpanded:
       panelState.simulationTimeline ||
       panelState.aiAssistant ||

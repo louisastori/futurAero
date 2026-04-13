@@ -30,9 +30,10 @@ use faero_perception::{
 };
 use faero_plugin_host::validate_manifest;
 use faero_robotics::{
-    CartesianPose, EquipmentModel, EquipmentParameterSet, EquipmentType, RobotCellModel,
-    RobotModel, RobotPayloadLimits, RobotSequenceModel, RobotTarget, RobotTargetModel,
-    RobotToolMountRef, RobotWorkspaceBounds, validate_robot_cell_structure,
+    CartesianPose, EquipmentModel, EquipmentParameterSet, EquipmentType, RobotCellControlModel,
+    RobotCellControlSummary, RobotCellModel, RobotModel, RobotPayloadLimits, RobotSequenceModel,
+    RobotTarget, RobotTargetModel, RobotToolMountRef, RobotWorkspaceBounds,
+    summarize_robot_cell_control, validate_robot_cell_control, validate_robot_cell_structure,
     validate_sequence, validate_target_models,
 };
 use faero_safety::{SafetyInterlock, SafetyStatus, SafetyZone, SafetyZoneKind, evaluate_safety};
@@ -43,8 +44,8 @@ use faero_types::{
     AssemblySolveStatus, AssemblyTransform, ControlTransition, ControllerState,
     ControllerStateMachine, EntityRecord, ExternalEndpoint, NetworkCaptureDataset,
     PluginContribution, PluginManifest, ProjectDocument, QosProfile, ScheduledSignalChange,
-    SignalAssignment, SignalComparator, SignalCondition, SignalDefinition, SignalKind,
-    SignalValue, SimulationContactPair, StreamDirection, TelemetryStream, TimingProfile,
+    SignalAssignment, SignalComparator, SignalCondition, SignalDefinition, SignalKind, SignalValue,
+    SimulationContactPair, StreamDirection, TelemetryStream, TimingProfile,
 };
 use serde::Serialize;
 use tauri::{
@@ -156,6 +157,8 @@ struct RobotCellEntitySummary {
     safety_zone_count: usize,
     signal_count: usize,
     controller_transition_count: usize,
+    blocked_sequence_detected: bool,
+    blocked_state_id: Option<String>,
     warning_count: usize,
 }
 
@@ -168,10 +171,14 @@ struct SimulationRunEntitySummary {
     max_tracking_error_mm: f64,
     energy_estimate_j: f64,
     blocked_sequence_detected: bool,
+    blocked_state_id: Option<String>,
     contact_count: usize,
     signal_sample_count: usize,
     controller_state_sample_count: usize,
     timeline_sample_count: usize,
+    job_status: String,
+    job_phase: String,
+    job_progress: f64,
 }
 
 #[derive(Serialize, Clone)]
@@ -424,6 +431,7 @@ impl WorkspaceSession {
                 .map_err(|error| error.to_string())?;
         }
         self.materialize_robot_cell_scene_layout(robot_cell)?;
+        self.sync_robot_cell_control_dependents(&robot_cell.id)?;
 
         let signal_entities = self
             .graph
@@ -551,17 +559,18 @@ impl WorkspaceSession {
         if entity.entity_type == "Part" {
             let current = part_geometry_summary_from_entity(&entity)
                 .ok_or_else(|| "piece parametrique invalide".to_string())?;
-            let width_mm = extract_f64_change(&changes, "parameterSet.widthMm")
-                .unwrap_or(current.width_mm);
-            let height_mm = extract_f64_change(&changes, "parameterSet.heightMm")
-                .unwrap_or(current.height_mm);
-            let depth_mm = extract_f64_change(&changes, "parameterSet.depthMm")
-                .unwrap_or(current.depth_mm);
+            let width_mm =
+                extract_f64_change(&changes, "parameterSet.widthMm").unwrap_or(current.width_mm);
+            let height_mm =
+                extract_f64_change(&changes, "parameterSet.heightMm").unwrap_or(current.height_mm);
+            let depth_mm =
+                extract_f64_change(&changes, "parameterSet.depthMm").unwrap_or(current.depth_mm);
             validate_positive_dimension("parameterSet.widthMm", width_mm)?;
             validate_positive_dimension("parameterSet.heightMm", height_mm)?;
             validate_positive_dimension("parameterSet.depthMm", depth_mm)?;
-            let (mut next_entity, _) =
-                build_parametric_part_entity(&entity.id, &next_name, width_mm, height_mm, depth_mm)?;
+            let (mut next_entity, _) = build_parametric_part_entity(
+                &entity.id, &next_name, width_mm, height_mm, depth_mm,
+            )?;
             if let Some(data) = next_entity.data.as_object_mut() {
                 data.insert("tags".to_string(), serde_json::json!(normalized_tags));
                 merge_generic_parameter_changes(data, &entity.data, &changes)?;
@@ -583,7 +592,9 @@ impl WorkspaceSession {
                     && let Some(kind) = data.get("kind").and_then(|value| value.as_str())
                 {
                     let current_value_valid = match kind {
-                        "boolean" => data.get("currentValue").is_some_and(|value| value.is_boolean()),
+                        "boolean" => data
+                            .get("currentValue")
+                            .is_some_and(|value| value.is_boolean()),
                         "scalar" => data
                             .get("currentValue")
                             .and_then(|value| value.as_f64())
@@ -606,6 +617,7 @@ impl WorkspaceSession {
                 }
                 validate_entity_change_set(&entity, data)?;
             }
+            self.preview_robot_cell_control_update(&next_entity)?;
             self.graph
                 .apply_command(CoreCommand::ReplaceEntity(next_entity.clone()))
                 .map_err(|error| error.to_string())?;
@@ -621,6 +633,21 @@ impl WorkspaceSession {
                         value: parsed_value,
                     })
                     .map_err(|error| error.to_string())?;
+                if let Some(cell_id) = next_entity
+                    .data
+                    .get("cellId")
+                    .and_then(|value| value.as_str())
+                {
+                    self.sync_robot_cell_control_dependents(cell_id)?;
+                }
+            }
+            if entity.entity_type == "ControllerModel"
+                && let Some(cell_id) = next_entity
+                    .data
+                    .get("cellId")
+                    .and_then(|value| value.as_str())
+            {
+                self.sync_robot_cell_control_dependents(cell_id)?;
             }
             if entity.entity_type == "RobotTarget" {
                 self.sync_robot_target_dependents(&next_entity)?;
@@ -703,8 +730,7 @@ impl WorkspaceSession {
             ),
             critic_model_info: Some(format!(
                 "{}:{}:critic",
-                response.runtime.provider,
-                response.runtime.active_profile
+                response.runtime.provider, response.runtime.active_profile
             )),
             critique_pass_count: structured.critique_passes.len(),
             context_refs: structured.context_refs.clone(),
@@ -798,7 +824,9 @@ impl WorkspaceSession {
             .cloned()
             .ok_or_else(|| format!("suggestion IA introuvable: {suggestion_id}"))?;
         if suggestion.entity_type != "AiSuggestion" {
-            return Err(format!("entite {suggestion_id} n est pas une suggestion IA"));
+            return Err(format!(
+                "entite {suggestion_id} n est pas une suggestion IA"
+            ));
         }
         let proposed_commands = suggestion
             .data
@@ -930,7 +958,11 @@ impl WorkspaceSession {
             .values()
             .find(|entity| entity.entity_type == "AiSession")
             .filter(|entity| {
-                entity.data.get("sessionId").and_then(|value| value.as_str()) == Some(session_id)
+                entity
+                    .data
+                    .get("sessionId")
+                    .and_then(|value| value.as_str())
+                    == Some(session_id)
             })
             .cloned()
         else {
@@ -1117,8 +1149,13 @@ impl WorkspaceSession {
                         })
                         .map_err(|error| error.to_string())?;
                 }
-                for (mate_index, pair) in (0..assembly_part_ids.len().saturating_sub(1))
-                    .map(|index| (index, (&assembly_part_ids[index], &assembly_part_ids[index + 1])))
+                for (mate_index, pair) in
+                    (0..assembly_part_ids.len().saturating_sub(1)).map(|index| {
+                        (
+                            index,
+                            (&assembly_part_ids[index], &assembly_part_ids[index + 1]),
+                        )
+                    })
                 {
                     let _ = pair;
                     self.graph
@@ -1301,7 +1338,21 @@ impl WorkspaceSession {
                 self.graph
                     .apply_command(CoreCommand::CreateEntity(entity.clone()))
                     .map_err(|error| error.to_string())?;
-                self.push_system_activity("simulation.run.completed", Some(entity.id));
+                if let Some(progress_samples) = entity
+                    .data
+                    .get("job")
+                    .and_then(|job| job.get("progressSamples"))
+                    .and_then(|value| value.as_array())
+                {
+                    for sample in progress_samples {
+                        if let Some(phase) = sample.get("phase").and_then(|value| value.as_str()) {
+                            self.push_system_activity(
+                                &format!("simulation.run.{phase}"),
+                                Some(entity.id.clone()),
+                            );
+                        }
+                    }
+                }
                 Ok(CommandResult {
                     command_id: command_id.to_string(),
                     status: "applied".to_string(),
@@ -1381,7 +1432,10 @@ impl WorkspaceSession {
                     status: "ready".to_string(),
                 });
                 let report = registry
-                    .replay_trace(&format!("trace_{endpoint_id}"), Some(&degraded_wireless_profile()))
+                    .replay_trace(
+                        &format!("trace_{endpoint_id}"),
+                        Some(&degraded_wireless_profile()),
+                    )
                     .ok_or_else(|| "trace industrielle introuvable".to_string())?;
                 let entity = sample_entity(
                     "IndustrialReplay",
@@ -1836,8 +1890,7 @@ fn build_project_snapshot_from_document(
             let simulation_run_summary = simulation_run_summary_from_entity(entity);
             let safety_report_summary = safety_report_summary_from_entity(entity);
             let perception_run_summary = perception_run_summary_from_entity(entity);
-            let commissioning_session_summary =
-                commissioning_session_summary_from_entity(entity);
+            let commissioning_session_summary = commissioning_session_summary_from_entity(entity);
             let as_built_comparison_summary = as_built_comparison_summary_from_entity(entity);
             let optimization_study_summary = optimization_study_summary_from_entity(entity);
             EntitySummary {
@@ -2347,7 +2400,7 @@ fn robot_cell_signal_definitions(safety_clear: bool) -> Vec<SignalDefinition> {
             id: "sig_progress_gate".to_string(),
             name: "Progress Gate".to_string(),
             kind: SignalKind::Scalar,
-            initial_value: SignalValue::Scalar(0.0),
+            initial_value: SignalValue::Scalar(0.62),
             unit: Some("ratio".to_string()),
             tags: vec!["control".to_string(), "scalar".to_string()],
         },
@@ -2366,6 +2419,14 @@ fn robot_cell_signal_definitions(safety_clear: bool) -> Vec<SignalDefinition> {
             initial_value: SignalValue::Bool(false),
             unit: None,
             tags: vec!["process".to_string(), "boolean".to_string()],
+        },
+        SignalDefinition {
+            id: "sig_operator_mode".to_string(),
+            name: "Operator Mode".to_string(),
+            kind: SignalKind::Text,
+            initial_value: SignalValue::Text("auto".to_string()),
+            unit: None,
+            tags: vec!["control".to_string(), "text".to_string()],
         },
     ]
 }
@@ -2456,6 +2517,45 @@ fn robot_cell_controller_state_machine(cell_id: &str) -> ControllerStateMachine 
     }
 }
 
+fn robot_cell_control_model(cell_id: &str, safety_clear: bool) -> RobotCellControlModel {
+    RobotCellControlModel {
+        cell_id: cell_id.to_string(),
+        signals: robot_cell_signal_definitions(safety_clear),
+        controller: robot_cell_controller_state_machine(cell_id),
+    }
+}
+
+fn robot_cell_control_summary(
+    control_model: &RobotCellControlModel,
+) -> Result<RobotCellControlSummary, String> {
+    validate_robot_cell_control(control_model).map_err(|error| error.to_string())?;
+    summarize_robot_cell_control(control_model).map_err(|error| error.to_string())
+}
+
+fn robot_cell_control_payload(
+    cell_id: &str,
+    controller_entity_id: &str,
+    control_model: &RobotCellControlModel,
+    control_summary: &RobotCellControlSummary,
+    contact_pairs: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    Ok(serde_json::json!({
+        "signalCount": control_summary.signal_count,
+        "controllerTransitionCount": control_summary.controller_transition_count,
+        "blockedSequenceDetected": control_summary.blocked_sequence_detected,
+        "blockedStateId": control_summary.blocked_state_id.clone(),
+        "controllerId": controller_entity_id,
+        "signalIds": control_model
+            .signals
+            .iter()
+            .map(|signal| robot_cell_signal_entity_id(cell_id, signal.id.trim_start_matches("sig_")))
+            .collect::<Vec<_>>(),
+        "states": control_model.controller.states.clone(),
+        "transitions": control_model.controller.transitions.clone(),
+        "contactPairs": contact_pairs,
+    }))
+}
+
 fn robot_cell_contact_pairs(cell_id: &str) -> Vec<SimulationContactPair> {
     let token = robot_cell_token(cell_id);
     vec![
@@ -2474,10 +2574,7 @@ fn robot_cell_contact_pairs(cell_id: &str) -> Vec<SimulationContactPair> {
     ]
 }
 
-fn robot_cell_model(
-    cell_id: &str,
-    safety_zones: &[SafetyZone],
-) -> RobotCellModel {
+fn robot_cell_model(cell_id: &str, safety_zones: &[SafetyZone]) -> RobotCellModel {
     RobotCellModel {
         id: cell_id.to_string(),
         scene_assembly_id: robot_cell_scene_assembly_entity_id(cell_id),
@@ -2775,13 +2872,12 @@ fn build_robot_cell_support_entities(cell: &EntityRecord) -> Result<Vec<EntityRe
     .map_err(|error| error.to_string())?;
     let sequence_id = robot_cell_sequence_entity_id(&cell.id);
     let target_models = robot_cell_target_models(&cell.id, &sequence_id, &raw_targets);
-    let targets =
-        validate_target_models(&cell.id, &sequence_id, &target_models).map_err(|error| error.to_string())?;
+    let targets = validate_target_models(&cell.id, &sequence_id, &target_models)
+        .map_err(|error| error.to_string())?;
     let validation = validate_sequence(&targets).map_err(|error| error.to_string())?;
     let target_preview = ordered_target_preview(&targets);
     let safety_clear = !evaluate_safety(&zones, &interlocks, "robot.move").inhibited;
-    let signal_definitions = robot_cell_signal_definitions(safety_clear);
-    let controller = robot_cell_controller_state_machine(&cell.id);
+    let control_model = robot_cell_control_model(&cell.id, safety_clear);
     let structure = robot_cell_model(&cell.id, &zones);
     let robot_model = robot_cell_robot_model(&cell.id);
     let equipment_models = robot_cell_equipment_models(&cell.id);
@@ -2798,7 +2894,11 @@ fn build_robot_cell_support_entities(cell: &EntityRecord) -> Result<Vec<EntityRe
         &structure.scene_assembly_id,
         &format!("{} / Scene", cell.name),
         serde_json::to_value(AssemblyData {
-            tags: vec!["robotics".to_string(), "scene".to_string(), "mvp".to_string()],
+            tags: vec![
+                "robotics".to_string(),
+                "scene".to_string(),
+                "mvp".to_string(),
+            ],
             ..AssemblyData::default()
         })
         .map_err(|error| error.to_string())?,
@@ -2874,7 +2974,7 @@ fn build_robot_cell_support_entities(cell: &EntityRecord) -> Result<Vec<EntityRe
             }
         }),
     ));
-    entities.extend(signal_definitions.iter().map(|signal| {
+    entities.extend(control_model.signals.iter().map(|signal| {
         sample_entity(
             "Signal",
             &robot_cell_signal_entity_id(&cell.id, signal.id.trim_start_matches("sig_")),
@@ -2903,11 +3003,11 @@ fn build_robot_cell_support_entities(cell: &EntityRecord) -> Result<Vec<EntityRe
         &format!("{} / Controller", cell.name),
         serde_json::json!({
             "cellId": cell.id,
-            "stateMachine": controller.clone(),
+            "stateMachine": control_model.controller.clone(),
             "tags": ["control", "state_machine"],
             "parameterSet": {
-                "stateCount": controller.states.len(),
-                "transitionCount": controller.transitions.len(),
+                "stateCount": control_model.controller.states.len(),
+                "transitionCount": control_model.controller.transitions.len(),
             }
         }),
     ));
@@ -2962,18 +3062,42 @@ fn controller_state_machine_from_entity(entity: &EntityRecord) -> Option<Control
     serde_json::from_value(entity.data.get("stateMachine")?.clone()).ok()
 }
 
+fn robot_cell_control_model_from_entities(
+    cell_id: &str,
+    signal_entities: &[EntityRecord],
+    controller_entity: &EntityRecord,
+) -> Result<RobotCellControlModel, String> {
+    let controller = controller_state_machine_from_entity(controller_entity)
+        .ok_or_else(|| "controller state machine missing".to_string())?;
+    let signals = signal_entities
+        .iter()
+        .map(signal_definition_from_entity)
+        .collect::<Option<Vec<_>>>()
+        .ok_or_else(|| "invalid signal entity found in robot cell control graph".to_string())?;
+    let control_model = RobotCellControlModel {
+        cell_id: cell_id.to_string(),
+        signals,
+        controller,
+    };
+    validate_robot_cell_control(&control_model).map_err(|error| error.to_string())?;
+    Ok(control_model)
+}
+
 fn build_robot_cell_entity(
     id: &str,
     name: &str,
 ) -> Result<(EntityRecord, RobotCellEntitySummary), String> {
     let sequence_id = robot_cell_sequence_entity_id(id);
     let target_models = robot_cell_target_models(id, &sequence_id, &sample_robot_targets());
-    let targets =
-        validate_target_models(id, &sequence_id, &target_models).map_err(|error| error.to_string())?;
+    let targets = validate_target_models(id, &sequence_id, &target_models)
+        .map_err(|error| error.to_string())?;
     let validation = validate_sequence(&targets).map_err(|error| error.to_string())?;
     let target_preview = ordered_target_preview(&targets);
     let safety_zones = sample_safety_zones();
     let safety_interlocks = sample_safety_interlocks();
+    let safety_clear = !evaluate_safety(&safety_zones, &safety_interlocks, "robot.move").inhibited;
+    let control_model = robot_cell_control_model(id, safety_clear);
+    let control_summary = robot_cell_control_summary(&control_model)?;
     let structure = robot_cell_model(id, &safety_zones);
     let robot_model = robot_cell_robot_model(id);
     let equipment_models = robot_cell_equipment_models(id);
@@ -2985,6 +3109,13 @@ fn build_robot_cell_entity(
         std::slice::from_ref(&sequence_model),
     )
     .map_err(|error| error.to_string())?;
+    let control_payload = robot_cell_control_payload(
+        id,
+        &robot_cell_controller_entity_id(id),
+        &control_model,
+        &control_summary,
+        serde_json::json!(robot_cell_contact_pairs(id)),
+    )?;
     let summary = RobotCellEntitySummary {
         scene_assembly_id: Some(structure.scene_assembly_id.clone()),
         target_preview: Some(target_preview.clone()),
@@ -2995,8 +3126,10 @@ fn build_robot_cell_entity(
         equipment_count: structure_summary.equipment_count,
         sequence_count: structure_summary.sequence_count,
         safety_zone_count: structure_summary.safety_zone_count,
-        signal_count: 4,
-        controller_transition_count: 3,
+        signal_count: control_summary.signal_count,
+        controller_transition_count: control_summary.controller_transition_count,
+        blocked_sequence_detected: control_summary.blocked_sequence_detected,
+        blocked_state_id: control_summary.blocked_state_id.clone(),
         warning_count: validation.warning_count,
     };
     let entity = sample_entity(
@@ -3033,18 +3166,7 @@ fn build_robot_cell_entity(
                 "warningCount": summary.warning_count,
                 "sequenceEntityId": sequence_model.id
             },
-            "control": {
-                "signalCount": summary.signal_count,
-                "controllerTransitionCount": summary.controller_transition_count,
-                "controllerId": robot_cell_controller_entity_id(id),
-                "signalIds": [
-                    robot_cell_signal_entity_id(id, "cycle_start"),
-                    robot_cell_signal_entity_id(id, "progress_gate"),
-                    robot_cell_signal_entity_id(id, "safety_clear"),
-                    robot_cell_signal_entity_id(id, "payload_released")
-                ],
-                "contactPairs": robot_cell_contact_pairs(id)
-            },
+            "control": control_payload,
             "safety": {
                 "zoneCount": summary.safety_zone_count,
                 "interlockCount": safety_interlocks.len(),
@@ -3075,8 +3197,9 @@ fn normalize_robot_target_entity_data(
     let order_index = parameters
         .get("orderIndex")
         .and_then(|value| value.as_u64())
-        .ok_or_else(|| "RobotTarget.parameterSet.orderIndex doit rester entier positif".to_string())?
-        as u32;
+        .ok_or_else(|| {
+            "RobotTarget.parameterSet.orderIndex doit rester entier positif".to_string()
+        })? as u32;
     let x_mm = parameters
         .get("xMm")
         .and_then(|value| value.as_f64())
@@ -3092,8 +3215,9 @@ fn normalize_robot_target_entity_data(
     let nominal_speed_mm_s = parameters
         .get("nominalSpeedMmS")
         .and_then(|value| value.as_u64())
-        .ok_or_else(|| "RobotTarget.parameterSet.nominalSpeedMmS doit rester entier positif".to_string())?
-        as u32;
+        .ok_or_else(|| {
+            "RobotTarget.parameterSet.nominalSpeedMmS doit rester entier positif".to_string()
+        })? as u32;
     let dwell_time_ms = parameters
         .get("dwellTimeMs")
         .and_then(|value| value.as_u64())
@@ -3117,16 +3241,18 @@ fn normalize_robot_target_entity_data(
             .ok_or_else(|| "RobotTarget.targetKey requis".to_string())?
             .to_string(),
         order_index,
-        pose: CartesianPose {
-            x_mm,
-            y_mm,
-            z_mm,
-        },
+        pose: CartesianPose { x_mm, y_mm, z_mm },
         nominal_speed_mm_s,
         dwell_time_ms,
     };
-    data.insert("orderIndex".to_string(), serde_json::json!(model.order_index));
-    data.insert("pose".to_string(), serde_json::to_value(model.pose).map_err(|error| error.to_string())?);
+    data.insert(
+        "orderIndex".to_string(),
+        serde_json::json!(model.order_index),
+    );
+    data.insert(
+        "pose".to_string(),
+        serde_json::to_value(model.pose).map_err(|error| error.to_string())?,
+    );
     data.insert(
         "nominalSpeedMmS".to_string(),
         serde_json::json!(model.nominal_speed_mm_s),
@@ -3151,6 +3277,58 @@ fn format_robot_target_entity_detail(model: &RobotTargetModel) -> String {
 }
 
 impl WorkspaceSession {
+    fn preview_robot_cell_control_update(&self, next_entity: &EntityRecord) -> Result<(), String> {
+        if !matches!(
+            next_entity.entity_type.as_str(),
+            "Signal" | "ControllerModel"
+        ) {
+            return Ok(());
+        }
+        let cell_id = next_entity
+            .data
+            .get("cellId")
+            .and_then(|value| value.as_str())
+            .ok_or_else(|| "control entity missing cellId".to_string())?;
+        let signal_entities = self
+            .graph
+            .document()
+            .nodes
+            .values()
+            .filter(|entity| entity.entity_type == "Signal")
+            .filter(|entity| {
+                entity.data.get("cellId").and_then(|value| value.as_str()) == Some(cell_id)
+            })
+            .map(|entity| {
+                if entity.id == next_entity.id {
+                    next_entity.clone()
+                } else {
+                    entity.clone()
+                }
+            })
+            .collect::<Vec<_>>();
+        let controller_entity = self
+            .graph
+            .document()
+            .nodes
+            .values()
+            .find(|entity| entity.entity_type == "ControllerModel")
+            .filter(|entity| {
+                entity.data.get("cellId").and_then(|value| value.as_str()) == Some(cell_id)
+            })
+            .map(|entity| {
+                if entity.id == next_entity.id {
+                    next_entity.clone()
+                } else {
+                    entity.clone()
+                }
+            })
+            .ok_or_else(|| "controller entity missing for robot cell".to_string())?;
+        let control_model =
+            robot_cell_control_model_from_entities(cell_id, &signal_entities, &controller_entity)?;
+        robot_cell_control_summary(&control_model)?;
+        Ok(())
+    }
+
     fn sync_robot_target_dependents(&mut self, target_entity: &EntityRecord) -> Result<(), String> {
         let target_model = robot_target_model_from_entity(target_entity)
             .ok_or_else(|| "RobotTarget invalide".to_string())?;
@@ -3161,7 +3339,8 @@ impl WorkspaceSession {
             .values()
             .filter_map(robot_target_model_from_entity)
             .filter(|model| {
-                model.cell_id == target_model.cell_id && model.sequence_id == target_model.sequence_id
+                model.cell_id == target_model.cell_id
+                    && model.sequence_id == target_model.sequence_id
             })
             .collect::<Vec<_>>();
         let ordered_targets = validate_target_models(
@@ -3178,41 +3357,74 @@ impl WorkspaceSession {
             .collect::<Vec<_>>();
         let target_preview = ordered_target_preview(&ordered_targets);
 
-        if let Some(sequence) = self.graph.document().nodes.get(&target_model.sequence_id).cloned() {
+        if let Some(sequence) = self
+            .graph
+            .document()
+            .nodes
+            .get(&target_model.sequence_id)
+            .cloned()
+        {
             let mut next_sequence = sequence;
             if let Some(data) = next_sequence.data.as_object_mut() {
-                data.insert("targetIds".to_string(), serde_json::json!(ordered_target_ids.clone()));
+                data.insert(
+                    "targetIds".to_string(),
+                    serde_json::json!(ordered_target_ids.clone()),
+                );
                 data.insert(
                     "targets".to_string(),
                     serde_json::to_value(&ordered_targets).map_err(|error| error.to_string())?,
                 );
-                data.insert("pathLengthMm".to_string(), serde_json::json!(validation.path_length_mm));
+                data.insert(
+                    "pathLengthMm".to_string(),
+                    serde_json::json!(validation.path_length_mm),
+                );
                 data.insert(
                     "estimatedCycleTimeMs".to_string(),
                     serde_json::json!(validation.estimated_cycle_time_ms),
                 );
-                data.insert("targetCount".to_string(), serde_json::json!(validation.target_count));
-                data.insert("targetPreview".to_string(), serde_json::json!(target_preview.clone()));
+                data.insert(
+                    "targetCount".to_string(),
+                    serde_json::json!(validation.target_count),
+                );
+                data.insert(
+                    "targetPreview".to_string(),
+                    serde_json::json!(target_preview.clone()),
+                );
             }
             self.graph
                 .apply_command(CoreCommand::ReplaceEntity(next_sequence))
                 .map_err(|error| error.to_string())?;
         }
 
-        if let Some(cell) = self.graph.document().nodes.get(&target_model.cell_id).cloned() {
+        if let Some(cell) = self
+            .graph
+            .document()
+            .nodes
+            .get(&target_model.cell_id)
+            .cloned()
+        {
             let mut next_cell = cell;
             if let Some(data) = next_cell.data.as_object_mut() {
-                data.insert("targetIds".to_string(), serde_json::json!(ordered_target_ids));
+                data.insert(
+                    "targetIds".to_string(),
+                    serde_json::json!(ordered_target_ids),
+                );
                 data.insert(
                     "targets".to_string(),
                     serde_json::to_value(&ordered_targets).map_err(|error| error.to_string())?,
                 );
-                data.insert("targetPreview".to_string(), serde_json::json!(target_preview.clone()));
-                if let Some(validation_data) =
-                    data.get_mut("sequenceValidation").and_then(|value| value.as_object_mut())
+                data.insert(
+                    "targetPreview".to_string(),
+                    serde_json::json!(target_preview.clone()),
+                );
+                if let Some(validation_data) = data
+                    .get_mut("sequenceValidation")
+                    .and_then(|value| value.as_object_mut())
                 {
-                    validation_data
-                        .insert("targetCount".to_string(), serde_json::json!(validation.target_count));
+                    validation_data.insert(
+                        "targetCount".to_string(),
+                        serde_json::json!(validation.target_count),
+                    );
                     validation_data.insert(
                         "pathLengthMm".to_string(),
                         serde_json::json!(validation.path_length_mm),
@@ -3225,13 +3437,19 @@ impl WorkspaceSession {
                         "estimatedCycleTimeMs".to_string(),
                         serde_json::json!(validation.estimated_cycle_time_ms),
                     );
-                    validation_data
-                        .insert("warningCount".to_string(), serde_json::json!(validation.warning_count));
+                    validation_data.insert(
+                        "warningCount".to_string(),
+                        serde_json::json!(validation.warning_count),
+                    );
                 }
-                if let Some(parameters) =
-                    data.get_mut("parameterSet").and_then(|value| value.as_object_mut())
+                if let Some(parameters) = data
+                    .get_mut("parameterSet")
+                    .and_then(|value| value.as_object_mut())
                 {
-                    parameters.insert("targetCount".to_string(), serde_json::json!(validation.target_count));
+                    parameters.insert(
+                        "targetCount".to_string(),
+                        serde_json::json!(validation.target_count),
+                    );
                     parameters.insert(
                         "estimatedCycleTimeMs".to_string(),
                         serde_json::json!(validation.estimated_cycle_time_ms),
@@ -3247,6 +3465,99 @@ impl WorkspaceSession {
 
         Ok(())
     }
+
+    fn sync_robot_cell_control_dependents(
+        &mut self,
+        cell_id: &str,
+    ) -> Result<RobotCellEntitySummary, String> {
+        let robot_cell = self
+            .graph
+            .document()
+            .nodes
+            .get(cell_id)
+            .cloned()
+            .ok_or_else(|| "robot cell missing for control sync".to_string())?;
+        let signal_entities = self
+            .graph
+            .document()
+            .nodes
+            .values()
+            .filter(|entity| entity.entity_type == "Signal")
+            .filter(|entity| {
+                entity.data.get("cellId").and_then(|value| value.as_str()) == Some(cell_id)
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        let controller_entity = self
+            .graph
+            .document()
+            .nodes
+            .values()
+            .find(|entity| entity.entity_type == "ControllerModel")
+            .filter(|entity| {
+                entity.data.get("cellId").and_then(|value| value.as_str()) == Some(cell_id)
+            })
+            .cloned()
+            .ok_or_else(|| "controller entity missing for robot cell".to_string())?;
+        let control_model =
+            robot_cell_control_model_from_entities(cell_id, &signal_entities, &controller_entity)?;
+        let control_summary = robot_cell_control_summary(&control_model)?;
+
+        let mut next_controller = controller_entity.clone();
+        if let Some(data) = next_controller.data.as_object_mut() {
+            data.insert(
+                "stateMachine".to_string(),
+                serde_json::to_value(&control_model.controller)
+                    .map_err(|error| error.to_string())?,
+            );
+            let parameter_set = data
+                .entry("parameterSet".to_string())
+                .or_insert_with(|| serde_json::json!({}));
+            if let Some(parameter_set) = parameter_set.as_object_mut() {
+                parameter_set.insert(
+                    "stateCount".to_string(),
+                    serde_json::json!(control_model.controller.states.len()),
+                );
+                parameter_set.insert(
+                    "transitionCount".to_string(),
+                    serde_json::json!(control_model.controller.transitions.len()),
+                );
+            }
+        }
+        if next_controller.data != controller_entity.data
+            || next_controller.name != controller_entity.name
+        {
+            self.graph
+                .apply_command(CoreCommand::ReplaceEntity(next_controller))
+                .map_err(|error| error.to_string())?;
+        }
+
+        let mut next_cell = robot_cell.clone();
+        if let Some(data) = next_cell.data.as_object_mut() {
+            let contact_pairs = data
+                .get("control")
+                .and_then(|value| value.get("contactPairs"))
+                .cloned()
+                .unwrap_or_else(|| serde_json::json!(robot_cell_contact_pairs(cell_id)));
+            data.insert(
+                "control".to_string(),
+                robot_cell_control_payload(
+                    cell_id,
+                    &controller_entity.id,
+                    &control_model,
+                    &control_summary,
+                    contact_pairs,
+                )?,
+            );
+        }
+        let summary = robot_cell_summary_from_entity(&next_cell)
+            .ok_or_else(|| "resume RobotCell invalide apres sync controle".to_string())?;
+        self.graph
+            .apply_command(CoreCommand::ReplaceEntity(next_cell))
+            .map_err(|error| error.to_string())?;
+
+        Ok(summary)
+    }
 }
 
 fn build_simulation_run_entity(
@@ -3259,12 +3570,8 @@ fn build_simulation_run_entity(
 ) -> Result<(EntityRecord, SimulationRunEntitySummary), String> {
     let robot_summary = robot_cell_summary_from_entity(robot_cell)
         .ok_or_else(|| "robot cell summary missing".to_string())?;
-    let controller = controller_state_machine_from_entity(controller_entity)
-        .ok_or_else(|| "controller state machine missing".to_string())?;
-    let signal_definitions = signal_entities
-        .iter()
-        .filter_map(signal_definition_from_entity)
-        .collect::<Vec<_>>();
+    let control_model =
+        robot_cell_control_model_from_entities(&robot_cell.id, signal_entities, controller_entity)?;
     let safety = robot_cell
         .data
         .get("safety")
@@ -3315,24 +3622,33 @@ fn build_simulation_run_entity(
         path_length_mm: robot_summary.path_length_mm,
         endpoint_count: endpoint_count as u32,
         safety_zone_count: robot_summary.safety_zone_count as u32,
-        signals: signal_definitions,
-        controller: Some(controller.clone()),
+        signals: control_model.signals.clone(),
+        controller: Some(control_model.controller.clone()),
         scheduled_signal_changes,
         contact_pairs: robot_cell_contact_pairs(&robot_cell.id),
     };
     let run = run_simulation(&request).map_err(|error| error.to_string())?;
     let summary = SimulationRunEntitySummary {
-        status: simulation_status_label(&run.status).to_string(),
-        collision_count: run.collision_count,
-        cycle_time_ms: run.cycle_time_ms,
-        max_tracking_error_mm: run.max_tracking_error_mm,
-        energy_estimate_j: run.energy_estimate_j,
-        blocked_sequence_detected: run.blocked_sequence_detected,
-        contact_count: run.contacts.len(),
-        signal_sample_count: run.signal_samples.len(),
-        controller_state_sample_count: run.controller_state_samples.len(),
-        timeline_sample_count: run.timeline_samples.len(),
+        status: simulation_status_label(&run.summary.status).to_string(),
+        collision_count: run.metrics.collision_count,
+        cycle_time_ms: run.metrics.cycle_time_ms,
+        max_tracking_error_mm: run.metrics.max_tracking_error_mm,
+        energy_estimate_j: run.metrics.energy_estimate_j,
+        blocked_sequence_detected: run.summary.blocked_sequence_detected,
+        blocked_state_id: run.summary.blocked_state_id.clone(),
+        contact_count: run.summary.contact_count,
+        signal_sample_count: run.summary.signal_sample_count,
+        controller_state_sample_count: run.summary.controller_state_sample_count,
+        timeline_sample_count: run.summary.timeline_sample_count,
+        job_status: "completed".to_string(),
+        job_phase: "completed".to_string(),
+        job_progress: 1.0,
     };
+    let signal_ids = control_model
+        .signals
+        .iter()
+        .map(|signal| signal.id.clone())
+        .collect::<Vec<_>>();
     let entity = sample_entity(
         "SimulationRun",
         id,
@@ -3341,36 +3657,43 @@ fn build_simulation_run_entity(
             "tags": ["simulation", "artifact", "mvp"],
             "robotCellId": robot_cell.id.clone(),
             "scenario": {
-                "name": request.scenario_name.clone(),
-                "seed": request.seed,
-                "engineVersion": request.engine_version.clone(),
-                "stepCount": request.step_count,
-                "endpointCount": request.endpoint_count,
-                "safetyZoneCount": request.safety_zone_count,
-                "signalCount": request.signals.len(),
-                "controllerId": controller_entity.id.clone(),
-                "contactPairCount": request.contact_pairs.len()
+                "name": run.scenario.name.clone(),
+                "seed": run.scenario.seed,
+                "engineVersion": run.scenario.engine_version.clone(),
+                "stepCount": run.scenario.step_count,
+                "plannedCycleTimeMs": run.scenario.planned_cycle_time_ms,
+                "pathLengthMm": run.scenario.path_length_mm,
+                "endpointCount": run.scenario.endpoint_count,
+                "safetyZoneCount": run.scenario.safety_zone_count,
+                "signalCount": run.scenario.signal_count,
+                "scheduledSignalChangeCount": run.scenario.scheduled_signal_change_count,
+                "contactPairCount": run.scenario.contact_pair_count,
+                "source": {
+                    "robotCellId": robot_cell.id.clone(),
+                    "controllerId": controller_entity.id.clone(),
+                    "signalIds": signal_ids,
+                }
             },
             "summary": {
                 "status": summary.status.clone(),
-                "seed": run.seed,
-                "engineVersion": run.engine_version.clone(),
-                "collisionCount": summary.collision_count,
-                "cycleTimeMs": summary.cycle_time_ms,
-                "maxTrackingErrorMm": summary.max_tracking_error_mm,
-                "energyEstimateJ": summary.energy_estimate_j,
                 "blockedSequenceDetected": summary.blocked_sequence_detected,
-                "blockedStateId": run.blocked_state_id.clone(),
+                "blockedStateId": summary.blocked_state_id.clone(),
                 "contactCount": summary.contact_count,
                 "signalSampleCount": summary.signal_sample_count,
                 "controllerStateSampleCount": summary.controller_state_sample_count,
                 "timelineSampleCount": summary.timeline_sample_count
             },
+            "metrics": {
+                "collisionCount": summary.collision_count,
+                "cycleTimeMs": summary.cycle_time_ms,
+                "maxTrackingErrorMm": summary.max_tracking_error_mm,
+                "energyEstimateJ": summary.energy_estimate_j
+            },
             "job": {
                 "jobId": format!("job_{}", id.trim_start_matches("ent_")),
-                "status": "completed",
-                "progress": 1.0,
-                "phase": "completed",
+                "status": summary.job_status.clone(),
+                "progress": summary.job_progress,
+                "phase": summary.job_phase.clone(),
                 "progressSamples": run.progress_samples,
                 "message": if summary.blocked_sequence_detected {
                     "simulation completed with blocked sequence"
@@ -3378,6 +3701,7 @@ fn build_simulation_run_entity(
                     "simulation completed successfully"
                 }
             },
+            "report": run.report,
             "timelineSamples": run.timeline_samples,
             "signalSamples": run.signal_samples,
             "controllerStateSamples": run.controller_state_samples,
@@ -3872,9 +4196,13 @@ fn validate_entity_change_set(
         let order_index = parameters
             .get("orderIndex")
             .and_then(|value| value.as_u64())
-            .ok_or_else(|| "RobotTarget.parameterSet.orderIndex doit rester entier positif".to_string())?;
+            .ok_or_else(|| {
+                "RobotTarget.parameterSet.orderIndex doit rester entier positif".to_string()
+            })?;
         if order_index == 0 {
-            return Err("RobotTarget.parameterSet.orderIndex doit rester strictement positif".to_string());
+            return Err(
+                "RobotTarget.parameterSet.orderIndex doit rester strictement positif".to_string(),
+            );
         }
         for coordinate in ["xMm", "yMm", "zMm"] {
             if !parameters
@@ -4022,6 +4350,14 @@ fn robot_cell_summary_from_entity(entity: &EntityRecord) -> Option<RobotCellEnti
             .and_then(|value| value.get("controllerTransitionCount"))
             .and_then(|value| value.as_u64())
             .unwrap_or(0) as usize,
+        blocked_sequence_detected: control
+            .and_then(|value| value.get("blockedSequenceDetected"))
+            .and_then(|value| value.as_bool())
+            .unwrap_or(false),
+        blocked_state_id: control
+            .and_then(|value| value.get("blockedStateId"))
+            .and_then(|value| value.as_str())
+            .map(str::to_string),
         warning_count: validation.get("warningCount")?.as_u64()? as usize,
     })
 }
@@ -4048,16 +4384,22 @@ fn simulation_run_summary_from_entity(entity: &EntityRecord) -> Option<Simulatio
     }
 
     let summary = entity.data.get("summary")?;
+    let metrics = entity.data.get("metrics").unwrap_or(summary);
+    let job = entity.data.get("job");
     Some(SimulationRunEntitySummary {
         status: string_from_value(summary, "status")?,
-        collision_count: summary.get("collisionCount")?.as_u64()? as u32,
-        cycle_time_ms: summary.get("cycleTimeMs")?.as_u64()? as u32,
-        max_tracking_error_mm: number_from_value(summary, "maxTrackingErrorMm")?,
-        energy_estimate_j: number_from_value(summary, "energyEstimateJ")?,
+        collision_count: metrics.get("collisionCount")?.as_u64()? as u32,
+        cycle_time_ms: metrics.get("cycleTimeMs")?.as_u64()? as u32,
+        max_tracking_error_mm: number_from_value(metrics, "maxTrackingErrorMm")?,
+        energy_estimate_j: number_from_value(metrics, "energyEstimateJ")?,
         blocked_sequence_detected: summary
             .get("blockedSequenceDetected")
             .and_then(|value| value.as_bool())
             .unwrap_or(false),
+        blocked_state_id: summary
+            .get("blockedStateId")
+            .and_then(|value| value.as_str())
+            .map(str::to_string),
         contact_count: summary
             .get("contactCount")
             .and_then(|value| value.as_u64())
@@ -4091,7 +4433,31 @@ fn simulation_run_summary_from_entity(entity: &EntityRecord) -> Option<Simulatio
                     .map(|entries| entries.len() as u64)
                     .unwrap_or(0)
             }) as usize,
-        timeline_sample_count: summary.get("timelineSampleCount")?.as_u64()? as usize,
+        timeline_sample_count: summary
+            .get("timelineSampleCount")
+            .and_then(|value| value.as_u64())
+            .unwrap_or_else(|| {
+                entity
+                    .data
+                    .get("timelineSamples")
+                    .and_then(|value| value.as_array())
+                    .map(|entries| entries.len() as u64)
+                    .unwrap_or(0)
+            }) as usize,
+        job_status: job
+            .and_then(|value| value.get("status"))
+            .and_then(|value| value.as_str())
+            .unwrap_or("completed")
+            .to_string(),
+        job_phase: job
+            .and_then(|value| value.get("phase"))
+            .and_then(|value| value.as_str())
+            .unwrap_or("completed")
+            .to_string(),
+        job_progress: job
+            .and_then(|value| value.get("progress"))
+            .and_then(|value| value.as_f64())
+            .unwrap_or(1.0),
     })
 }
 
@@ -4126,7 +4492,8 @@ fn sensor_rig_summary_from_entity(entity: &EntityRecord) -> Option<SensorRigEnti
         lidar_count: mounts
             .iter()
             .filter(|mount| {
-                mount.get("sensorKind")
+                mount
+                    .get("sensorKind")
                     .and_then(|value| value.as_str())
                     .is_some_and(|kind| kind.contains("lidar"))
             })
@@ -4248,9 +4615,8 @@ fn generic_entity_detail(entity: &EntityRecord) -> Option<String> {
                 .and_then(|value| value.as_u64())
                 .unwrap_or(0)
         )),
-        "RobotTarget" => robot_target_model_from_entity(entity).map(|model| {
-            format_robot_target_entity_detail(&model)
-        }),
+        "RobotTarget" => robot_target_model_from_entity(entity)
+            .map(|model| format_robot_target_entity_detail(&model)),
         "AiSession" => Some(format!(
             "{} | {} suggestion(s)",
             entity
@@ -4320,30 +4686,42 @@ fn format_assembly_entity_detail(summary: &AssemblyEntitySummary) -> String {
 }
 
 fn format_robot_cell_entity_detail(summary: &RobotCellEntitySummary) -> String {
-    let scene = summary
-        .scene_assembly_id
-        .as_deref()
-        .unwrap_or("scene");
+    let scene = summary.scene_assembly_id.as_deref().unwrap_or("scene");
     let preview = summary
         .target_preview
         .as_deref()
         .map(|value| format!(" | {value}"))
         .unwrap_or_default();
+    let blocked = if summary.blocked_sequence_detected {
+        format!(
+            " | blocked {}",
+            summary.blocked_state_id.as_deref().unwrap_or("state")
+        )
+    } else {
+        String::new()
+    };
     format!(
-        "{} pts | {} equip | {} sig | {} | {} ms{}",
+        "{} pts | {} equip | {} sig | {} tr | {} | {} ms{}{}",
         summary.target_count,
         summary.equipment_count,
         summary.signal_count,
+        summary.controller_transition_count,
         scene,
         summary.estimated_cycle_time_ms,
+        blocked,
         preview
     )
 }
 
 fn format_simulation_run_entity_detail(summary: &SimulationRunEntitySummary) -> String {
     format!(
-        "{} | {} ms | {} coll | {} contact",
-        summary.status, summary.cycle_time_ms, summary.collision_count, summary.contact_count
+        "{} | {} {:.0}% | {} ms | {} coll | {} contact",
+        summary.status,
+        summary.job_phase,
+        summary.job_progress * 100.0,
+        summary.cycle_time_ms,
+        summary.collision_count,
+        summary.contact_count
     )
 }
 
@@ -4801,12 +5179,8 @@ fn build_native_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<tauri::men
         "Compare As-Built",
         None,
     )?;
-    let simulation_optimization = build_menu_item(
-        app,
-        "optimization.run.start",
-        "Run Optimization",
-        None,
-    )?;
+    let simulation_optimization =
+        build_menu_item(app, "optimization.run.start", "Run Optimization", None)?;
     let simulation_menu = SubmenuBuilder::new(app, "Simulation")
         .item(&simulation_start)
         .item(&simulation_stop)
@@ -5048,8 +5422,16 @@ mod tests {
                 .as_deref()
                 .is_some_and(|value| value.contains("revolute"))
         );
-        assert!(assembly.data["occurrences"].as_array().is_some_and(|items| items.len() >= 2));
-        assert!(assembly.data["joints"].as_array().is_some_and(|items| items.len() == 1));
+        assert!(
+            assembly.data["occurrences"]
+                .as_array()
+                .is_some_and(|items| items.len() >= 2)
+        );
+        assert!(
+            assembly.data["joints"]
+                .as_array()
+                .is_some_and(|items| items.len() == 1)
+        );
         assert!(
             assembly.data["mateConstraints"]
                 .as_array()
@@ -5064,18 +5446,30 @@ mod tests {
                 .as_ref()
                 .is_some_and(|detail| detail.contains("joint_001"))
         );
-        assert!(snapshot.recent_activity.iter().any(|entry| {
-            entry.channel == "command" && entry.kind == "assembly.mate.add"
-        }));
-        assert!(snapshot.recent_activity.iter().any(|entry| {
-            entry.channel == "command" && entry.kind == "joint.create"
-        }));
-        assert!(snapshot.recent_activity.iter().any(|entry| {
-            entry.channel == "command" && entry.kind == "joint.state.set"
-        }));
-        assert!(snapshot.recent_activity.iter().any(|entry| {
-            entry.channel == "event" && entry.kind == "joint.state.changed"
-        }));
+        assert!(
+            snapshot
+                .recent_activity
+                .iter()
+                .any(|entry| { entry.channel == "command" && entry.kind == "assembly.mate.add" })
+        );
+        assert!(
+            snapshot
+                .recent_activity
+                .iter()
+                .any(|entry| { entry.channel == "command" && entry.kind == "joint.create" })
+        );
+        assert!(
+            snapshot
+                .recent_activity
+                .iter()
+                .any(|entry| { entry.channel == "command" && entry.kind == "joint.state.set" })
+        );
+        assert!(
+            snapshot
+                .recent_activity
+                .iter()
+                .any(|entry| { entry.channel == "event" && entry.kind == "joint.state.changed" })
+        );
     }
 
     #[test]
@@ -5100,41 +5494,71 @@ mod tests {
         assert_eq!(summary.target_count, 3);
         assert!(summary.path_length_mm > 850.0);
         assert!(summary.estimated_cycle_time_ms > 3_000);
-        assert_eq!(summary.target_preview.as_deref(), Some("pick -> transfer -> place"));
+        assert_eq!(
+            summary.target_preview.as_deref(),
+            Some("pick -> transfer -> place")
+        );
         assert_eq!(summary.equipment_count, 3);
         assert_eq!(summary.sequence_count, 1);
-        assert_eq!(summary.scene_assembly_id.as_deref(), Some("ent_asm_cell_001"));
+        assert_eq!(summary.signal_count, 5);
+        assert_eq!(summary.controller_transition_count, 3);
+        assert!(summary.blocked_sequence_detected);
+        assert_eq!(summary.blocked_state_id.as_deref(), Some("idle"));
+        assert_eq!(
+            summary.scene_assembly_id.as_deref(),
+            Some("ent_asm_cell_001")
+        );
         assert_eq!(robot_cell.data["sceneAssemblyId"], "ent_asm_cell_001");
         assert_eq!(
-            robot_cell
-                .data["equipmentIds"]
+            robot_cell.data["equipmentIds"]
                 .as_array()
                 .map(|entries| entries.len()),
             Some(3)
         );
         assert_eq!(
-            robot_cell
-                .data["sequenceIds"]
+            robot_cell.data["sequenceIds"]
                 .as_array()
                 .map(|entries| entries.len()),
             Some(1)
         );
         assert_eq!(
-            robot_cell
-                .data["targetIds"]
+            robot_cell.data["targetIds"]
                 .as_array()
                 .map(|entries| entries.len()),
             Some(3)
         );
-        assert_eq!(robot_cell.data["targetPreview"], "pick -> transfer -> place");
-        assert!(snapshot
-            .entities
-            .iter()
-            .any(|entity| entity.entity_type == "Assembly" && entity.id == "ent_asm_cell_001"));
-        assert!(snapshot
-            .entities
-            .iter()
-            .any(|entity| entity.entity_type == "RobotModel" && entity.id == "ent_robot_001"));
+        assert_eq!(robot_cell.data["control"]["signalCount"], 5);
+        assert_eq!(robot_cell.data["control"]["controllerTransitionCount"], 3);
+        assert_eq!(robot_cell.data["control"]["blockedSequenceDetected"], true);
+        assert_eq!(robot_cell.data["control"]["blockedStateId"], "idle");
+        assert_eq!(
+            robot_cell.data["control"]["states"]
+                .as_array()
+                .map(|entries| entries.len()),
+            Some(4)
+        );
+        assert_eq!(
+            robot_cell.data["control"]["transitions"]
+                .as_array()
+                .map(|entries| entries.len()),
+            Some(3)
+        );
+        assert_eq!(
+            robot_cell.data["targetPreview"],
+            "pick -> transfer -> place"
+        );
+        assert!(
+            snapshot
+                .entities
+                .iter()
+                .any(|entity| entity.entity_type == "Assembly" && entity.id == "ent_asm_cell_001")
+        );
+        assert!(
+            snapshot
+                .entities
+                .iter()
+                .any(|entity| entity.entity_type == "RobotModel" && entity.id == "ent_robot_001")
+        );
         assert_eq!(
             snapshot
                 .entities
@@ -5143,10 +5567,12 @@ mod tests {
                 .count(),
             3
         );
-        assert!(snapshot
-            .entities
-            .iter()
-            .any(|entity| entity.entity_type == "RobotSequence" && entity.id == "ent_seq_001"));
+        assert!(
+            snapshot
+                .entities
+                .iter()
+                .any(|entity| entity.entity_type == "RobotSequence" && entity.id == "ent_seq_001")
+        );
         assert_eq!(
             snapshot
                 .entities
@@ -5174,9 +5600,12 @@ mod tests {
                 && entry.kind == "entity.created"
                 && entry.target_id.as_deref() == Some("ent_ctrl_001")
         }));
-        assert!(snapshot.recent_activity.iter().any(|entry| {
-            entry.channel == "event" && entry.kind == "assembly.solved"
-        }));
+        assert!(
+            snapshot
+                .recent_activity
+                .iter()
+                .any(|entry| { entry.channel == "event" && entry.kind == "assembly.solved" })
+        );
     }
 
     #[test]
@@ -5203,6 +5632,70 @@ mod tests {
         assert_eq!(summary.collision_count, 0);
         assert!(summary.cycle_time_ms > 3_000);
         assert!(summary.timeline_sample_count >= 10);
+        assert_eq!(summary.job_status, "completed");
+        assert_eq!(summary.job_phase, "completed");
+        assert_eq!(summary.job_progress, 1.0);
+        assert_eq!(
+            simulation
+                .data
+                .get("scenario")
+                .and_then(|value| value.get("seed"))
+                .and_then(|value| value.as_u64()),
+            Some(308)
+        );
+        assert_eq!(
+            simulation
+                .data
+                .get("scenario")
+                .and_then(|value| value.get("stepCount"))
+                .and_then(|value| value.as_u64()),
+            Some(12)
+        );
+        assert_eq!(
+            simulation
+                .data
+                .get("metrics")
+                .and_then(|value| value.get("cycleTimeMs"))
+                .and_then(|value| value.as_u64()),
+            Some(summary.cycle_time_ms as u64)
+        );
+        assert_eq!(
+            simulation
+                .data
+                .get("job")
+                .and_then(|value| value.get("progressSamples"))
+                .and_then(|value| value.as_array())
+                .map(|samples| samples.len()),
+            Some(4)
+        );
+        assert_eq!(
+            simulation
+                .data
+                .get("report")
+                .and_then(|value| value.get("status"))
+                .and_then(|value| value.as_str()),
+            Some("completed")
+        );
+        assert!(
+            simulation
+                .data
+                .get("report")
+                .and_then(|value| value.get("headline"))
+                .and_then(|value| value.as_str())
+                .is_some_and(|headline| headline.contains("Run nominal"))
+        );
+        assert!(
+            snapshot
+                .recent_activity
+                .iter()
+                .any(|entry| entry.kind == "simulation.run.queued")
+        );
+        assert!(
+            snapshot
+                .recent_activity
+                .iter()
+                .any(|entry| entry.kind == "simulation.run.trace_persisted")
+        );
         assert!(
             snapshot
                 .recent_activity
@@ -5282,6 +5775,131 @@ mod tests {
     }
 
     #[test]
+    fn simulation_run_round_trips_with_job_metrics_and_progress_samples() {
+        let mut session = WorkspaceSession::load_fixture(DEFAULT_FIXTURE_ID)
+            .expect("fixture-backed session should load");
+        session
+            .execute_command("simulation.run.start")
+            .expect("simulation command should run");
+
+        let output_path = save_document_copy(
+            "test-saves",
+            "fixture:simulation-run",
+            session.graph.document(),
+        )
+        .expect("save should work");
+        let reloaded =
+            faero_storage::load_project(&output_path).expect("saved project should reload");
+        let simulation = reloaded
+            .nodes
+            .values()
+            .find(|entity| entity.entity_type == "SimulationRun")
+            .expect("simulation run should persist");
+
+        assert_eq!(
+            simulation
+                .data
+                .get("scenario")
+                .and_then(|value| value.get("engineVersion"))
+                .and_then(|value| value.as_str()),
+            Some("faero-sim@0.2.0")
+        );
+        assert_eq!(
+            simulation
+                .data
+                .get("metrics")
+                .and_then(|value| value.get("collisionCount"))
+                .and_then(|value| value.as_u64()),
+            Some(0)
+        );
+        assert_eq!(
+            simulation
+                .data
+                .get("job")
+                .and_then(|value| value.get("progressSamples"))
+                .and_then(|value| value.as_array())
+                .map(|samples| samples.len()),
+            Some(4)
+        );
+        assert_eq!(
+            simulation
+                .data
+                .get("report")
+                .and_then(|value| value.get("status"))
+                .and_then(|value| value.as_str()),
+            Some("completed")
+        );
+        assert!(
+            simulation
+                .data
+                .get("report")
+                .and_then(|value| value.get("recommendedActions"))
+                .and_then(|value| value.as_array())
+                .is_some_and(|actions| !actions.is_empty())
+        );
+
+        fs::remove_dir_all(output_path).expect("saved test artifact should be removable");
+    }
+
+    #[test]
+    fn simulation_run_can_persist_localized_collision_contacts_and_report() {
+        let mut session = WorkspaceSession::load_fixture(DEFAULT_FIXTURE_ID)
+            .expect("fixture-backed session should load");
+
+        session
+            .execute_command("entity.create.external_endpoint")
+            .expect("first endpoint should be created");
+        session
+            .execute_command("entity.create.external_endpoint")
+            .expect("second endpoint should be created");
+        session
+            .execute_command("simulation.run.start")
+            .expect("simulation command should run");
+
+        let simulation = session
+            .snapshot()
+            .entities
+            .into_iter()
+            .find(|entity| entity.entity_type == "SimulationRun")
+            .expect("simulation run should exist");
+        let contacts = simulation
+            .data
+            .get("contacts")
+            .and_then(|value| value.as_array())
+            .expect("contacts should persist");
+        let first_contact = contacts
+            .first()
+            .expect("collision run should expose contacts");
+
+        assert_eq!(
+            simulation
+                .data
+                .get("report")
+                .and_then(|value| value.get("status"))
+                .and_then(|value| value.as_str()),
+            Some("collided")
+        );
+        assert!(
+            simulation
+                .data
+                .get("report")
+                .and_then(|value| value.get("criticalEventIds"))
+                .and_then(|value| value.as_array())
+                .is_some_and(|ids| !ids.is_empty())
+        );
+        assert!(
+            first_contact
+                .get("locationLabel")
+                .and_then(|value| value.as_str())
+                .is_some_and(|label| label.contains("pair_"))
+        );
+        assert_eq!(
+            first_contact.get("phase").and_then(|value| value.as_str()),
+            Some("running")
+        );
+    }
+
+    #[test]
     fn import_command_creates_a_new_editable_session() {
         let mut session = WorkspaceSession::load_fixture(DEFAULT_FIXTURE_ID)
             .expect("fixture-backed session should load");
@@ -5310,7 +5928,7 @@ mod tests {
     }
 
     #[test]
-    fn generic_property_updates_handle_signal_enum_and_nested_fields() {
+    fn text_signal_property_updates_preserve_control_summary() {
         let mut session = WorkspaceSession::empty("Session");
         session
             .execute_command("entity.create.robot_cell")
@@ -5320,7 +5938,7 @@ mod tests {
             .document()
             .nodes
             .values()
-            .find(|entity| entity.entity_type == "Signal")
+            .find(|entity| entity.id == "ent_sig_001_operator_mode")
             .cloned()
             .expect("signal should exist");
 
@@ -5328,29 +5946,155 @@ mod tests {
             .update_entity_properties(&EntityPropertyUpdateInput {
                 entity_id: signal.id.clone(),
                 changes: serde_json::json!({
-                    "name": "Progress Gate Updated",
+                    "name": "Operator Mode Updated",
                     "tags": ["control", "edited"],
                     "kind": "text",
-                    "currentValue": "ready",
+                    "currentValue": "manual",
                     "parameterSet.unit": "label",
-                    "parameterSet.thresholds": ["ready", "done"]
+                    "parameterSet.thresholds": ["auto", "manual"]
                 }),
             })
             .expect("signal should update");
 
-        let updated = session
-            .snapshot()
+        let snapshot = session.snapshot();
+        let updated = snapshot
             .entities
-            .into_iter()
+            .iter()
             .find(|entity| entity.id == signal.id)
             .expect("updated signal should exist");
+        let robot_cell = snapshot
+            .entities
+            .iter()
+            .find(|entity| entity.id == "ent_cell_001")
+            .expect("robot cell should still exist");
 
         assert_eq!(result.status, "applied");
-        assert_eq!(updated.name, "Progress Gate Updated");
+        assert_eq!(updated.name, "Operator Mode Updated");
         assert_eq!(updated.data["kind"], "text");
-        assert_eq!(updated.data["currentValue"], "ready");
+        assert_eq!(updated.data["currentValue"], "manual");
         assert_eq!(updated.data["parameterSet"]["unit"], "label");
-        assert_eq!(updated.data["parameterSet"]["thresholds"][0], "ready");
+        assert_eq!(updated.data["parameterSet"]["thresholds"][0], "auto");
+        assert_eq!(robot_cell.data["control"]["blockedStateId"], "idle");
+    }
+
+    #[test]
+    fn boolean_and_scalar_signal_updates_recompute_robot_cell_control_summary() {
+        let mut session = WorkspaceSession::empty("Session");
+        session
+            .execute_command("entity.create.robot_cell")
+            .expect("robot cell should be created");
+
+        session
+            .update_entity_properties(&EntityPropertyUpdateInput {
+                entity_id: "ent_sig_001_cycle_start".to_string(),
+                changes: serde_json::json!({
+                    "currentValue": true
+                }),
+            })
+            .expect("boolean signal should update");
+
+        let snapshot = session.snapshot();
+        let robot_cell = snapshot
+            .entities
+            .iter()
+            .find(|entity| entity.id == "ent_cell_001")
+            .expect("robot cell should exist");
+        let summary = robot_cell
+            .robot_cell_summary
+            .as_ref()
+            .expect("robot cell summary should exist");
+        assert!(summary.blocked_sequence_detected);
+        assert_eq!(summary.blocked_state_id.as_deref(), Some("place"));
+
+        session
+            .update_entity_properties(&EntityPropertyUpdateInput {
+                entity_id: "ent_sig_001_progress_gate".to_string(),
+                changes: serde_json::json!({
+                    "currentValue": 1.0
+                }),
+            })
+            .expect("scalar signal should update");
+
+        let snapshot = session.snapshot();
+        let robot_cell = snapshot
+            .entities
+            .iter()
+            .find(|entity| entity.id == "ent_cell_001")
+            .expect("robot cell should exist");
+        let summary = robot_cell
+            .robot_cell_summary
+            .as_ref()
+            .expect("robot cell summary should exist");
+        assert!(!summary.blocked_sequence_detected);
+        assert_eq!(summary.blocked_state_id, None);
+    }
+
+    #[test]
+    fn incompatible_signal_kind_updates_are_rejected_when_controller_refs_break() {
+        let mut session = WorkspaceSession::empty("Session");
+        session
+            .execute_command("entity.create.robot_cell")
+            .expect("robot cell should be created");
+
+        let error = match session.update_entity_properties(&EntityPropertyUpdateInput {
+            entity_id: "ent_sig_001_progress_gate".to_string(),
+            changes: serde_json::json!({
+                "kind": "text",
+                "currentValue": "ready"
+            }),
+        }) {
+            Ok(_) => panic!("invalid controller graph should be rejected"),
+            Err(error) => error,
+        };
+
+        assert!(error.contains("incompatible"));
+    }
+
+    #[test]
+    fn controller_updates_recompute_robot_cell_control_summary() {
+        let mut session = WorkspaceSession::empty("Session");
+        session
+            .execute_command("entity.create.robot_cell")
+            .expect("robot cell should be created");
+
+        let controller = session
+            .graph
+            .document()
+            .nodes
+            .values()
+            .find(|entity| entity.id == "ent_ctrl_001")
+            .cloned()
+            .expect("controller should exist");
+        let mut state_machine: ControllerStateMachine =
+            serde_json::from_value(controller.data["stateMachine"].clone())
+                .expect("state machine should deserialize");
+        state_machine.transitions.pop();
+
+        let result = session
+            .update_entity_properties(&EntityPropertyUpdateInput {
+                entity_id: controller.id,
+                changes: serde_json::json!({
+                    "stateMachine": state_machine
+                }),
+            })
+            .expect("controller update should apply");
+
+        let snapshot = session.snapshot();
+        let robot_cell = snapshot
+            .entities
+            .iter()
+            .find(|entity| entity.id == "ent_cell_001")
+            .expect("robot cell should still exist");
+        let summary = robot_cell
+            .robot_cell_summary
+            .as_ref()
+            .expect("robot cell summary should exist");
+
+        assert_eq!(result.status, "applied");
+        assert_eq!(summary.controller_transition_count, 2);
+        assert!(summary.blocked_sequence_detected);
+        assert_eq!(summary.blocked_state_id.as_deref(), Some("idle"));
+        assert_eq!(robot_cell.data["control"]["controllerTransitionCount"], 2);
     }
 
     #[test]
@@ -5390,7 +6134,10 @@ mod tests {
             .expect("robot sequence should still exist");
 
         assert_eq!(result.status, "applied");
-        assert_eq!(robot_cell.data["targetPreview"], "pick -> place -> transfer");
+        assert_eq!(
+            robot_cell.data["targetPreview"],
+            "pick -> place -> transfer"
+        );
         assert_eq!(
             robot_cell.data["targetIds"].as_array().map(|entries| {
                 entries
@@ -5554,26 +6301,36 @@ mod tests {
         assert_eq!(commissioning.status, "applied");
         assert_eq!(comparison.status, "applied");
         assert_eq!(optimization.status, "applied");
-        assert!(snapshot
-            .entities
-            .iter()
-            .any(|entity| entity.sensor_rig_summary.is_some()));
-        assert!(snapshot
-            .entities
-            .iter()
-            .any(|entity| entity.perception_run_summary.is_some()));
-        assert!(snapshot
-            .entities
-            .iter()
-            .any(|entity| entity.commissioning_session_summary.is_some()));
-        assert!(snapshot
-            .entities
-            .iter()
-            .any(|entity| entity.as_built_comparison_summary.is_some()));
-        assert!(snapshot
-            .entities
-            .iter()
-            .any(|entity| entity.optimization_study_summary.is_some()));
+        assert!(
+            snapshot
+                .entities
+                .iter()
+                .any(|entity| entity.sensor_rig_summary.is_some())
+        );
+        assert!(
+            snapshot
+                .entities
+                .iter()
+                .any(|entity| entity.perception_run_summary.is_some())
+        );
+        assert!(
+            snapshot
+                .entities
+                .iter()
+                .any(|entity| entity.commissioning_session_summary.is_some())
+        );
+        assert!(
+            snapshot
+                .entities
+                .iter()
+                .any(|entity| entity.as_built_comparison_summary.is_some())
+        );
+        assert!(
+            snapshot
+                .entities
+                .iter()
+                .any(|entity| entity.optimization_study_summary.is_some())
+        );
     }
 
     #[test]
@@ -5591,22 +6348,30 @@ mod tests {
         let snapshot = session.snapshot();
 
         assert_eq!(snapshot.endpoints.len(), 6);
-        assert!(snapshot
-            .endpoints
-            .iter()
-            .any(|endpoint| endpoint.endpoint_type == "ros2"));
-        assert!(snapshot
-            .endpoints
-            .iter()
-            .any(|endpoint| endpoint.endpoint_type == "opcua"));
-        assert!(snapshot
-            .endpoints
-            .iter()
-            .any(|endpoint| endpoint.endpoint_type == "bluetooth_le"));
+        assert!(
+            snapshot
+                .endpoints
+                .iter()
+                .any(|endpoint| endpoint.endpoint_type == "ros2")
+        );
+        assert!(
+            snapshot
+                .endpoints
+                .iter()
+                .any(|endpoint| endpoint.endpoint_type == "opcua")
+        );
+        assert!(
+            snapshot
+                .endpoints
+                .iter()
+                .any(|endpoint| endpoint.endpoint_type == "bluetooth_le")
+        );
         assert_eq!(replay.status, "applied");
-        assert!(snapshot
-            .entities
-            .iter()
-            .any(|entity| entity.entity_type == "IndustrialReplay"));
+        assert!(
+            snapshot
+                .entities
+                .iter()
+                .any(|entity| entity.entity_type == "IndustrialReplay")
+        );
     }
 }

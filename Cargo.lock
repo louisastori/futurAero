@@ -168,6 +168,7 @@ dependencies = [
 name = "faero-robotics"
 version = "0.1.0"
 dependencies = [
+ "faero-types",
  "serde",
  "thiserror",
 ]
@@ -183,6 +184,7 @@ dependencies = [
 name = "faero-sim"
 version = "0.1.0"
 dependencies = [
+ "faero-robotics",
  "faero-types",
  "serde",
  "thiserror",

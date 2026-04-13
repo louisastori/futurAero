@@ -299,6 +299,7 @@ fn write_simulation_run_artifacts(
             "name": node.name,
             "summaryRef": format!("simulations/runs/{}/summary.json", node.id),
             "metricsRef": format!("simulations/runs/{}/metrics.json", node.id),
+            "reportRef": format!("simulations/runs/{}/report.json", node.id),
             "timelineRef": format!("simulations/runs/{}/timeline.jsonl", node.id),
             "signalsRef": format!("simulations/runs/{}/signals.jsonl", node.id),
             "controllerRef": format!("simulations/runs/{}/controller.jsonl", node.id),
@@ -314,45 +315,12 @@ fn write_simulation_run_artifacts(
         if let Some(summary) = node.data.get("summary") {
             write_json_value(run_root.join("summary.json"), summary)?;
         }
-        let metrics = serde_json::json!({
-            "seed": node
-                .data
-                .get("scenario")
-                .and_then(|scenario| scenario.get("seed"))
-                .cloned()
-                .unwrap_or(Value::Null),
-            "engineVersion": node
-                .data
-                .get("scenario")
-                .and_then(|scenario| scenario.get("engineVersion"))
-                .cloned()
-                .unwrap_or(Value::Null),
-            "cycleTimeMs": node
-                .data
-                .get("summary")
-                .and_then(|summary| summary.get("cycleTimeMs"))
-                .cloned()
-                .unwrap_or(Value::Null),
-            "collisionCount": node
-                .data
-                .get("summary")
-                .and_then(|summary| summary.get("collisionCount"))
-                .cloned()
-                .unwrap_or(Value::Null),
-            "blockedSequenceDetected": node
-                .data
-                .get("summary")
-                .and_then(|summary| summary.get("blockedSequenceDetected"))
-                .cloned()
-                .unwrap_or(Value::Null),
-            "energyEstimateJ": node
-                .data
-                .get("summary")
-                .and_then(|summary| summary.get("energyEstimateJ"))
-                .cloned()
-                .unwrap_or(Value::Null),
-        });
-        write_json_value(run_root.join("metrics.json"), &metrics)?;
+        if let Some(metrics) = node.data.get("metrics") {
+            write_json_value(run_root.join("metrics.json"), metrics)?;
+        }
+        if let Some(report) = node.data.get("report") {
+            write_json_value(run_root.join("report.json"), report)?;
+        }
         write_jsonl_array_artifact(
             run_root.join("timeline.jsonl"),
             node.data.get("timelineSamples"),
@@ -908,21 +876,59 @@ mod tests {
                     "scenario": {
                         "name": "Cellule Demo",
                         "seed": 42,
-                        "engineVersion": "faero-sim@0.2.0"
+                        "engineVersion": "faero-sim@0.2.0",
+                        "stepCount": 12,
+                        "source": {
+                            "robotCellId": "ent_cell_001",
+                            "controllerId": "ent_ctrl_001",
+                            "signalIds": ["ent_sig_001"]
+                        }
                     },
                     "summary": {
                         "status": "warning",
+                        "blockedSequenceDetected": true,
+                        "blockedStateId": "wait_clear",
+                        "contactCount": 1,
+                        "signalSampleCount": 1,
+                        "controllerStateSampleCount": 1,
+                        "timelineSampleCount": 1
+                    },
+                    "metrics": {
                         "collisionCount": 1,
                         "cycleTimeMs": 3655,
                         "maxTrackingErrorMm": 0.54,
-                        "energyEstimateJ": 75.32,
-                        "blockedSequenceDetected": true,
-                        "blockedStateId": "wait_clear"
+                        "energyEstimateJ": 75.32
+                    },
+                    "report": {
+                        "status": "collided",
+                        "headline": "Collision critique sur pair_fixture | ent_tool_001 x ent_fixture_001",
+                        "findings": [
+                            "1 collision(s) detectee(s) sur pair_fixture | ent_tool_001 x ent_fixture_001.",
+                            "Instant critique a t=1460 ms | overlap 0.63 mm | phase running."
+                        ],
+                        "criticalEventIds": ["collision-4-pair_fixture"],
+                        "recommendedActions": [
+                            "Inspecter la paire pair_fixture autour de pair_fixture | ent_tool_001 x ent_fixture_001.",
+                            "Rejouer un run apres ajustement de trajectoire ou de clearance."
+                        ]
                     },
                     "job": {
                         "jobId": "job_run_001",
+                        "status": "completed",
                         "progress": 1.0,
-                        "phase": "completed"
+                        "phase": "completed",
+                        "progressSamples": [
+                            {
+                                "phase": "queued",
+                                "progress": 0.0,
+                                "message": "job queued for Cellule Demo"
+                            },
+                            {
+                                "phase": "completed",
+                                "progress": 1.0,
+                                "message": "run completed with blocked sequence"
+                            }
+                        ]
                     },
                     "timelineSamples": [
                         {
@@ -957,6 +963,9 @@ mod tests {
                             "pairId": "pair_fixture",
                             "leftEntityId": "ent_tool_001",
                             "rightEntityId": "ent_fixture_001",
+                            "locationLabel": "pair_fixture | ent_tool_001 x ent_fixture_001",
+                            "phase": "running",
+                            "stateId": "wait_clear",
                             "overlapMm": 0.63,
                             "severity": "collision"
                         }
@@ -984,7 +993,7 @@ mod tests {
                         {
                             "entityId": "ent_run_001",
                             "role": "source",
-                            "path": "summary.collisionCount"
+                            "path": "metrics.collisionCount"
                         }
                     ],
                     "createdSuggestionIds": ["ent_ai_suggestion_001"],
@@ -1196,6 +1205,11 @@ mod tests {
         );
         assert!(
             project_root
+                .join("simulations/runs/ent_run_001/report.json")
+                .exists()
+        );
+        assert!(
+            project_root
                 .join("simulations/runs/ent_run_001/timeline.jsonl")
                 .exists()
         );
@@ -1253,7 +1267,12 @@ mod tests {
         let metrics =
             fs::read_to_string(project_root.join("simulations/runs/ent_run_001/metrics.json"))
                 .expect("metrics artifact should read");
-        assert!(metrics.contains("\"engineVersion\": \"faero-sim@0.2.0\""));
+        assert!(metrics.contains("\"cycleTimeMs\": 3655"));
+        let report =
+            fs::read_to_string(project_root.join("simulations/runs/ent_run_001/report.json"))
+                .expect("report artifact should read");
+        assert!(report.contains("\"status\": \"collided\""));
+        assert!(report.contains("\"criticalEventIds\""));
         let suggestion =
             fs::read_to_string(project_root.join("ai/suggestions/ent_ai_suggestion_001.json"))
                 .expect("ai suggestion artifact should read");

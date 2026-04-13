@@ -17,14 +17,14 @@ describe("App keyboard shortcuts", () => {
       assert.ok(screen.getAllByText("FutureAero Session").length >= 1);
     });
 
-    const propertiesToggle = document.querySelector(
-      '[data-panel-toggle="properties"]',
-    );
-    assert.equal(propertiesToggle?.getAttribute("aria-expanded"), "true");
-
     await user.keyboard("{F4}");
     await waitFor(() => {
-      assert.equal(propertiesToggle?.getAttribute("aria-expanded"), "false");
+      assert.equal(
+        document
+          .querySelector("[data-main-screen-mode]")
+          ?.getAttribute("data-main-screen-mode"),
+        "properties",
+      );
       assert.equal(
         document
           .querySelector("[data-command-feedback]")
@@ -35,10 +35,11 @@ describe("App keyboard shortcuts", () => {
 
     await user.keyboard("{Alt>}{Enter}{/Alt}");
     await waitFor(() => {
-      assert.equal(propertiesToggle?.getAttribute("aria-expanded"), "true");
       assert.equal(
-        document.querySelector(".context-title")?.textContent,
-        "Insertion",
+        document
+          .querySelector("[data-main-screen-mode]")
+          ?.getAttribute("data-main-screen-mode"),
+        "properties",
       );
       assert.equal(
         document

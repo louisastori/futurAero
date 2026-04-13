@@ -159,6 +159,235 @@ function sampleSafetyInterlocks() {
   ];
 }
 
+function signalValueMatchesKind(kind, value) {
+  if (kind === "boolean") {
+    return typeof value === "boolean";
+  }
+  if (kind === "scalar") {
+    return typeof value === "number" && Number.isFinite(value);
+  }
+  if (kind === "text") {
+    return typeof value === "string";
+  }
+  return false;
+}
+
+function signalComparatorSupported(kind, comparator) {
+  if (kind === "scalar") {
+    return true;
+  }
+  return comparator === "equal" || comparator === "not_equal";
+}
+
+function signalConditionMatches(condition, signalValues) {
+  const currentValue = signalValues.get(condition.signalId);
+  if (currentValue === undefined) {
+    return false;
+  }
+
+  switch (condition.comparator) {
+    case "equal":
+      return currentValue === condition.expectedValue;
+    case "not_equal":
+      return currentValue !== condition.expectedValue;
+    case "greater_than":
+      return currentValue > condition.expectedValue;
+    case "greater_than_or_equal":
+      return currentValue >= condition.expectedValue;
+    case "less_than":
+      return currentValue < condition.expectedValue;
+    case "less_than_or_equal":
+      return currentValue <= condition.expectedValue;
+    default:
+      return false;
+  }
+}
+
+function signalDefinitionsFromEntities(signalEntities) {
+  return signalEntities.map((entity) => ({
+    id: entity.data?.signalId,
+    name: entity.name,
+    kind: entity.data?.kind,
+    initialValue:
+      entity.data?.currentValue !== undefined
+        ? entity.data.currentValue
+        : entity.data?.initialValue,
+    unit: entity.data?.parameterSet?.unit ?? null,
+    tags: entity.data?.tags ?? [],
+  }));
+}
+
+function controllerStateMachineForCell(cellId) {
+  const token = robotCellToken(cellId);
+  return {
+    id: `ctrl_${token}`,
+    name: `Controller ${token}`,
+    initialStateId: "idle",
+    states: [
+      { id: "idle", name: "Idle", terminal: false },
+      { id: "transfer", name: "Transfer", terminal: false },
+      { id: "place", name: "Place", terminal: false },
+      { id: "done", name: "Done", terminal: true },
+    ],
+    transitions: [
+      {
+        id: "tr_start_cycle",
+        fromStateId: "idle",
+        toStateId: "transfer",
+        conditions: [
+          {
+            signalId: "sig_cycle_start",
+            comparator: "equal",
+            expectedValue: true,
+          },
+          {
+            signalId: "sig_safety_clear",
+            comparator: "equal",
+            expectedValue: true,
+          },
+        ],
+        assignments: [],
+        description: "cycle_start_confirmed",
+      },
+      {
+        id: "tr_reach_place",
+        fromStateId: "transfer",
+        toStateId: "place",
+        conditions: [
+          {
+            signalId: "sig_progress_gate",
+            comparator: "greater_than_or_equal",
+            expectedValue: 0.55,
+          },
+        ],
+        assignments: [],
+        description: "progress_gate_reached",
+      },
+      {
+        id: "tr_finish_cycle",
+        fromStateId: "place",
+        toStateId: "done",
+        conditions: [
+          {
+            signalId: "sig_progress_gate",
+            comparator: "greater_than_or_equal",
+            expectedValue: 0.95,
+          },
+        ],
+        assignments: [
+          {
+            signalId: "sig_payload_released",
+            value: true,
+          },
+        ],
+        description: "placement_complete",
+      },
+    ],
+  };
+}
+
+function summarizeRobotCellControl(signals, controller) {
+  if (!Array.isArray(signals) || signals.length === 0) {
+    throw new Error("robot cell control requires at least one signal");
+  }
+  if (!controller?.id || !controller?.name) {
+    throw new Error("robot cell control requires a valid controller");
+  }
+
+  const signalKinds = new Map();
+  for (const signal of signals) {
+    if (!signal?.id || !signal?.name || signalKinds.has(signal.id)) {
+      throw new Error("robot cell control requires unique non-empty signal ids");
+    }
+    if (!signalValueMatchesKind(signal.kind, signal.initialValue)) {
+      throw new Error(`invalid signal value for ${signal.id}`);
+    }
+    signalKinds.set(signal.id, signal.kind);
+  }
+
+  const stateIds = new Set();
+  for (const state of controller.states ?? []) {
+    if (!state?.id || !state?.name || stateIds.has(state.id)) {
+      throw new Error("controller states must expose unique non-empty ids");
+    }
+    stateIds.add(state.id);
+  }
+  if (!controller.initialStateId || !stateIds.has(controller.initialStateId)) {
+    throw new Error(`missing initial state ${controller.initialStateId ?? ""}`.trim());
+  }
+
+  const transitionIds = new Set();
+  for (const transition of controller.transitions ?? []) {
+    if (
+      !transition?.id ||
+      !transition?.fromStateId ||
+      !transition?.toStateId ||
+      transitionIds.has(transition.id)
+    ) {
+      throw new Error("controller transitions must expose unique non-empty ids");
+    }
+    transitionIds.add(transition.id);
+    if (!stateIds.has(transition.fromStateId) || !stateIds.has(transition.toStateId)) {
+      throw new Error(`transition ${transition.id} references a missing state`);
+    }
+    for (const condition of transition.conditions ?? []) {
+      const kind = signalKinds.get(condition.signalId);
+      if (!kind) {
+        throw new Error(`transition ${transition.id} references a missing signal`);
+      }
+      if (!signalValueMatchesKind(kind, condition.expectedValue)) {
+        throw new Error(`condition ${condition.signalId} has an invalid value kind`);
+      }
+      if (!signalComparatorSupported(kind, condition.comparator)) {
+        throw new Error(`condition ${condition.signalId} uses an invalid comparator`);
+      }
+    }
+    for (const assignment of transition.assignments ?? []) {
+      const kind = signalKinds.get(assignment.signalId);
+      if (!kind) {
+        throw new Error(`transition ${transition.id} references a missing signal`);
+      }
+      if (!signalValueMatchesKind(kind, assignment.value)) {
+        throw new Error(`assignment ${assignment.signalId} has an invalid value kind`);
+      }
+    }
+  }
+
+  const statesById = new Map((controller.states ?? []).map((state) => [state.id, state]));
+  const signalValues = new Map(
+    signals.map((signal) => [signal.id, structuredClone(signal.initialValue)]),
+  );
+  let currentState = statesById.get(controller.initialStateId);
+  let steps = 0;
+  const maxSteps = (controller.transitions?.length ?? 0) + (controller.states?.length ?? 0) + 1;
+
+  while (currentState && !currentState.terminal && steps < maxSteps) {
+    const transition = (controller.transitions ?? [])
+      .filter((entry) => entry.fromStateId === currentState.id)
+      .find((entry) =>
+        (entry.conditions ?? []).every((condition) =>
+          signalConditionMatches(condition, signalValues),
+        ),
+      );
+    if (!transition) {
+      break;
+    }
+    for (const assignment of transition.assignments ?? []) {
+      signalValues.set(assignment.signalId, structuredClone(assignment.value));
+    }
+    currentState = statesById.get(transition.toStateId);
+    steps += 1;
+  }
+
+  const blockedSequenceDetected = !currentState?.terminal;
+  return {
+    signalCount: signals.length,
+    controllerTransitionCount: controller.transitions?.length ?? 0,
+    blockedSequenceDetected,
+    blockedStateId: blockedSequenceDetected ? currentState?.id ?? null : null,
+  };
+}
+
 function sampleSignals(cellId) {
   return [
     createEntity(
@@ -221,6 +450,21 @@ function sampleSignals(cellId) {
         initialValue: false,
         currentValue: false,
         tags: ["process", "boolean"],
+        parameterSet: {},
+      },
+    ),
+    createEntity(
+      "Signal",
+      signalId(cellId, "operator_mode"),
+      "Operator Mode",
+      "sig_operator_mode | auto",
+      {
+        cellId,
+        signalId: "sig_operator_mode",
+        kind: "text",
+        initialValue: "auto",
+        currentValue: "auto",
+        tags: ["control", "text"],
         parameterSet: {},
       },
     ),
@@ -319,6 +563,95 @@ function rawTargetsFromEntities(targetEntities) {
   }));
 }
 
+function robotCellDetailFromSummary(cellEntity, robotCellSummary) {
+  const preview = robotCellSummary?.targetPreview ?? cellEntity.data?.targetPreview ?? "";
+  const blocked = robotCellSummary?.blockedSequenceDetected
+    ? ` | blocked ${robotCellSummary.blockedStateId ?? "state"}`
+    : "";
+  return `${robotCellSummary?.targetCount ?? 0} pts | ${robotCellSummary?.equipmentCount ?? 0} equip | ${robotCellSummary?.signalCount ?? 0} sig | ${robotCellSummary?.controllerTransitionCount ?? 0} tr | ${cellEntity.data?.sceneAssemblyId ?? "scene"} | ${robotCellSummary?.estimatedCycleTimeMs ?? 0} ms${blocked} | ${preview}`;
+}
+
+function applyFallbackRobotCellControlSummary(nextEntities, cellId) {
+  const signalEntities = nextEntities.filter(
+    (entity) => entity.entityType === "Signal" && entity.data?.cellId === cellId,
+  );
+  const controllerIndex = nextEntities.findIndex(
+    (entity) =>
+      entity.entityType === "ControllerModel" && entity.data?.cellId === cellId,
+  );
+  if (controllerIndex === -1 || signalEntities.length === 0) {
+    return nextEntities;
+  }
+
+  const controllerEntity = nextEntities[controllerIndex];
+  const controller = controllerEntity.data?.stateMachine;
+  const controlSummary = summarizeRobotCellControl(
+    signalDefinitionsFromEntities(signalEntities),
+    controller,
+  );
+  nextEntities[controllerIndex] = {
+    ...controllerEntity,
+    detail: `${controller?.states?.length ?? 0} states | ${controller?.transitions?.length ?? 0} transitions`,
+    data: {
+      ...controllerEntity.data,
+      parameterSet: {
+        ...controllerEntity.data?.parameterSet,
+        stateCount: controller?.states?.length ?? 0,
+        transitionCount: controller?.transitions?.length ?? 0,
+      },
+    },
+  };
+
+  const cellIndex = nextEntities.findIndex((entity) => entity.id === cellId);
+  if (cellIndex === -1) {
+    return nextEntities;
+  }
+
+  const currentCell = nextEntities[cellIndex];
+  const robotCellSummary = {
+    ...currentCell.robotCellSummary,
+    signalCount: controlSummary.signalCount,
+    controllerTransitionCount: controlSummary.controllerTransitionCount,
+    blockedSequenceDetected: controlSummary.blockedSequenceDetected,
+    blockedStateId: controlSummary.blockedStateId,
+  };
+  nextEntities[cellIndex] = {
+    ...currentCell,
+    detail: robotCellDetailFromSummary(currentCell, robotCellSummary),
+    data: {
+      ...currentCell.data,
+      control: {
+        ...(currentCell.data?.control ?? {}),
+        signalCount: controlSummary.signalCount,
+        controllerTransitionCount: controlSummary.controllerTransitionCount,
+        blockedSequenceDetected: controlSummary.blockedSequenceDetected,
+        blockedStateId: controlSummary.blockedStateId,
+        controllerId: controllerEntity.id,
+        signalIds: signalEntities.map((entity) => entity.id),
+        states: controller?.states ?? [],
+        transitions: controller?.transitions ?? [],
+      },
+    },
+    robotCellSummary,
+  };
+
+  return nextEntities;
+}
+
+export function syncFallbackRobotCellControl(entities, sourceEntityOrCellId) {
+  const nextEntities = structuredClone(entities);
+  const sourceEntity = nextEntities.find((entity) => entity.id === sourceEntityOrCellId);
+  const cellId =
+    sourceEntity?.data?.cellId ??
+    (String(sourceEntityOrCellId).startsWith("ent_cell_")
+      ? sourceEntityOrCellId
+      : null);
+  if (!cellId) {
+    return nextEntities;
+  }
+  return applyFallbackRobotCellControlSummary(nextEntities, cellId);
+}
+
 export function syncFallbackRobotCellTargets(entities, targetEntityId) {
   const nextEntities = structuredClone(entities);
   const targetIndex = nextEntities.findIndex((entity) => entity.id === targetEntityId);
@@ -356,9 +689,18 @@ export function syncFallbackRobotCellTargets(entities, targetEntityId) {
   const cellIndex = nextEntities.findIndex((entity) => entity.id === cellId);
   if (cellIndex !== -1) {
     const currentCell = nextEntities[cellIndex];
+    const robotCellSummary = {
+      ...currentCell.robotCellSummary,
+      targetCount: validation.targetCount,
+      pathLengthMm: validation.pathLengthMm,
+      maxSegmentMm: validation.maxSegmentMm,
+      estimatedCycleTimeMs: validation.estimatedCycleTimeMs,
+      warningCount: validation.warningCount,
+      targetPreview: preview,
+    };
     nextEntities[cellIndex] = {
       ...currentCell,
-      detail: `${validation.targetCount} pts | ${currentCell.robotCellSummary?.equipmentCount ?? 0} equip | ${currentCell.robotCellSummary?.signalCount ?? 0} sig | ${currentCell.data?.sceneAssemblyId ?? "scene"} | ${validation.estimatedCycleTimeMs} ms | ${preview}`,
+      detail: robotCellDetailFromSummary(currentCell, robotCellSummary),
       data: {
         ...currentCell.data,
         targetIds: orderedTargetIds,
@@ -378,15 +720,7 @@ export function syncFallbackRobotCellTargets(entities, targetEntityId) {
           warningCount: validation.warningCount,
         },
       },
-      robotCellSummary: {
-        ...currentCell.robotCellSummary,
-        targetCount: validation.targetCount,
-        pathLengthMm: validation.pathLengthMm,
-        maxSegmentMm: validation.maxSegmentMm,
-        estimatedCycleTimeMs: validation.estimatedCycleTimeMs,
-        warningCount: validation.warningCount,
-        targetPreview: preview,
-      },
+      robotCellSummary,
     };
   }
 
@@ -406,6 +740,11 @@ export function buildFallbackRobotCellBundle(index) {
   const sequenceModelId = sequenceId(cellId);
   const controllerModelId = controllerId(cellId);
   const signals = sampleSignals(cellId);
+  const controllerStateMachine = controllerStateMachineForCell(cellId);
+  const controlSummary = summarizeRobotCellControl(
+    signalDefinitionsFromEntities(signals),
+    controllerStateMachine,
+  );
   const targets = sampleTargets();
   const validation = computeSequenceValidation(targets);
   const preview = targetPreview(targets);
@@ -429,8 +768,10 @@ export function buildFallbackRobotCellBundle(index) {
     equipmentCount: 3,
     sequenceCount: 1,
     safetyZoneCount: 2,
-    signalCount: 4,
-    controllerTransitionCount: 3,
+    signalCount: controlSummary.signalCount,
+    controllerTransitionCount: controlSummary.controllerTransitionCount,
+    blockedSequenceDetected: controlSummary.blockedSequenceDetected,
+    blockedStateId: controlSummary.blockedStateId,
     warningCount: validation.warningCount,
   };
 
@@ -744,74 +1085,10 @@ export function buildFallbackRobotCellBundle(index) {
       {
         cellId,
         tags: ["control", "state_machine"],
-        stateMachine: {
-          id: `ctrl_${token}`,
-          name: `Controller ${token}`,
-          initialStateId: "idle",
-          states: [
-            { id: "idle", name: "Idle", terminal: false },
-            { id: "transfer", name: "Transfer", terminal: false },
-            { id: "place", name: "Place", terminal: false },
-            { id: "done", name: "Done", terminal: true },
-          ],
-          transitions: [
-            {
-              id: "tr_start_cycle",
-              fromStateId: "idle",
-              toStateId: "transfer",
-              conditions: [
-                {
-                  signalId: "sig_cycle_start",
-                  comparator: "equal",
-                  expectedValue: true,
-                },
-                {
-                  signalId: "sig_safety_clear",
-                  comparator: "equal",
-                  expectedValue: true,
-                },
-              ],
-              assignments: [],
-              description: "cycle_start_confirmed",
-            },
-            {
-              id: "tr_reach_place",
-              fromStateId: "transfer",
-              toStateId: "place",
-              conditions: [
-                {
-                  signalId: "sig_progress_gate",
-                  comparator: "greater_than_or_equal",
-                  expectedValue: 0.55,
-                },
-              ],
-              assignments: [],
-              description: "progress_gate_reached",
-            },
-            {
-              id: "tr_finish_cycle",
-              fromStateId: "place",
-              toStateId: "done",
-              conditions: [
-                {
-                  signalId: "sig_progress_gate",
-                  comparator: "greater_than_or_equal",
-                  expectedValue: 0.95,
-                },
-              ],
-              assignments: [
-                {
-                  signalId: "sig_payload_released",
-                  value: true,
-                },
-              ],
-              description: "placement_complete",
-            },
-          ],
-        },
+        stateMachine: controllerStateMachine,
         parameterSet: {
-          stateCount: 4,
-          transitionCount: 3,
+          stateCount: controllerStateMachine.states.length,
+          transitionCount: controllerStateMachine.transitions.length,
         },
       },
     ),
@@ -819,7 +1096,15 @@ export function buildFallbackRobotCellBundle(index) {
       "RobotCell",
       cellId,
       `RobotCell-${token}`,
-      `${validation.targetCount} pts | 3 equip | 4 sig | ${asmId} | ${validation.estimatedCycleTimeMs} ms | ${preview}`,
+      robotCellDetailFromSummary(
+        {
+          data: {
+            sceneAssemblyId: asmId,
+            targetPreview: preview,
+          },
+        },
+        robotCellSummary,
+      ),
       {
         controller: {
           robotModel: "FAERO-X90",
@@ -852,15 +1137,14 @@ export function buildFallbackRobotCellBundle(index) {
           sequenceEntityId: sequenceModelId,
         },
         control: {
-          signalCount: 4,
-          controllerTransitionCount: 3,
+          signalCount: controlSummary.signalCount,
+          controllerTransitionCount: controlSummary.controllerTransitionCount,
+          blockedSequenceDetected: controlSummary.blockedSequenceDetected,
+          blockedStateId: controlSummary.blockedStateId,
           controllerId: controllerModelId,
-          signalIds: [
-            signalId(cellId, "cycle_start"),
-            signalId(cellId, "progress_gate"),
-            signalId(cellId, "safety_clear"),
-            signalId(cellId, "payload_released"),
-          ],
+          signalIds: signals.map((entity) => entity.id),
+          states: controllerStateMachine.states,
+          transitions: controllerStateMachine.transitions,
           contactPairs: [
             {
               id: `pair_${token}_tool_fixture`,

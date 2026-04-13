@@ -1,5 +1,9 @@
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 
+use faero_types::{
+    ControlTransition, ControllerState, ControllerStateMachine, SignalAssignment, SignalComparator,
+    SignalCondition, SignalDefinition, SignalKind, SignalValue,
+};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -137,6 +141,23 @@ pub struct SequenceValidation {
     pub warning_count: usize,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RobotCellControlModel {
+    pub cell_id: String,
+    pub signals: Vec<SignalDefinition>,
+    pub controller: ControllerStateMachine,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RobotCellControlSummary {
+    pub signal_count: usize,
+    pub controller_transition_count: usize,
+    pub blocked_sequence_detected: bool,
+    pub blocked_state_id: Option<String>,
+}
+
 #[derive(Debug, Error, PartialEq)]
 pub enum RoboticsError {
     #[error("a robot sequence requires at least one target")]
@@ -163,6 +184,41 @@ pub enum RoboticsError {
         "robot target models must belong to the sequence and expose unique ids, keys and positive order indexes"
     )]
     InvalidRobotTargetModelSet,
+    #[error(
+        "robot cell control requires a non-empty cell id, non-empty unique signal ids and a non-empty controller id and name"
+    )]
+    InvalidRobotCellControlModel,
+    #[error("controller state machine must expose non-empty unique state ids and transition ids")]
+    InvalidControllerStateMachine,
+    #[error("controller initial state `{0}` is missing")]
+    UnknownInitialControllerState(String),
+    #[error("controller transition `{transition_id}` references missing state `{state_id}`")]
+    UnknownControllerTransitionState {
+        transition_id: String,
+        state_id: String,
+    },
+    #[error("controller transition `{transition_id}` references missing signal `{signal_id}`")]
+    UnknownControllerSignal {
+        transition_id: String,
+        signal_id: String,
+    },
+    #[error(
+        "signal `{signal_id}` value is incompatible with kind `{expected_kind:?}` in {context}"
+    )]
+    InvalidSignalValueForKind {
+        signal_id: String,
+        expected_kind: SignalKind,
+        context: &'static str,
+    },
+    #[error(
+        "controller transition `{transition_id}` uses comparator `{comparator:?}` incompatible with signal `{signal_id}` kind `{kind:?}`"
+    )]
+    InvalidSignalComparator {
+        transition_id: String,
+        signal_id: String,
+        comparator: SignalComparator,
+        kind: SignalKind,
+    },
 }
 
 pub fn validate_sequence(targets: &[RobotTarget]) -> Result<SequenceValidation, RoboticsError> {
@@ -261,6 +317,258 @@ pub fn validate_target_models(
             dwell_time_ms: target.dwell_time_ms,
         })
         .collect())
+}
+
+pub fn signal_value_matches_kind(kind: &SignalKind, value: &SignalValue) -> bool {
+    matches!(
+        (kind, value),
+        (SignalKind::Boolean, SignalValue::Bool(_))
+            | (SignalKind::Scalar, SignalValue::Scalar(_))
+            | (SignalKind::Text, SignalValue::Text(_))
+    )
+}
+
+pub fn control_signal_values(signals: &[SignalDefinition]) -> BTreeMap<String, SignalValue> {
+    signals
+        .iter()
+        .map(|signal| (signal.id.clone(), signal.initial_value.clone()))
+        .collect()
+}
+
+pub fn signal_condition_matches(
+    condition: &SignalCondition,
+    signal_values: &BTreeMap<String, SignalValue>,
+) -> bool {
+    let Some(current_value) = signal_values.get(&condition.signal_id) else {
+        return false;
+    };
+    match (
+        &condition.comparator,
+        current_value,
+        &condition.expected_value,
+    ) {
+        (SignalComparator::Equal, left, right) => left == right,
+        (SignalComparator::NotEqual, left, right) => left != right,
+        (SignalComparator::GreaterThan, SignalValue::Scalar(left), SignalValue::Scalar(right)) => {
+            left > right
+        }
+        (
+            SignalComparator::GreaterThanOrEqual,
+            SignalValue::Scalar(left),
+            SignalValue::Scalar(right),
+        ) => left >= right,
+        (SignalComparator::LessThan, SignalValue::Scalar(left), SignalValue::Scalar(right)) => {
+            left < right
+        }
+        (
+            SignalComparator::LessThanOrEqual,
+            SignalValue::Scalar(left),
+            SignalValue::Scalar(right),
+        ) => left <= right,
+        _ => false,
+    }
+}
+
+pub fn apply_control_assignments(
+    signal_values: &mut BTreeMap<String, SignalValue>,
+    assignments: &[SignalAssignment],
+) {
+    for assignment in assignments {
+        signal_values.insert(assignment.signal_id.clone(), assignment.value.clone());
+    }
+}
+
+pub fn resolve_initial_control_state(
+    control: &RobotCellControlModel,
+) -> Result<ControllerState, RoboticsError> {
+    control
+        .controller
+        .states
+        .iter()
+        .find(|state| state.id == control.controller.initial_state_id)
+        .cloned()
+        .ok_or_else(|| {
+            RoboticsError::UnknownInitialControllerState(
+                control.controller.initial_state_id.clone(),
+            )
+        })
+}
+
+pub fn resolve_control_transition_state(
+    controller: &ControllerStateMachine,
+    transition: &ControlTransition,
+) -> Result<ControllerState, RoboticsError> {
+    controller
+        .states
+        .iter()
+        .find(|state| state.id == transition.to_state_id)
+        .cloned()
+        .ok_or_else(|| RoboticsError::UnknownControllerTransitionState {
+            transition_id: transition.id.clone(),
+            state_id: transition.to_state_id.clone(),
+        })
+}
+
+pub fn enabled_control_transition<'a>(
+    control: &'a RobotCellControlModel,
+    current_state_id: &str,
+    signal_values: &BTreeMap<String, SignalValue>,
+) -> Option<&'a ControlTransition> {
+    control
+        .controller
+        .transitions
+        .iter()
+        .filter(|transition| transition.from_state_id == current_state_id)
+        .find(|transition| {
+            transition
+                .conditions
+                .iter()
+                .all(|condition| signal_condition_matches(condition, signal_values))
+        })
+}
+
+pub fn validate_robot_cell_control(control: &RobotCellControlModel) -> Result<(), RoboticsError> {
+    if control.cell_id.trim().is_empty()
+        || control.controller.id.trim().is_empty()
+        || control.controller.name.trim().is_empty()
+        || control.signals.is_empty()
+    {
+        return Err(RoboticsError::InvalidRobotCellControlModel);
+    }
+
+    let mut signal_ids = HashSet::new();
+    let mut signal_kinds = BTreeMap::new();
+    for signal in &control.signals {
+        if signal.id.trim().is_empty()
+            || signal.name.trim().is_empty()
+            || !signal_ids.insert(signal.id.as_str())
+        {
+            return Err(RoboticsError::InvalidRobotCellControlModel);
+        }
+        if !signal_value_matches_kind(&signal.kind, &signal.initial_value) {
+            return Err(RoboticsError::InvalidSignalValueForKind {
+                signal_id: signal.id.clone(),
+                expected_kind: signal.kind.clone(),
+                context: "signal.initialValue",
+            });
+        }
+        signal_kinds.insert(signal.id.clone(), signal.kind.clone());
+    }
+
+    if control.controller.initial_state_id.trim().is_empty() || control.controller.states.is_empty()
+    {
+        return Err(RoboticsError::InvalidControllerStateMachine);
+    }
+
+    let mut state_ids = HashSet::new();
+    for state in &control.controller.states {
+        if state.id.trim().is_empty()
+            || state.name.trim().is_empty()
+            || !state_ids.insert(state.id.as_str())
+        {
+            return Err(RoboticsError::InvalidControllerStateMachine);
+        }
+    }
+    if !state_ids.contains(control.controller.initial_state_id.as_str()) {
+        return Err(RoboticsError::UnknownInitialControllerState(
+            control.controller.initial_state_id.clone(),
+        ));
+    }
+
+    let mut transition_ids = HashSet::new();
+    for transition in &control.controller.transitions {
+        if transition.id.trim().is_empty()
+            || transition.from_state_id.trim().is_empty()
+            || transition.to_state_id.trim().is_empty()
+            || !transition_ids.insert(transition.id.as_str())
+        {
+            return Err(RoboticsError::InvalidControllerStateMachine);
+        }
+        if !state_ids.contains(transition.from_state_id.as_str()) {
+            return Err(RoboticsError::UnknownControllerTransitionState {
+                transition_id: transition.id.clone(),
+                state_id: transition.from_state_id.clone(),
+            });
+        }
+        if !state_ids.contains(transition.to_state_id.as_str()) {
+            return Err(RoboticsError::UnknownControllerTransitionState {
+                transition_id: transition.id.clone(),
+                state_id: transition.to_state_id.clone(),
+            });
+        }
+
+        for condition in &transition.conditions {
+            let Some(kind) = signal_kinds.get(&condition.signal_id) else {
+                return Err(RoboticsError::UnknownControllerSignal {
+                    transition_id: transition.id.clone(),
+                    signal_id: condition.signal_id.clone(),
+                });
+            };
+            if !signal_value_matches_kind(kind, &condition.expected_value) {
+                return Err(RoboticsError::InvalidSignalValueForKind {
+                    signal_id: condition.signal_id.clone(),
+                    expected_kind: kind.clone(),
+                    context: "condition.expectedValue",
+                });
+            }
+            if !signal_comparator_supported(kind, &condition.comparator) {
+                return Err(RoboticsError::InvalidSignalComparator {
+                    transition_id: transition.id.clone(),
+                    signal_id: condition.signal_id.clone(),
+                    comparator: condition.comparator.clone(),
+                    kind: kind.clone(),
+                });
+            }
+        }
+
+        for assignment in &transition.assignments {
+            let Some(kind) = signal_kinds.get(&assignment.signal_id) else {
+                return Err(RoboticsError::UnknownControllerSignal {
+                    transition_id: transition.id.clone(),
+                    signal_id: assignment.signal_id.clone(),
+                });
+            };
+            if !signal_value_matches_kind(kind, &assignment.value) {
+                return Err(RoboticsError::InvalidSignalValueForKind {
+                    signal_id: assignment.signal_id.clone(),
+                    expected_kind: kind.clone(),
+                    context: "assignment.value",
+                });
+            }
+        }
+    }
+
+    Ok(())
+}
+
+pub fn summarize_robot_cell_control(
+    control: &RobotCellControlModel,
+) -> Result<RobotCellControlSummary, RoboticsError> {
+    validate_robot_cell_control(control)?;
+
+    let mut signal_values = control_signal_values(&control.signals);
+    let mut current_state = resolve_initial_control_state(control)?;
+    let max_steps = control.controller.transitions.len() + control.controller.states.len() + 1;
+    let mut steps = 0usize;
+
+    while !current_state.terminal && steps < max_steps {
+        let Some(transition) =
+            enabled_control_transition(control, &current_state.id, &signal_values)
+        else {
+            break;
+        };
+        apply_control_assignments(&mut signal_values, &transition.assignments);
+        current_state = resolve_control_transition_state(&control.controller, transition)?;
+        steps += 1;
+    }
+
+    let blocked_sequence_detected = !current_state.terminal;
+    Ok(RobotCellControlSummary {
+        signal_count: control.signals.len(),
+        controller_transition_count: control.controller.transitions.len(),
+        blocked_sequence_detected,
+        blocked_state_id: blocked_sequence_detected.then_some(current_state.id),
+    })
 }
 
 pub fn validate_robot_cell_structure(
@@ -379,6 +687,21 @@ fn same_id_set(expected: &[String], actual: &[&str]) -> bool {
     let expected_set = expected.iter().map(String::as_str).collect::<HashSet<_>>();
     let actual_set = actual.iter().copied().collect::<HashSet<_>>();
     expected_set == actual_set
+}
+
+fn signal_comparator_supported(kind: &SignalKind, comparator: &SignalComparator) -> bool {
+    matches!(
+        (kind, comparator),
+        (SignalKind::Scalar, _)
+            | (
+                SignalKind::Boolean,
+                SignalComparator::Equal | SignalComparator::NotEqual
+            )
+            | (
+                SignalKind::Text,
+                SignalComparator::Equal | SignalComparator::NotEqual
+            )
+    )
 }
 
 #[cfg(test)]
@@ -725,6 +1048,235 @@ mod tests {
         assert_eq!(
             validate_target_models("ent_cell_001", "ent_seq_001", &wrong_scope),
             Err(RoboticsError::InvalidRobotTargetModelSet)
+        );
+    }
+
+    fn sample_control_model() -> RobotCellControlModel {
+        RobotCellControlModel {
+            cell_id: "ent_cell_001".to_string(),
+            signals: vec![
+                SignalDefinition {
+                    id: "sig_cycle_start".to_string(),
+                    name: "Cycle Start".to_string(),
+                    kind: SignalKind::Boolean,
+                    initial_value: SignalValue::Bool(false),
+                    unit: None,
+                    tags: vec!["control".to_string()],
+                },
+                SignalDefinition {
+                    id: "sig_progress_gate".to_string(),
+                    name: "Progress Gate".to_string(),
+                    kind: SignalKind::Scalar,
+                    initial_value: SignalValue::Scalar(0.62),
+                    unit: Some("ratio".to_string()),
+                    tags: vec!["control".to_string()],
+                },
+                SignalDefinition {
+                    id: "sig_safety_clear".to_string(),
+                    name: "Safety Clear".to_string(),
+                    kind: SignalKind::Boolean,
+                    initial_value: SignalValue::Bool(true),
+                    unit: None,
+                    tags: vec!["safety".to_string()],
+                },
+                SignalDefinition {
+                    id: "sig_payload_released".to_string(),
+                    name: "Payload Released".to_string(),
+                    kind: SignalKind::Boolean,
+                    initial_value: SignalValue::Bool(false),
+                    unit: None,
+                    tags: vec!["process".to_string()],
+                },
+                SignalDefinition {
+                    id: "sig_operator_mode".to_string(),
+                    name: "Operator Mode".to_string(),
+                    kind: SignalKind::Text,
+                    initial_value: SignalValue::Text("auto".to_string()),
+                    unit: None,
+                    tags: vec!["control".to_string(), "text".to_string()],
+                },
+            ],
+            controller: ControllerStateMachine {
+                id: "ctrl_001".to_string(),
+                name: "Controller 001".to_string(),
+                initial_state_id: "idle".to_string(),
+                states: vec![
+                    ControllerState {
+                        id: "idle".to_string(),
+                        name: "Idle".to_string(),
+                        terminal: false,
+                    },
+                    ControllerState {
+                        id: "transfer".to_string(),
+                        name: "Transfer".to_string(),
+                        terminal: false,
+                    },
+                    ControllerState {
+                        id: "place".to_string(),
+                        name: "Place".to_string(),
+                        terminal: false,
+                    },
+                    ControllerState {
+                        id: "done".to_string(),
+                        name: "Done".to_string(),
+                        terminal: true,
+                    },
+                ],
+                transitions: vec![
+                    ControlTransition {
+                        id: "tr_start_cycle".to_string(),
+                        from_state_id: "idle".to_string(),
+                        to_state_id: "transfer".to_string(),
+                        conditions: vec![
+                            SignalCondition {
+                                signal_id: "sig_cycle_start".to_string(),
+                                comparator: SignalComparator::Equal,
+                                expected_value: SignalValue::Bool(true),
+                            },
+                            SignalCondition {
+                                signal_id: "sig_safety_clear".to_string(),
+                                comparator: SignalComparator::Equal,
+                                expected_value: SignalValue::Bool(true),
+                            },
+                        ],
+                        assignments: vec![],
+                        description: Some("cycle_start_confirmed".to_string()),
+                    },
+                    ControlTransition {
+                        id: "tr_reach_place".to_string(),
+                        from_state_id: "transfer".to_string(),
+                        to_state_id: "place".to_string(),
+                        conditions: vec![SignalCondition {
+                            signal_id: "sig_progress_gate".to_string(),
+                            comparator: SignalComparator::GreaterThanOrEqual,
+                            expected_value: SignalValue::Scalar(0.55),
+                        }],
+                        assignments: vec![],
+                        description: Some("progress_gate_reached".to_string()),
+                    },
+                    ControlTransition {
+                        id: "tr_finish_cycle".to_string(),
+                        from_state_id: "place".to_string(),
+                        to_state_id: "done".to_string(),
+                        conditions: vec![SignalCondition {
+                            signal_id: "sig_progress_gate".to_string(),
+                            comparator: SignalComparator::GreaterThanOrEqual,
+                            expected_value: SignalValue::Scalar(0.95),
+                        }],
+                        assignments: vec![SignalAssignment {
+                            signal_id: "sig_payload_released".to_string(),
+                            value: SignalValue::Bool(true),
+                        }],
+                        description: Some("placement_complete".to_string()),
+                    },
+                ],
+            },
+        }
+    }
+
+    #[test]
+    fn control_summary_reports_blocked_initial_state_deterministically() {
+        let summary =
+            summarize_robot_cell_control(&sample_control_model()).expect("control should validate");
+
+        assert_eq!(
+            summary,
+            RobotCellControlSummary {
+                signal_count: 5,
+                controller_transition_count: 3,
+                blocked_sequence_detected: true,
+                blocked_state_id: Some("idle".to_string()),
+            }
+        );
+    }
+
+    #[test]
+    fn control_summary_reaches_terminal_state_when_conditions_are_met() {
+        let mut control = sample_control_model();
+        control.signals[0].initial_value = SignalValue::Bool(true);
+        control.signals[1].initial_value = SignalValue::Scalar(1.0);
+
+        let summary =
+            summarize_robot_cell_control(&control).expect("control should reach terminal");
+
+        assert_eq!(summary.signal_count, 5);
+        assert_eq!(summary.controller_transition_count, 3);
+        assert!(!summary.blocked_sequence_detected);
+        assert_eq!(summary.blocked_state_id, None);
+    }
+
+    #[test]
+    fn rejects_invalid_signal_values_for_declared_kind() {
+        let mut control = sample_control_model();
+        control.signals[0].initial_value = SignalValue::Scalar(1.0);
+
+        assert_eq!(
+            validate_robot_cell_control(&control),
+            Err(RoboticsError::InvalidSignalValueForKind {
+                signal_id: "sig_cycle_start".to_string(),
+                expected_kind: SignalKind::Boolean,
+                context: "signal.initialValue",
+            })
+        );
+
+        control = sample_control_model();
+        control.controller.transitions[2].assignments[0].value =
+            SignalValue::Text("released".to_string());
+        assert_eq!(
+            validate_robot_cell_control(&control),
+            Err(RoboticsError::InvalidSignalValueForKind {
+                signal_id: "sig_payload_released".to_string(),
+                expected_kind: SignalKind::Boolean,
+                context: "assignment.value",
+            })
+        );
+    }
+
+    #[test]
+    fn rejects_missing_controller_states_and_signal_references() {
+        let mut control = sample_control_model();
+        control.controller.initial_state_id = "missing".to_string();
+        assert_eq!(
+            validate_robot_cell_control(&control),
+            Err(RoboticsError::UnknownInitialControllerState(
+                "missing".to_string()
+            ))
+        );
+
+        control = sample_control_model();
+        control.controller.transitions[0].to_state_id = "missing".to_string();
+        assert_eq!(
+            validate_robot_cell_control(&control),
+            Err(RoboticsError::UnknownControllerTransitionState {
+                transition_id: "tr_start_cycle".to_string(),
+                state_id: "missing".to_string(),
+            })
+        );
+
+        control = sample_control_model();
+        control.controller.transitions[1].conditions[0].signal_id = "sig_missing".to_string();
+        assert_eq!(
+            validate_robot_cell_control(&control),
+            Err(RoboticsError::UnknownControllerSignal {
+                transition_id: "tr_reach_place".to_string(),
+                signal_id: "sig_missing".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn rejects_incompatible_signal_comparators() {
+        let mut control = sample_control_model();
+        control.controller.transitions[0].conditions[0].comparator = SignalComparator::GreaterThan;
+
+        assert_eq!(
+            validate_robot_cell_control(&control),
+            Err(RoboticsError::InvalidSignalComparator {
+                transition_id: "tr_start_cycle".to_string(),
+                signal_id: "sig_cycle_start".to_string(),
+                comparator: SignalComparator::GreaterThan,
+                kind: SignalKind::Boolean,
+            })
         );
     }
 }

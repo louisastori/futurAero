@@ -900,11 +900,31 @@ fn build_structured_explain(
         };
         proposed_commands.extend(build_safety_suggestion_commands(document, report, blocked));
     } else if let Some(run) = latest_run {
+        let report = run.data.get("report");
+        let report_headline = report
+            .and_then(|value| value.get("headline"))
+            .and_then(|value| value.as_str());
+        let report_finding = report
+            .and_then(|value| value.get("findings"))
+            .and_then(|value| value.as_array())
+            .and_then(|findings| findings.first())
+            .and_then(|value| value.as_str());
+        let report_action = report
+            .and_then(|value| value.get("recommendedActions"))
+            .and_then(|value| value.as_array())
+            .and_then(|actions| actions.first())
+            .and_then(|value| value.as_str());
         let collision_count = run
             .data
-            .get("summary")
-            .and_then(|summary| summary.get("collisionCount"))
+            .get("metrics")
+            .and_then(|metrics| metrics.get("collisionCount"))
             .and_then(|value| value.as_u64())
+            .or_else(|| {
+                run.data
+                    .get("summary")
+                    .and_then(|summary| summary.get("collisionCount"))
+                    .and_then(|value| value.as_u64())
+            })
             .unwrap_or(0);
         let blocked = run
             .data
@@ -920,21 +940,45 @@ fn build_structured_explain(
             .map(str::to_string);
         let cycle_time_ms = run
             .data
-            .get("summary")
-            .and_then(|summary| summary.get("cycleTimeMs"))
+            .get("metrics")
+            .and_then(|metrics| metrics.get("cycleTimeMs"))
             .and_then(|value| value.as_u64())
+            .or_else(|| {
+                run.data
+                    .get("summary")
+                    .and_then(|summary| summary.get("cycleTimeMs"))
+                    .and_then(|value| value.as_u64())
+            })
             .unwrap_or(0);
 
         context_refs.push(AiContextReference {
             entity_id: Some(run.id.clone()),
             role: "source".to_string(),
-            path: "summary.collisionCount".to_string(),
+            path: "metrics.collisionCount".to_string(),
         });
         context_refs.push(AiContextReference {
             entity_id: Some(run.id.clone()),
             role: "source".to_string(),
             path: "summary.blockedSequenceDetected".to_string(),
         });
+        if report_headline.is_some() {
+            context_refs.push(AiContextReference {
+                entity_id: Some(run.id.clone()),
+                role: "source".to_string(),
+                path: "report.headline".to_string(),
+            });
+        }
+        if report
+            .and_then(|value| value.get("criticalEventIds"))
+            .and_then(|value| value.as_array())
+            .is_some_and(|ids| !ids.is_empty())
+        {
+            context_refs.push(AiContextReference {
+                entity_id: Some(run.id.clone()),
+                role: "source".to_string(),
+                path: "report.criticalEventIds[0]".to_string(),
+            });
+        }
         if run
             .data
             .get("contacts")
@@ -948,7 +992,9 @@ fn build_structured_explain(
             });
         }
 
-        summary = if collision_count > 0 {
+        summary = if let Some(report_headline) = report_headline {
+            report_headline.to_string()
+        } else if collision_count > 0 {
             format!(
                 "Le dernier run detecte {} collision(s) sur {}.",
                 collision_count, run.name
@@ -968,6 +1014,9 @@ fn build_structured_explain(
             "Le run {} garde un temps de cycle de {} ms.",
             run.id, cycle_time_ms
         ));
+        if let Some(report_finding) = report_finding {
+            explanation.push(format!("Le rapport de run indique: {}", report_finding));
+        }
         if let Some(contact) = run
             .data
             .get("contacts")
@@ -996,6 +1045,9 @@ fn build_structured_explain(
                 "La machine a etats reste bloquee dans l etat `{}`.",
                 blocked_state
             ));
+        }
+        if let Some(report_action) = report_action {
+            explanation.push(format!("Action recommandee: {}", report_action));
         }
         confidence = if collision_count > 0 || blocked {
             0.86
@@ -2603,10 +2655,31 @@ mod tests {
                 data: serde_json::json!({
                     "robotCellId": "ent_cell_001",
                     "summary": {
-                        "collisionCount": 0,
+                        "status": "warning",
                         "blockedSequenceDetected": true,
                         "blockedStateId": "transfer",
+                        "timelineSampleCount": 12
+                    },
+                    "metrics": {
+                        "collisionCount": 0,
                         "cycleTimeMs": 3497
+                    },
+                    "report": {
+                        "status": "warning",
+                        "headline": "Sequence bloquee sur l etat transfer",
+                        "findings": [
+                            "Le run termine sans collision mais reste bloque sur transfer."
+                        ],
+                        "criticalEventIds": ["controller-9-transfer"],
+                        "recommendedActions": [
+                            "Verifier la transition de controle qui doit sortir de l etat transfer."
+                        ]
+                    },
+                    "job": {
+                        "jobId": "job_run_001",
+                        "status": "completed",
+                        "phase": "completed",
+                        "progress": 1.0
                     },
                     "contacts": []
                 }),
@@ -2630,5 +2703,12 @@ mod tests {
         );
         assert_eq!(explain.runtime_profile, "furnace");
         assert!(explain.critique_passes.len() >= 2);
+        assert_eq!(explain.summary, "Sequence bloquee sur l etat transfer");
+        assert!(
+            explain
+                .context_refs
+                .iter()
+                .any(|reference| reference.path == "report.headline")
+        );
     }
 }
