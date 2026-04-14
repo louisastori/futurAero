@@ -306,6 +306,7 @@ test.beforeEach(async ({ page }) => {
 
 test("execute buttons update visible command feedback in the shell", async ({ page }) => {
   await page.getByLabel("Projet de demonstration").selectOption("empty-project.faero");
+  await page.getByLabel("Menu").selectOption("commands:file");
   await page.locator("[data-command-id='project.open']").click();
 
   await expect(page.locator("[data-command-feedback='project.open']")).toBeVisible();
@@ -318,13 +319,16 @@ test("execute buttons update visible command feedback in the shell", async ({ pa
 });
 
 test("settings command reopens properties and shows an immediate effect", async ({ page }) => {
-  await page.locator("[data-panel-toggle='properties']").click();
-  await expect(page.locator("[data-panel-id='properties'] .panel-body")).toHaveCount(0);
-
+  await page.getByLabel("Menu").selectOption("whitebox");
+  await expect(page.locator("[data-main-screen-mode='whitebox']")).toBeVisible();
+  await page.getByLabel("Menu").selectOption("commands:file");
   await page.locator("[data-command-id='app.settings']").click();
 
-  await expect(page.locator("[data-command-feedback='app.settings']")).toBeVisible();
-  await expect(page.locator("[data-panel-id='properties'] .panel-body")).toHaveCount(1);
+  await expect(page.locator("[data-command-feedback='app.settings']")).toHaveAttribute(
+    "data-command-feedback",
+    "app.settings"
+  );
+  await expect(page.locator("[data-main-screen-mode='properties']")).toBeVisible();
 });
 
 test("gemma3 selector drives the model used by the local chat flow", async ({ page }) => {

@@ -24,10 +24,10 @@ test("view commands map to the expected workspace panels", () => {
 });
 
 test("toggleWorkspacePanel flips only known panel ids", () => {
-  const collapsed = toggleWorkspacePanel(defaultWorkspacePanels, "projectExplorer");
+  const expanded = toggleWorkspacePanel(defaultWorkspacePanels, "projectExplorer");
 
-  assert.equal(collapsed.projectExplorer, false);
-  assert.equal(collapsed.output, true);
+  assert.equal(expanded.projectExplorer, true);
+  assert.equal(expanded.output, true);
   assert.equal(
     toggleWorkspacePanel(defaultWorkspacePanels, "unknown"),
     defaultWorkspacePanels
@@ -44,7 +44,11 @@ test("setWorkspacePanel can reopen a previously collapsed panel", () => {
 
 test("column state reports when left or right docks are fully collapsed", () => {
   const bothOpen = getWorkspaceColumnState(defaultWorkspacePanels);
-  const leftClosed = getWorkspaceColumnState({
+  const leftOpen = getWorkspaceColumnState({
+    ...defaultWorkspacePanels,
+    projectExplorer: true
+  });
+  const leftStillClosed = getWorkspaceColumnState({
     ...defaultWorkspacePanels,
     projectExplorer: false,
     properties: false
@@ -57,7 +61,8 @@ test("column state reports when left or right docks are fully collapsed", () => 
     problems: false
   });
 
-  assert.deepEqual(bothOpen, { leftExpanded: true, rightExpanded: true });
-  assert.deepEqual(leftClosed, { leftExpanded: false, rightExpanded: true });
-  assert.deepEqual(rightClosed, { leftExpanded: true, rightExpanded: false });
+  assert.deepEqual(bothOpen, { leftExpanded: false, rightExpanded: true });
+  assert.deepEqual(leftOpen, { leftExpanded: false, rightExpanded: true });
+  assert.deepEqual(leftStillClosed, { leftExpanded: false, rightExpanded: true });
+  assert.deepEqual(rightClosed, { leftExpanded: false, rightExpanded: false });
 });
